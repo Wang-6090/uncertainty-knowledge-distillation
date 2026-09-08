@@ -1,25 +1,25 @@
-# Uncertainty-Aware Knowledge Distillation for Novel Class Discovery
+# 不确定性感知知识蒸馏算法框架
 
-This repository contains the code and experiment summaries for the project
-"Uncertainty-Aware Knowledge Distillation for Novel Class Discovery".
+Uncertainty-Aware Knowledge Distillation for Novel Class Discovery
 
-## What is included
+## 项目概述
 
-- CIFAR-100 and ImageFolder open-set dataset loaders
-- teacher/student training with standard and uncertainty-weighted distillation
-- uncertainty estimation with MC Dropout and an auxiliary uncertainty head
-- prototype, entropy, and Mahalanobis open-set scoring
-- projection-space clustering for unknown samples
-- controlled ablation scripts and result summaries
+本仓库记录了“基于不确定性知识蒸馏的新类发现方法”的代码实现、实验脚本和阶段性结果。
+项目目标是把知识蒸馏、不确定性建模、开放集识别和未知样本聚类组合到一套可复现实验流程里。
 
-## Current status
+当前实现已经支持：
 
-The current implementation is a reproducible open-set recognition and unknown
-clustering pipeline. It is not yet a full end-to-end novel class discovery
-system, but it already supports controlled comparisons of the main ideas.
+- CIFAR-100 和 ImageFolder 风格数据集的开放集划分
+- 教师/学生训练
+- 标准 KL 蒸馏和不确定性加权蒸馏
+- MC Dropout 不确定性估计
+- 原型距离、Entropy、Mahalanobis 等开放集打分
+- 未知样本聚类与结果分析
 
-The main ablation was run on CIFAR-100 with a fixed 60/40 known-novel split,
-one seed, one teacher, and one score policy.
+## 当前状态
+
+目前的系统是一个可复现的开放集识别与未知聚类流程，还不是完整的端到端新类发现系统。
+我们已经完成了 CIFAR-100 60/40 划分上的一组严格消融，并得到以下单种子结果。
 
 | Run | AUROC | FPR95 | Known acc | Unknown reject | Cluster ACC | NMI | ARI |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -29,54 +29,57 @@ one seed, one teacher, and one score policy.
 | Feature KD | 0.5846 | 0.8790 | 0.4113 | 0.0653 | 0.1865 | 0.5083 | 0.0483 |
 | Full model | 0.5977 | 0.8713 | 0.4375 | 0.0747 | 0.1768 | 0.4759 | 0.0398 |
 
-## Interpretation
+## 目前结论
 
-- Standard KD slightly improves open-set detection over CE.
-- Uncertainty-weighted KD helps clustering more than detection in this run.
-- Feature KD did not help under the current setting.
-- The full model gave the best AUROC and unknown rejection in this seed, but
-  the worst clustering metrics, so detection and clustering still conflict.
+- 普通 KD 比 CE 只带来很小的检测收益。
+- 不确定性加权 KD 更偏向改善聚类结构，而不是直接提升 AUROC。
+- 当前特征蒸馏版本没有带来稳定提升。
+- 完整模型在这次单种子实验里 AUROC 和未知拒识率最好，但聚类指标最差。
+- 这说明检测与聚类目标仍然存在明显冲突，后续还需要多 seed 和真正的新类发现训练。
 
-## Main files
+## 项目成员
 
-- `train.py` - entry script for training and discovery
-- `novel_discovery/` - models, losses, pipeline, metrics, and data helpers
-- `scripts/` - runnable experiment scripts
-- `analysis/revised_ablation/` - result summaries for the main controlled ablation
-- `docs/revised_method.md` - current method description
-- `docs/revised_experiment_plan.md` - revised experiment plan
+- 项目负责人：王笑颜
+- 开发成员：李柯颖
+- 开发成员：齐誉涵
 
-## Quick start
+## 主要文件
 
-Install dependencies:
+- `train.py`：训练和发现入口
+- `novel_discovery/`：模型、损失、数据、指标和流程代码
+- `scripts/`：可直接运行的实验脚本
+- `analysis/revised_ablation/`：正式消融的结果摘要
+- `docs/revised_method.md`：当前方法说明
+- `docs/revised_experiment_plan.md`：当前实验方案
+
+## 快速开始
+
+安装依赖：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Inspect the data split:
+查看数据划分：
 
 ```bash
 python train.py inspect_data --dataset cifar100 --data-root ./data --download
 ```
 
-Run the revised controlled ablation:
+运行正式消融：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_revised_ablation.ps1
 ```
 
-Run the lightweight MobileNet compression test:
+运行轻量学生实验：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_mobilenet_compression.ps1
 ```
 
-## Notes
+## 说明
 
-- The repository intentionally excludes raw datasets, cached weights, and
-  experiment outputs under `runs/`.
-- The analysis folder keeps compact JSON and Markdown summaries that are safe
-  to version-control.
-- The current results are single-seed results and should be treated as
-  preliminary until multi-seed runs are finished.
+- 仓库默认不包含 `data/`、`runs/` 和缓存权重等大文件。
+- 结果摘要保存在 `analysis/` 下的 Markdown 和 JSON 文件中。
+- 当前结果是单种子结果，后续还需要补多 seed 才能形成最终结论。
