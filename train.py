@@ -90,12 +90,12 @@ def parse_args():
     add_common(p)
     p.add_argument("--student-ckpt", default="./runs/student.pt")
     p.add_argument("--num-novel", type=int, default=40)
-    p.add_argument("--cluster-k", choices=["oracle", "auto"], default="oracle")
+    p.add_argument("--cluster-k", choices=["oracle", "auto"], default="auto")
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument("--mc-samples", type=int, default=8)
     p.add_argument(
         "--score-mode",
-        default="full",
+        default="entropy_proto",
         choices=[
             "auto",
             "full",
