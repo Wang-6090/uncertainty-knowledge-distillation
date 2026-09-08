@@ -51,6 +51,7 @@ Uncertainty-Aware Knowledge Distillation for Novel Class Discovery
 - `analysis/revised_ablation/`：正式消融的结果摘要
 - `docs/revised_method.md`：当前方法说明
 - `docs/revised_experiment_plan.md`：当前实验方案
+- `docs/group_progress.md`：组内进度说明
 
 ## 快速开始
 
