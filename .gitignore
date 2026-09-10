@@ -1,26 +1,10 @@
-# Data and large artifacts
 data/
 runs/
-.torch_cache/
-
-# Python cache
+*.pt
+*.pth
+*.ckpt
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
+logs/
+*.log
 
-# Virtual environments
-.venv/
-venv/
-env/
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Local archives or temp outputs
-analysis/archive_old/
-*.pth
-*.pt
-*.ckpt
-*.npy
