@@ -119,191 +119,69 @@
 
 没有修改 `train.py` 的全局默认参数，也没有改变核心模型、蒸馏损失或不确定性算法。已有命令仍然可以复现旧实验。
 
-## 四、当前存在的主要问题
+## 四、当前问题、推荐解决方法与备选方案
 
-### 问题 A：目前还不是真正的端到端 NCD
+### 问题 A：当前还不是真正的端到端新类发现
 
-当前流程本质上是：
+当前流程是“已知类别监督训练 → 测试阶段未知检测 → 对未知样本进行后处理聚类”。未知样本没有参与特征学习，因此更准确地说是开放集检测加聚类原型。
 
-```text
-已知类别监督训练 → 测试阶段未知检测 → 对筛出的未知样本聚类
-```
+推荐方法：增加独立的无标注 `discovery pool`，为每张图像生成两个增强视图；使用 projection 特征进行对比学习，并周期性用 K-Means 生成伪标签，再用多视图一致性约束更新学生模型。
 
-未知样本没有参与表示学习，聚类发生在训练完成之后。因此当前更准确的名称是“开放集检测加后处理聚类”，还不能完全声称实现了无监督新类发现训练。
+如果第一版训练不稳定：先固定聚类数量，只加入双视图 cosine consistency loss；确认特征聚类改善后，再加入伪标签和 `auto K`。如果仍然不稳定，则保留当前两阶段流程，并在论文中明确说明它是“开放集检测与未知样本聚类基线”。
 
-后续需要增加独立的无标注 discovery pool，并使用多视图一致性、伪标签或对比学习优化未知样本的表示。
+文献参考：Han、Vedaldi、Zisserman 的 [Learning to Discover Novel Visual Categories via Deep Transfer Clustering](https://arxiv.org/abs/1908.09884) 可参考“已知类监督信息如何迁移到未知类聚类”的整体思路；Khosla 等人的 [Supervised Contrastive Learning](https://arxiv.org/abs/2004.11362) 可参考方法部分的多视图对比损失和实验中的消融设置；Xie、Girshick、Farhadi 的 [Unsupervised Deep Embedding for Clustering Analysis](https://arxiv.org/abs/1511.06335) 可参考“表示学习与聚类目标联合优化”的思路。我们不必照搬网络结构，重点借鉴 discovery pool、伪标签更新和特征空间优化方式。
 
-### 问题 B：未知检测指标不够好
+### 问题 B：未知检测 AUROC 较低、FPR95 较高
 
-目前 AUROC 大约在 0.59 左右，FPR95 较高。这表明模型对已知和未知样本的分数分布重叠严重。
+这说明已知和未知样本的分数分布重叠较严重，当前模型容易把未知样本当成已知类别。
 
-需要重点检查：
+推荐方法：先分别比较 MSP、Energy、预测熵、原型距离和 Mahalanobis 距离；再只对已知验证集统计量做 z-score 归一化后融合；最后进行温度缩放校准。评价时同时报告 AUROC、AUPR、FPR95 和 OSCR。
 
-- 教师模型和学生模型是否充分收敛；
-- 训练集、验证集、测试集是否严格隔离；
-- 阈值是否只用已知验证集确定；
-- prototype 是否由训练集统计并正确归一化；
-- `full` 分数中不同分量是否量纲不一致；
-- MC Dropout 是否真的处于随机 dropout 状态；
-- 不确定性是否经过校准。
+如果仍然没有改善：检查数据划分、预训练权重、教师模型收敛情况、prototype 计算和 MC Dropout 是否正确；减少复杂分数融合，选择验证集上最稳定的单一分数，并报告检测能力有限这一结果。
 
-### 问题 C：不确定性蒸馏的有效性尚未验证
+文献参考：Vaze、Han、Vedaldi 的 [Open-Set Recognition: A Good Closed-Set Classifier is All You Need?](https://arxiv.org/abs/2110.06207) 可参考开放集评测中对已知分类能力和未知检测能力的分离分析；Hendrycks、Mazeika、Dietterich 的 [Deep Anomaly Detection with Outlier Exposure](https://arxiv.org/abs/1812.04606) 可参考利用额外异常样本改善未知检测的思路；Energy 分数可结合 Liu 等人的 [Energy-based Out-of-distribution Detection](https://arxiv.org/abs/2010.03759) 进一步阅读。重点看这些论文的方法定义、阈值/评分实验和不同 OOD 数据集上的对比，而不是只比较单一 AUROC。
 
-当前教师不确定性通过样本权重影响 KL 蒸馏，基本形式为：
+### 问题 C：不确定性知识蒸馏暂时没有证明有效
+
+当前形式是：
 
 ```text
 L_unc-KD = mean(exp(-u_teacher) × KL(p_teacher || p_student))
 ```
 
-这个设计有明确直觉：教师越可靠，蒸馏越强；教师越不确定，蒸馏越弱。但目前实验中它没有稳定优于标准 KD，可能原因包括：
+它的假设是教师越可靠，学生越应该学习教师输出；教师越不确定，蒸馏权重越小。但当前不确定性加权 KD 没有稳定优于标准 KD。
 
-- 教师模型本身准确率和校准不足；
-- 不确定性量的范围没有统一；
-- `exp(-u)` 的权重可能过于接近 1，无法产生有效差异；
-- 不确定性目标和真实分类错误的对应关系较弱；
-- KL、特征、对比、原型等损失同时使用，难以判断究竟是哪一项有效。
+推荐方法：严格固定训练和评测协议，只比较 `CE + Standard KD` 与 `CE + Uncertainty KD`；检查不确定性与教师分类错误的相关性；对 `exp(-u)` 进行归一化或裁剪；比较 confidence、classification error 和 margin 三种不确定性目标，并增加多个随机种子。
 
-下一轮必须保留清晰的 B/C 对照：
+如果仍然没有改善：不要继续堆叠损失函数，也不要宣称该模块有效。可以将“不确定性蒸馏未带来稳定提升”作为负结果，同时保留标准 KD 作为基线，并进一步尝试 deep ensemble 或温度校准后的教师不确定性。
 
-```text
-B: CE + 标准 KL
-C: CE + 不确定性加权 KL
-```
+文献参考：Hinton、Vinyals、Dean 的 [Distilling the Knowledge in a Neural Network](https://arxiv.org/abs/1503.02531) 可参考温度缩放 KL 蒸馏的基本形式；Gal、Ghahramani 的 [Dropout as a Bayesian Approximation](https://arxiv.org/abs/1506.02142) 可参考 MC Dropout 近似认知不确定性的方法；Kendall、Gal 的 [What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision?](https://arxiv.org/abs/1703.04977) 可参考偶然不确定性与认知不确定性的区分；Lakshminarayanan 等人的 [Simple and Scalable Predictive Uncertainty Estimation using Deep Ensembles](https://arxiv.org/abs/1612.01474) 可作为 deep ensemble 对照。我们主要借鉴蒸馏公式、不确定性分解和对照实验设计。
 
-只有 C 在固定协议和多个随机种子下稳定优于 B，才能支持“不确定性蒸馏有效”的结论。
+### 问题 D：模型特征不够适合未知类聚类
 
-### 问题 D：自动聚类数量仍不是完全未知
+当前完整模型的聚类指标没有稳定提升，说明未知样本特征可能不够紧凑，或者错误接受的已知样本混入了聚类集合。
 
-`auto K` 使用轮廓系数选择聚类数，但当前仍通过 `--num-novel 40` 提供搜索上限。因此它比 `oracle K` 更合理，但还不能说完全不使用未知类别信息。
+推荐方法：使用归一化 projection 特征；加入双视图对比学习；只使用高稳定性、高质量的未知候选样本；分别分析“未知检测错误”和“聚类错误”，不能只看最终 Cluster ACC。
 
-报告时必须区分：
+如果仍然没有改善：先使用 oracle K 判断特征本身是否可聚类；若 oracle K 也很差，优先改进特征学习；若 oracle K 较好而 auto K 较差，优先改进聚类数量估计，而不是继续修改模型损失。
 
-- `oracle K`：知道真实未知类别数的上限实验；
-- `auto K`：不知道真实类别数的自动估计实验。
+文献参考：Chen 等人的 [A Simple Framework for Contrastive Learning of Visual Representations](https://arxiv.org/abs/2002.05709) 可参考数据增强、投影头和特征归一化；Khosla 等人的 [Supervised Contrastive Learning](https://arxiv.org/abs/2004.11362) 可参考同类聚合、不同类分离和温度参数实验；Park 等人的 [Relational Knowledge Distillation](https://arxiv.org/abs/1904.05068) 可参考蒸馏特征关系而不只蒸馏分类 logits 的思路。重点检查论文的 representation ablation 和 t-SNE/聚类可视化实验。
 
-后续可以报告估计的 K、真实 K、K 的绝对误差，并研究不提供真实未知类别数时的搜索范围设置。
+### 问题 E：`auto K` 仍然部分使用未知类别信息
 
-### 问题 E：实验协议还需要统一
+当前自动聚类使用轮廓系数，但 `--num-novel 40` 仍然作为最大聚类数上限。因此它比 oracle K 更接近真实场景，但还不是完全未知类别数的设置。
 
-正式实验必须固定：
+推荐方法：正式结果分开报告 `oracle K` 和 `auto K`，同时记录真实 K、估计 K 以及 K 的绝对误差。后续可用不依赖真实未知类别数的候选范围，或比较 silhouette、Calinski-Harabasz 和 Davies-Bouldin 等聚类选择方法。
 
-- 数据集和类别划分；
-- 随机种子；
-- backbone 和是否使用预训练；
-- 训练轮数；
-- batch size 和学习率；
-- 阈值策略；
-- score mode；
-- `oracle K` 或 `auto K`；
-- 是否使用伪未知样本；
-- 是否使用真实未知标签参与任何选择。
+如果自动 K 仍然不稳定：保留 oracle K 作为特征聚类上限实验，保留 auto K 作为真实场景实验，明确说明两者用途不同，不能混在同一张结论表中。
 
-否则不同实验之间无法公平比较。
+文献参考：Xie、Girshick、Farhadi 的 [Unsupervised Deep Embedding for Clustering Analysis](https://arxiv.org/abs/1511.06335) 可参考聚类目标与表示学习结合的做法；可进一步比较 K-Means、层次聚类和基于密度的方法，并采用 silhouette、Calinski-Harabasz、Davies-Bouldin 等内部指标选择候选 K。这里应重点借鉴“如何在没有真实标签时选择聚类数量”的实验设计，不能用测试集真实 K 选择最终方法。
 
-## 五、推荐的后续实现路线
+### 问题 F：实验协议和结论可靠性不足
 
-不要一次加入很多新技术。建议按照下面顺序逐步实现，每一步都保留对照实验。
+当前部分结果来自单个随机种子或受限样本量，不能代表最终性能；同时多个损失一起启用时，很难判断是哪一个模块产生了影响。
 
-### 第 1 阶段：先建立可靠基线
-
-目标是确认训练和评测本身没有问题。
-
-需要完成：
-
-1. CIFAR-100 60/40 使用完整训练集；
-2. 教师和学生训练 30 轮；
-3. 使用固定 seed，例如 42、123、3407；
-4. 保存验证集表现最好的 checkpoint；
-5. 统一比较 CE、Standard KD、Uncertainty KD；
-6. 同时报告 `oracle K` 和 `auto K`；
-7. 保存每次运行的配置和 JSON 结果。
-
-建议命令：
-
-```powershell
-python train.py inspect_data `
-  --dataset cifar100 `
-  --data-root .\data `
-  --download `
-  --num-known 60 `
-  --seed 42 `
-  --split-path .\splits_cifar100_60_40.json
-
-powershell -ExecutionPolicy Bypass -File .\scripts\run_cifar_long_compare.ps1
-```
-
-长实验脚本主要用于验证 30 轮训练和自动 K。正式消融仍应使用 `scripts/run_revised_ablation.ps1`，并确保每个实验使用相同的训练协议。
-
-### 第 2 阶段：改进未知检测分数
-
-优先推荐以下组合，而不是继续堆叠更多分数：
-
-1. 使用预测熵或 Energy 作为简单基线；
-2. 使用归一化后的 prototype distance；
-3. 使用 diagonal Mahalanobis distance；
-4. 通过已知验证集统计量进行 z-score 归一化后再融合；
-5. 通过温度缩放校准分类 logits；
-6. 使用 AUROC、AUPR、FPR95 和 OSCR 共同评价。
-
-分数融合必须先归一化，否则熵和距离可能处于不同数值范围，某一个分量会无意中支配总分。
-
-### 第 3 阶段：实现真正的无标注新类发现
-
-建议新增 discovery 阶段，而不是只在测试阶段聚类：
-
-```text
-已知标注集：训练分类和蒸馏
-无标注 discovery pool：只提供图像，不提供类别标签
-        │
-        ├─ 两种增强视图
-        ├─ 教师不确定性筛选可靠未知样本
-        ├─ projection 特征对比学习
-        ├─ K-Means/层次聚类产生候选伪标签
-        └─ 多视图伪标签一致性训练
-```
-
-第一版建议使用以下简单方案：
-
-- 两个增强视图输入同一学生模型；
-- 对两个 projection 做 cosine consistency loss；
-- 只对高置信度、低预测熵或稳定 MC 预测样本生成伪标签；
-- 周期性使用 K-Means 更新伪标签；
-- 伪标签置信度低的样本不参与分类损失；
-- 通过 `SupCon` 或伪标签对比损失拉近同类、推远异类。
-
-先实现固定 K 版本验证训练机制，再实现 auto K。这样可以区分“表示学习是否有效”和“自动估计 K 是否有效”。
-
-### 第 4 阶段：完善不确定性建模
-
-当前 MC Dropout 可以作为认知不确定性近似，但还需要验证和校准。
-
-建议增加：
-
-- ECE、Brier score 和可靠性图；
-- MC 次数 1、4、8、16 的比较；
-- 标准 KD 与不确定性 KD 的权重分布可视化；
-- 对 `exp(-u)` 做裁剪或归一化，例如限制在 `[0.2, 1.0]`；
-- 比较 confidence、classification error、margin 三种不确定性目标；
-- 资源允许时增加 3 个独立教师模型组成 deep ensemble 对照。
-
-推荐的实验逻辑是：先证明不确定性可以识别错误预测，再研究它是否能改善蒸馏。不能直接假设不确定性量一定有效。
-
-### 第 5 阶段：最终评测和论文材料
-
-正式表格至少应包含：
-
-- 已知类别准确率；
-- AUROC；
-- AUPR；
-- FPR95；
-- 已知样本接受率；
-- 未知样本拒识率；
-- 未知类聚类 ACC、NMI、ARI；
-- 真实 K、估计 K 和 K 误差；
-- 参数量、模型大小和推理时间；
-- 3 个以上随机种子的均值和标准差。
-
-必须做的消融顺序：
+推荐方法：固定 CIFAR-100 60/40 划分、backbone、预训练设置、训练轮数、学习率、阈值策略和 score mode；使用至少 3 个随机种子；按以下顺序进行消融：
 
 ```text
 A: CE
@@ -311,12 +189,16 @@ B: CE + Standard KD
 C: CE + Uncertainty KD
 D: C + Feature KD
 E: D + SupCon + Prototype
-F: E + Discovery-pool pseudo-label consistency
+F: E + discovery pool 一致性训练
 ```
 
-每次只增加一个主要模块，才能说明模块是否真正有效。
+正式报告至少包含已知准确率、AUROC、AUPR、FPR95、已知接受率、未知拒识率、聚类 ACC/NMI/ARI、估计 K 及其误差。还应记录参数量、模型大小和推理时间。
 
-## 六、如何运行当前代码
+如果资源或时间不足：优先完成 A、B、C 三组和 3 个 seed；暂时不加入更多模块。若 C 相比 B 没有稳定改善，应如实报告，不用完整模型结果掩盖该结论。
+
+文献参考：Guo 等人的 [On Calibration of Modern Neural Networks](https://arxiv.org/abs/1706.04599) 可参考温度缩放、可靠性图和 ECE 评价；Zhao、Cui、Song 的 [Decoupled Knowledge Distillation](https://arxiv.org/abs/2203.08679) 可参考把分类性能和知识迁移效果分开分析的消融思路；Hinton 等人的蒸馏论文可作为标准 KD 基线。我们应借鉴这些论文的固定协议、基线和消融原则，避免同时改变模型、损失、阈值和数据划分。
+
+## 五、如何运行当前代码
 
 ### 安装依赖
 
@@ -370,22 +252,22 @@ python train.py discover `
 
 `--device auto` 会自动使用 CUDA；也可以明确指定 `--device cpu` 或 `--device cuda`。
 
-## 七、目录说明
+## 六、目录说明
 
 ```text
 train.py                         训练、检测和聚类入口
-novel_discovery/                  模型、损失、数据、指标和流程
-scripts/                          实验运行脚本
-analysis/                         阶段性实验结果和误差分析
-docs/revised_method.md            当前方法说明
-docs/revised_experiment_plan.md   消融实验计划
-docs/group_progress.md             组内进度记录
-splits_cifar100_60_40.json        CIFAR-100 固定类别划分
-data/                             本地数据，不上传仓库
-runs/                             模型权重和运行结果，不上传仓库
+novel_discovery/                 模型、损失、数据、指标和流程
+scripts/                         实验运行脚本
+analysis/                        阶段性实验结果和误差分析
+docs/revised_method.md           当前方法说明
+docs/revised_experiment_plan.md  消融实验计划
+docs/group_progress.md           组内进度记录
+splits_cifar100_60_40.json       CIFAR-100 固定类别划分
+data/                            本地数据，不上传仓库
+runs/                            模型权重和运行结果，不上传仓库
 ```
 
-## 八、当前阶段给组员的结论
+## 七、当前阶段给组员的结论
 
 目前项目已经从“能否运行”进入“建立可靠实验和改进方法”的阶段。组员接下来最重要的工作不是继续随意增加损失函数，而是：
 
