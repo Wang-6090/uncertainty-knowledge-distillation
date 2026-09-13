@@ -117,17 +117,32 @@
 - 发现阶段显式使用 `--cluster-k auto`；
 - 关闭 tqdm 进度条，减少日志干扰。
 
-没有修改 `train.py` 的全局默认参数，也没有改变核心模型、蒸馏损失或不确定性算法。已有命令仍然可以复现旧实验。
+没有修改 `train.py` 的全局默认参数。已有命令仍然可以运行；第四大点对应的 discovery pool、温度缩放、分数对比和 auto-K 改进需要显式打开新参数。不确定性加权 KD 现在默认对 `exp(-u)` 做裁剪和均值归一化。
 
-## 四、当前问题、推荐解决方法与备选方案
+## 四、当前问题、推荐解决方法与代码改动
+
+第四大点里的 A–F 已经落到代码上。旧的两阶段命令仍然可用；新功能默认关闭，需要显式打开。
 
 ### 问题 A：当前还不是真正的端到端新类发现
 
-当前流程是“已知类别监督训练 → 测试阶段未知检测 → 对未知样本进行后处理聚类”。未知样本没有参与特征学习，因此更准确地说是开放集检测加聚类原型。
+当前默认流程仍是“已知类别监督训练 → 测试阶段未知检测 → 对未知样本进行后处理聚类”。未知样本没有参与特征学习，因此更准确地说是开放集检测加聚类原型。
 
-推荐方法：增加独立的无标注 `discovery pool`，为每张图像生成两个增强视图；使用 projection 特征进行对比学习，并周期性用 K-Means 生成伪标签，再用多视图一致性约束更新学生模型。
+代码改动：增加独立的无标注 `discovery pool`。训练集中的未知类图像不带标签，每张图生成两个增强视图；学生在已知类 CE / KD 之外，对这两个视图做 cosine consistency 和 NT-Xent 对比学习。可以周期性用 K-Means 生成伪标签，只用离簇中心较近的高置信样本，再用多视图一致性更新学生。
 
-如果第一版训练不稳定：先固定聚类数量，只加入双视图 cosine consistency loss；确认特征聚类改善后，再加入伪标签和 `auto K`。如果仍然不稳定，则保留当前两阶段流程，并在论文中明确说明它是“开放集检测与未知样本聚类基线”。
+默认第一版只开双视图一致性、固定 `K=8`；确认特征聚类改善后再开 `--alpha-cluster` 和 `--discovery-cluster-k auto`。
+
+```powershell
+python train.py train_student `
+  --include-discovery-pool --discovery-epochs 8 `
+  --alpha-consistency 0.5 --alpha-contrast 0.1 --alpha-cluster 0.0 `
+  --discovery-cluster-k fixed8
+```
+
+也可以在已有学生权重上单独做发现训练：
+
+```powershell
+python train.py train_discovery --student-ckpt .\runs\student.pt --include-discovery-pool
+```
 
 文献参考：Han、Vedaldi、Zisserman 的 [Learning to Discover Novel Visual Categories via Deep Transfer Clustering](https://arxiv.org/abs/1908.09884) 可参考“已知类监督信息如何迁移到未知类聚类”的整体思路；Khosla 等人的 [Supervised Contrastive Learning](https://arxiv.org/abs/2004.11362) 可参考方法部分的多视图对比损失和实验中的消融设置；Xie、Girshick、Farhadi 的 [Unsupervised Deep Embedding for Clustering Analysis](https://arxiv.org/abs/1511.06335) 可参考“表示学习与聚类目标联合优化”的思路。我们不必照搬网络结构，重点借鉴 discovery pool、伪标签更新和特征空间优化方式。
 
@@ -135,7 +150,11 @@
 
 这说明已知和未知样本的分数分布重叠较严重，当前模型容易把未知样本当成已知类别。
 
-推荐方法：先分别比较 MSP、Energy、预测熵、原型距离和 Mahalanobis 距离；再只对已知验证集统计量做 z-score 归一化后融合；最后进行温度缩放校准。评价时同时报告 AUROC、AUPR、FPR95 和 OSCR。
+代码改动：`--compare-scores` 会在同一测试集上比较 MSP、Energy、预测熵、原型距离、Mahalanobis 以及它们的组合；`--score-mode zscore_fusion` 只使用已知验证集均值/方差做 z-score 融合；`--temperature-scaling` 在已知验证集上拟合标量温度。发现报告现在同时给出 AUROC、AUPR、FPR95、OSCR 和已知类 ECE。阈值仍然只由已知验证集分位数决定。
+
+```powershell
+python train.py discover --score-mode entropy_mahalanobis --temperature-scaling --compare-scores
+```
 
 如果仍然没有改善：检查数据划分、预训练权重、教师模型收敛情况、prototype 计算和 MC Dropout 是否正确；减少复杂分数融合，选择验证集上最稳定的单一分数，并报告检测能力有限这一结果。
 
@@ -151,7 +170,15 @@ L_unc-KD = mean(exp(-u_teacher) × KL(p_teacher || p_student))
 
 它的假设是教师越可靠，学生越应该学习教师输出；教师越不确定，蒸馏权重越小。但当前不确定性加权 KD 没有稳定优于标准 KD。
 
-推荐方法：严格固定训练和评测协议，只比较 `CE + Standard KD` 与 `CE + Uncertainty KD`；检查不确定性与教师分类错误的相关性；对 `exp(-u)` 进行归一化或裁剪；比较 confidence、classification error 和 margin 三种不确定性目标，并增加多个随机种子。
+代码改动：不确定性加权改为
+
+```text
+w = clip(exp(-u_teacher), 0.05, 1.0)
+w = w / mean(w)
+L_unc-KD = mean(w × KL(p_teacher || p_student))
+```
+
+这样平均蒸馏强度与标准 KD 可比，同时仍然下调不可靠教师样本。学生训练后会写出 `teacher_uncertainty_diagnostics.json`，记录不确定性与分类错误、置信度的相关性和 ECE。三种不确定性目标仍然可用：`--uncertainty-target-mode confidence|classification_error|margin`。固定协议脚本见 `scripts/run_protocol_ablation.ps1`，默认只跑 A/B/C 和 3 个 seed。
 
 如果仍然没有改善：不要继续堆叠损失函数，也不要宣称该模块有效。可以将“不确定性蒸馏未带来稳定提升”作为负结果，同时保留标准 KD 作为基线，并进一步尝试 deep ensemble 或温度校准后的教师不确定性。
 
@@ -161,7 +188,7 @@ L_unc-KD = mean(exp(-u_teacher) × KL(p_teacher || p_student))
 
 当前完整模型的聚类指标没有稳定提升，说明未知样本特征可能不够紧凑，或者错误接受的已知样本混入了聚类集合。
 
-推荐方法：使用归一化 projection 特征；加入双视图对比学习；只使用高稳定性、高质量的未知候选样本；分别分析“未知检测错误”和“聚类错误”，不能只看最终 Cluster ACC。
+代码改动：聚类一律使用 L2 归一化 projection 特征；发现训练加入双视图对比；`--cluster-confidence-percentile 50` 只把高未知分数样本送去聚类。报告拆开 `unknown_detection_miss_rate`（真未知没被检出）和 `cluster_error_on_filtered`（检出后的聚类错误）。`--cluster-k both` 会同时给出 oracle K 和 auto K，便于判断是特征差还是 K 估差。
 
 如果仍然没有改善：先使用 oracle K 判断特征本身是否可聚类；若 oracle K 也很差，优先改进特征学习；若 oracle K 较好而 auto K 较差，优先改进聚类数量估计，而不是继续修改模型损失。
 
@@ -171,7 +198,7 @@ L_unc-KD = mean(exp(-u_teacher) × KL(p_teacher || p_student))
 
 当前自动聚类使用轮廓系数，但 `--num-novel 40` 仍然作为最大聚类数上限。因此它比 oracle K 更接近真实场景，但还不是完全未知类别数的设置。
 
-推荐方法：正式结果分开报告 `oracle K` 和 `auto K`，同时记录真实 K、估计 K 以及 K 的绝对误差。后续可用不依赖真实未知类别数的候选范围，或比较 silhouette、Calinski-Harabasz 和 Davies-Bouldin 等聚类选择方法。
+代码改动：`--cluster-k auto` 不再把 `--num-novel` 当作搜索上限。候选范围只由样本数决定，大约是 `[2, min(30, sqrt(N))]`。K 的选择综合 silhouette、Calinski-Harabasz 和 Davies-Bouldin。报告中会写出 `true_k`、`estimated_k` 和 `k_abs_error`。`--cluster-k both` 把 oracle 和 auto 分开保存，避免混进同一张结论表。
 
 如果自动 K 仍然不稳定：保留 oracle K 作为特征聚类上限实验，保留 auto K 作为真实场景实验，明确说明两者用途不同，不能混在同一张结论表中。
 
@@ -192,7 +219,12 @@ E: D + SupCon + Prototype
 F: E + discovery pool 一致性训练
 ```
 
-正式报告至少包含已知准确率、AUROC、AUPR、FPR95、已知接受率、未知拒识率、聚类 ACC/NMI/ARI、估计 K 及其误差。还应记录参数量、模型大小和推理时间。
+代码改动：`scripts/run_protocol_ablation.ps1` 固定划分、backbone、轮数、阈值和 score mode，默认跑 A/B/C 三个设置和 3 个 seed。`discover --report-efficiency` 记录参数量和推理时间。`analyze_results.py` 汇总 AUROC、AUPR、FPR95、OSCR、已知准确率、未知拒识率、聚类 ACC/NMI/ARI 和估计 K。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_protocol_ablation.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run_discovery_pool.ps1
+```
 
 如果资源或时间不足：优先完成 A、B、C 三组和 3 个 seed；暂时不加入更多模块。若 C 相比 B 没有稳定改善，应如实报告，不用完整模型结果掩盖该结论。
 
@@ -243,8 +275,10 @@ python train.py discover `
   --seed 42 `
   --split-path .\splits_cifar100_60_40.json `
   --student-ckpt .\runs\cifar_long_train\student.pt `
-  --score-mode entropy_proto `
-  --cluster-k auto `
+  --score-mode entropy_mahalanobis `
+  --cluster-k both `
+  --temperature-scaling `
+  --compare-scores `
   --mc-samples 4 `
   --device auto `
   --work-dir .\runs\manual_discover
@@ -257,7 +291,8 @@ python train.py discover `
 ```text
 train.py                         训练、检测和聚类入口
 novel_discovery/                 模型、损失、数据、指标和流程
-scripts/                         实验运行脚本
+scripts/run_protocol_ablation.ps1  A/B/C 多 seed 固定协议
+scripts/run_discovery_pool.ps1     discovery pool 一致性训练
 analysis/                        阶段性实验结果和误差分析
 docs/revised_method.md           当前方法说明
 docs/revised_experiment_plan.md  消融实验计划

@@ -40,18 +40,46 @@ def uncertainty_alignment_loss(
     raise ValueError(f"Unsupported uncertainty target mode: {target_mode}")
 
 
+def uncertainty_kd_weights(
+    teacher_uncertainty: torch.Tensor,
+    clip_min: float = 0.05,
+    clip_max: float = 1.0,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Convert teacher uncertainty into clipped, mean-normalized KD weights.
+
+    Raw ``exp(-u)`` can collapse toward 1 when the teacher head is poorly
+    calibrated. Clipping and mean-normalization keep the average distillation
+    strength comparable to standard KD while still down-weighting uncertain
+    teacher predictions.
+    """
+    weight = torch.exp(-teacher_uncertainty.detach())
+    weight = weight.clamp(min=clip_min, max=clip_max)
+    if normalize:
+        weight = weight / weight.mean().clamp_min(1e-6)
+    return weight
+
+
 def distillation_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
     teacher_uncertainty: torch.Tensor | None = None,
     temperature: float = 2.0,
     uncertainty_weighted: bool = True,
+    weight_clip_min: float = 0.05,
+    weight_clip_max: float = 1.0,
+    normalize_weights: bool = True,
 ) -> torch.Tensor:
     student_log_prob = F.log_softmax(student_logits / temperature, dim=-1)
     teacher_prob = F.softmax(teacher_logits / temperature, dim=-1).detach()
     per_sample = F.kl_div(student_log_prob, teacher_prob, reduction="none").sum(dim=1) * (temperature**2)
     if teacher_uncertainty is not None and uncertainty_weighted:
-        weight = torch.exp(-teacher_uncertainty.detach())
+        weight = uncertainty_kd_weights(
+            teacher_uncertainty,
+            clip_min=weight_clip_min,
+            clip_max=weight_clip_max,
+            normalize=normalize_weights,
+        )
         per_sample = per_sample * weight
     return per_sample.mean()
 
@@ -60,6 +88,9 @@ def feature_distillation_loss(
     student_projection: torch.Tensor,
     teacher_projection: torch.Tensor,
     teacher_uncertainty: torch.Tensor | None = None,
+    weight_clip_min: float = 0.05,
+    weight_clip_max: float = 1.0,
+    normalize_weights: bool = True,
 ) -> torch.Tensor:
     """Distill relationally useful normalized representations.
 
@@ -70,7 +101,13 @@ def feature_distillation_loss(
         student_projection, teacher_projection.detach(), dim=-1
     )
     if teacher_uncertainty is not None:
-        per_sample = per_sample * torch.exp(-teacher_uncertainty.detach())
+        weight = uncertainty_kd_weights(
+            teacher_uncertainty,
+            clip_min=weight_clip_min,
+            clip_max=weight_clip_max,
+            normalize=normalize_weights,
+        )
+        per_sample = per_sample * weight
     return per_sample.mean()
 
 
@@ -94,6 +131,72 @@ def supervised_contrastive_loss(features: torch.Tensor, labels: torch.Tensor, te
     mean_log_prob_pos = (mask * log_prob).sum(dim=1) / pos_counts
     loss = -mean_log_prob_pos[valid].mean()
     return loss
+
+
+def view_consistency_loss(proj_a: torch.Tensor, proj_b: torch.Tensor) -> torch.Tensor:
+    """Pull two augmented views of the same image together in projection space."""
+    if proj_a.numel() == 0:
+        return proj_a.new_tensor(0.0)
+    return 1.0 - F.cosine_similarity(proj_a, proj_b, dim=-1).mean()
+
+
+def nt_xent_loss(proj_a: torch.Tensor, proj_b: torch.Tensor, temperature: float = 0.2) -> torch.Tensor:
+    """SimCLR-style NT-Xent on two views of an unlabeled batch."""
+    if proj_a.size(0) <= 1:
+        return proj_a.new_tensor(0.0)
+    z_a = F.normalize(proj_a, dim=-1)
+    z_b = F.normalize(proj_b, dim=-1)
+    z = torch.cat([z_a, z_b], dim=0)
+    n = z_a.size(0)
+    sim = torch.matmul(z, z.T) / temperature
+    mask = torch.eye(2 * n, device=z.device, dtype=torch.bool)
+    sim = sim.masked_fill(mask, float("-inf"))
+    targets = torch.cat(
+        [
+            torch.arange(n, 2 * n, device=z.device),
+            torch.arange(0, n, device=z.device),
+        ]
+    )
+    return F.cross_entropy(sim, targets)
+
+
+def pseudo_label_consistency_loss(
+    logits_a: torch.Tensor,
+    logits_b: torch.Tensor,
+    cluster_ids: torch.Tensor,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Keep two views of the same unlabeled sample on the same cluster prototype.
+
+    ``cluster_ids`` are detached pseudo labels from periodic K-Means. The loss
+    is zero when a batch has no assigned clusters.
+    """
+    valid = cluster_ids >= 0
+    if valid.sum() == 0:
+        return logits_a.new_tensor(0.0)
+    log_a = F.log_softmax(logits_a[valid] / temperature, dim=-1)
+    log_b = F.log_softmax(logits_b[valid] / temperature, dim=-1)
+    target = cluster_ids[valid]
+    return 0.5 * (F.nll_loss(log_a, target) + F.nll_loss(log_b, target))
+
+
+def cluster_prototype_consistency_loss(
+    proj_a: torch.Tensor,
+    proj_b: torch.Tensor,
+    cluster_ids: torch.Tensor,
+    centroids: torch.Tensor,
+) -> torch.Tensor:
+    """Pull both views of a confidently clustered sample toward its centroid."""
+    valid = cluster_ids >= 0
+    if valid.sum() == 0 or centroids.numel() == 0:
+        return proj_a.new_tensor(0.0)
+    proto = F.normalize(centroids[cluster_ids[valid]], dim=-1)
+    z_a = F.normalize(proj_a[valid], dim=-1)
+    z_b = F.normalize(proj_b[valid], dim=-1)
+    return 0.5 * (
+        (1.0 - (z_a * proto).sum(dim=-1)).mean()
+        + (1.0 - (z_b * proto).sum(dim=-1)).mean()
+    )
 
 
 def prototype_alignment_loss(features: torch.Tensor, labels: torch.Tensor, prototypes: torch.Tensor) -> torch.Tensor:
