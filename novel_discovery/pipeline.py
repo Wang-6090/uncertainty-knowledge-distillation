@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from .losses import (
     classification_loss,
+    discovery_consistency_loss,
     distillation_loss,
     feature_distillation_loss,
     pseudo_unknown_loss,
@@ -18,7 +19,14 @@ from .losses import (
     supervised_contrastive_loss,
     uncertainty_alignment_loss,
 )
-from .metrics import clustering_report, compute_auroc, compute_fpr95, open_set_confusion
+from .metrics import (
+    clustering_report,
+    compute_aupr,
+    compute_auroc,
+    compute_fpr95,
+    compute_oscr,
+    open_set_confusion,
+)
 from .utils import AverageMeter
 
 
@@ -138,6 +146,8 @@ def train_one_epoch_student(
     uncertainty_target_mode: str = "confidence",
     temperature: float = 2.0,
     kd_mode: str = "uncertainty",
+    discovery_loader=None,
+    alpha_discovery: float = 0.0,
 ):
     student.train()
     teacher.eval()
@@ -148,6 +158,8 @@ def train_one_epoch_student(
     sc_meter = AverageMeter()
     proto_meter = AverageMeter()
     pseudo_meter = AverageMeter()
+    discovery_meter = AverageMeter()
+    discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     for batch in tqdm(loader, desc="student-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
         images = images.to(device)
@@ -176,6 +188,21 @@ def train_one_epoch_student(
         pseudo_features = pseudo_out["features"] + pseudo_feature_noise * torch.randn_like(pseudo_out["features"])
         pseudo_logits, pseudo_uncertainty = pseudo_forward_from_features(student, pseudo_features)
         loss_pseudo = pseudo_unknown_loss(pseudo_logits, pseudo_uncertainty)
+        loss_discovery = s_out["logits"].new_tensor(0.0)
+        if discovery_iter is not None and alpha_discovery > 0.0:
+            try:
+                discovery_images = next(discovery_iter)
+            except StopIteration:
+                discovery_iter = iter(discovery_loader)
+                discovery_images = next(discovery_iter)
+            first_view, second_view = discovery_images
+            first_view = first_view.to(device)
+            second_view = second_view.to(device)
+            first_out = student(first_view)
+            second_out = student(second_view)
+            loss_discovery = discovery_consistency_loss(
+                first_out["proj"], second_out["proj"]
+            )
         loss = (
             loss_ce
             + alpha_unc * loss_unc
@@ -184,6 +211,7 @@ def train_one_epoch_student(
             + alpha_supcon * loss_supcon
             + alpha_proto * loss_proto
             + alpha_pseudo * loss_pseudo
+            + alpha_discovery * loss_discovery
         )
         optimizer.zero_grad()
         loss.backward()
@@ -195,6 +223,7 @@ def train_one_epoch_student(
         sc_meter.update(loss_supcon.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
+        discovery_meter.update(loss_discovery.item(), images.size(0))
     return {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
@@ -203,6 +232,7 @@ def train_one_epoch_student(
         "supcon": sc_meter.avg,
         "proto": proto_meter.avg,
         "pseudo": pseudo_meter.avg,
+        "discovery": discovery_meter.avg,
     }
 
 
@@ -510,16 +540,21 @@ def run_discovery(
     known_mask = outputs["is_known"].astype(bool)
     open_labels = (~known_mask).astype(int)
     auroc = compute_auroc(open_labels, score)
+    aupr = compute_aupr(open_labels, score)
     fpr95 = compute_fpr95(open_labels, score)
     open_confusion = open_set_confusion(known_mask, pred_known)
     pred_class = outputs["logits"].argmax(axis=1)
     true_labels = outputs["labels"]
+    class_correct = pred_class == true_labels
+    oscr = compute_oscr(known_mask, pred_known, class_correct, score)
     known_class_correct = int(np.sum(known_mask & pred_known & (pred_class == true_labels)))
     known_class_wrong = int(np.sum(known_mask & pred_known & (pred_class != true_labels)))
     known_total = int(known_mask.sum())
     result = {
         "auroc": auroc,
+        "aupr": aupr,
         "fpr95": fpr95,
+        "oscr": oscr,
         "known_ratio": float(pred_known.mean()),
         "known_class_correct": known_class_correct,
         "known_class_wrong": known_class_wrong,
@@ -529,6 +564,7 @@ def run_discovery(
     result.update(open_confusion)
     novel_mask = ~pred_known
     selected_cluster_k = None
+    true_unknown_k = int(np.unique(outputs["raw_labels"][~known_mask]).size)
     if novel_mask.sum() > 1 and num_novel > 0:
         novel_features = outputs.get("projections", outputs["features"])[novel_mask]
         novel_true = outputs["raw_labels"][novel_mask]
@@ -540,6 +576,22 @@ def run_discovery(
         novel_pred = cluster_unknown_samples(novel_features, num_clusters=selected_cluster_k)
         if len(np.unique(novel_pred)) > 0:
             result.update({f"cluster_{k}": v for k, v in clustering_report(novel_true, novel_pred).items()})
+            true_unknown_candidates = (~known_mask)[novel_mask]
+            if true_unknown_candidates.sum() > 1:
+                result.update(
+                    {
+                        f"cluster_unknown_only_{k}": v
+                        for k, v in clustering_report(
+                            novel_true[true_unknown_candidates],
+                            novel_pred[true_unknown_candidates],
+                        ).items()
+                    }
+                )
+            result["cluster_candidate_count"] = int(len(novel_true))
+            result["cluster_true_unknown_count"] = int(true_unknown_candidates.sum())
+            result["cluster_false_reject_count"] = int((~true_unknown_candidates).sum())
+            result["cluster_true_k"] = true_unknown_k
+            result["cluster_k_abs_error"] = abs(int(selected_cluster_k) - true_unknown_k)
     detail = {
         "score": score,
         "score_mode": score_mode,

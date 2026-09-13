@@ -13,6 +13,15 @@ def compute_auroc(y_true: np.ndarray, scores: np.ndarray) -> float:
     return float(metrics.roc_auc_score(y_true, scores))
 
 
+def compute_aupr(y_true: np.ndarray, scores: np.ndarray) -> float:
+    """Compute average precision with unknown samples encoded as positive."""
+    y_true = np.asarray(y_true).astype(int)
+    scores = np.asarray(scores, dtype=float)
+    if len(np.unique(y_true)) < 2:
+        return float("nan")
+    return float(metrics.average_precision_score(y_true, scores))
+
+
 def compute_fpr95(y_true: np.ndarray, scores: np.ndarray) -> float:
     order = np.argsort(scores)[::-1]
     y_true = y_true[order]
@@ -31,6 +40,33 @@ def compute_fpr95(y_true: np.ndarray, scores: np.ndarray) -> float:
         if tpr >= 0.95:
             return fp / negatives
     return 1.0
+
+
+def compute_oscr(
+    y_true_known: np.ndarray,
+    pred_known: np.ndarray,
+    pred_class_correct: np.ndarray,
+    scores: np.ndarray,
+) -> float:
+    """Compute OSCR while treating lower scores as known samples."""
+    y_true_known = np.asarray(y_true_known).astype(bool)
+    pred_known = np.asarray(pred_known).astype(bool)
+    pred_class_correct = np.asarray(pred_class_correct).astype(bool)
+    scores = np.asarray(scores, dtype=float)
+    known_count = int(y_true_known.sum())
+    unknown_count = int((~y_true_known).sum())
+    if known_count == 0 or unknown_count == 0:
+        return float("nan")
+
+    order = np.argsort(scores)
+    accepted_known = y_true_known[order]
+    accepted_unknown = ~y_true_known[order]
+    correct_known = pred_class_correct[order] & accepted_known
+    ccr = np.cumsum(correct_known) / known_count
+    fpr = np.cumsum(accepted_unknown) / unknown_count
+    fpr = np.concatenate(([0.0], fpr))
+    ccr = np.concatenate(([0.0], ccr))
+    return float(np.trapz(ccr, fpr))
 
 
 def clustering_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:

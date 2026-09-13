@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from novel_discovery.data import build_data_bundle
+from novel_discovery.data import TwoViewDataset, build_data_bundle
 from novel_discovery.metrics import compute_auroc
 from novel_discovery.models import build_model
 from novel_discovery.pipeline import (
@@ -51,6 +51,7 @@ def parse_args():
         p.add_argument("--limit-train", type=int, default=0)
         p.add_argument("--limit-val", type=int, default=0)
         p.add_argument("--limit-test", type=int, default=0)
+        p.add_argument("--limit-discovery", type=int, default=0)
 
     p = sub.add_parser("train_teacher")
     add_common(p)
@@ -85,6 +86,13 @@ def parse_args():
     p.add_argument("--temperature", type=float, default=2.0)
     p.add_argument("--teacher-ckpt", default="./runs/teacher.pt")
     p.add_argument("--student-ckpt", default="./runs/student.pt")
+    p.add_argument(
+        "--discovery-pool",
+        action="store_true",
+        help="Use unlabeled novel-class training images for two-view consistency learning.",
+    )
+    p.add_argument("--alpha-discovery", type=float, default=0.0)
+    p.add_argument("--discovery-batch-size", type=int, default=0)
 
     p = sub.add_parser("discover")
     add_common(p)
@@ -219,6 +227,7 @@ def fit_teacher(args):
         limit_train=args.limit_train or None,
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
@@ -292,12 +301,21 @@ def fit_student(args):
         limit_train=args.limit_train or None,
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
     print(f"device: {device}")
     train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
+    discovery_loader = None
+    if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
+        discovery_loader = build_loader(
+            TwoViewDataset(bundle.discovery_pool),
+            args.discovery_batch_size or args.batch_size,
+            True,
+            args.num_workers,
+        )
     teacher_backbone = args.teacher_backbone or args.backbone
     student_backbone = args.student_backbone or args.backbone
     teacher = build_model(
@@ -338,6 +356,8 @@ def fit_student(args):
             uncertainty_target_mode=args.uncertainty_target_mode,
             temperature=args.temperature,
             kd_mode=args.kd_mode,
+            discovery_loader=discovery_loader,
+            alpha_discovery=args.alpha_discovery,
         )
         val_stats = evaluate_classification(student, val_loader, device)
         print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
@@ -381,6 +401,7 @@ def discover(args):
         limit_train=args.limit_train or None,
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
         open_val_ratio=args.open_val_ratio,
     )
     device = resolve_device(args.device)
@@ -471,6 +492,13 @@ def discover(args):
     )
     run_dir = ensure_dir(args.work_dir)
     save_json(run_dir / "config.json", vars(args))
+    torch.save(
+        {
+            "known_classes": list(bundle.known_classes),
+            "novel_classes": list(bundle.novel_classes),
+        },
+        run_dir / "split.pt",
+    )
     save_json(run_dir / "discovery_report.json", result)
     if calibration_report is not None:
         save_json(run_dir / "calibration_report.json", calibration_report)
@@ -522,6 +550,7 @@ def inspect_data(args):
         limit_train=args.limit_train or None,
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
     )
     print("dataset:", args.dataset)
     print("known classes:", len(bundle.known_classes))
@@ -529,6 +558,7 @@ def inspect_data(args):
     print("train size:", len(bundle.train))
     print("val size:", len(bundle.val))
     print("test size:", len(bundle.test))
+    print("discovery pool size:", len(bundle.discovery_pool) if bundle.discovery_pool is not None else 0)
     print("first known classes:", list(bundle.known_classes)[: min(args.sample_count, len(bundle.known_classes))])
     print("first novel classes:", list(bundle.novel_classes)[: min(args.sample_count, len(bundle.novel_classes))])
 

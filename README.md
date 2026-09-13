@@ -15,10 +15,13 @@ Uncertainty-Aware Knowledge Distillation for Novel Class Discovery
 - MC Dropout 不确定性估计
 - 原型距离、Entropy、Mahalanobis 等开放集打分
 - 未知样本聚类与结果分析
+- AUPR、FPR95、OSCR 以及已知/未知分离后的聚类指标
+- 可选的无标注 discovery pool 双视图一致性训练
 
 ## 当前状态
 
 目前的系统是一个可复现的开放集识别与未知聚类流程，还不是完整的端到端新类发现系统。
+默认训练协议保持不变；discovery pool 通过显式参数开启，便于和原有 CE/KD 基线公平对照。
 我们已经完成了 CIFAR-100 60/40 划分上的一组严格消融，并得到以下单种子结果。
 
 | Run | AUROC | FPR95 | Known acc | Unknown reject | Cluster ACC | NMI | ARI |
@@ -79,8 +82,27 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_revised_ablation.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run_mobilenet_compression.ps1
 ```
 
+启用无标注 discovery pool 一致性训练：
+
+```powershell
+python train.py train_student `
+  --dataset toy `
+  --num-known 10 `
+  --teacher-ckpt .\runs\teacher\teacher.pt `
+  --student-ckpt .\runs\student_discovery\student.pt `
+  --work-dir .\runs\student_discovery `
+  --discovery-pool `
+  --limit-discovery 256 `
+  --alpha-discovery 0.1 `
+  --device cpu
+```
+
+该开关只使用未知类别训练图像的两个随机增强视图，不把标签传给损失函数。`--limit-discovery` 用于控制实验规模；`--alpha-discovery 0` 或不传
+`--discovery-pool` 时，行为与旧版学生训练一致。
+
 ## 说明
 
 - 仓库默认不包含 `data/`、`runs/` 和缓存权重等大文件。
 - 结果摘要保存在 `analysis/` 下的 Markdown 和 JSON 文件中。
+- `discovery_report.json` 现在额外记录 AUPR、OSCR、估计 K 误差，以及包含误拒已知样本和仅真实未知样本的两组聚类指标。
 - 当前结果是单种子结果，后续还需要补多 seed 才能形成最终结论。

@@ -204,13 +204,15 @@ def format_run_md(item):
     lines.append(f"### {title}")
     lines.append("")
     lines.append(f"- AUROC: {m['auroc']:.4f}")
+    lines.append(f"- AUPR: {m.get('aupr', float('nan')):.4f}")
     lines.append(f"- FPR95: {m['fpr95']:.4f}")
+    lines.append(f"- OSCR: {m.get('oscr', float('nan')):.4f}")
     lines.append(f"- known accept rate: {m['known_accept_rate']:.4f}")
     lines.append(f"- unknown reject rate: {m['unknown_reject_rate']:.4f}")
     lines.append(f"- known class acc after accept: {m['known_class_accuracy_after_accept']:.4f}")
     lines.append(f"- known class acc all known: {m['known_class_accuracy_all_known']:.4f}")
-    lines.append(f"- cluster NMI: {m['cluster_nmi']:.4f}")
-    lines.append(f"- cluster ARI: {m['cluster_ari']:.4f}")
+    lines.append(f"- cluster NMI: {m.get('cluster_nmi', float('nan')):.4f}")
+    lines.append(f"- cluster ARI: {m.get('cluster_ari', float('nan')):.4f}")
     lines.append("")
     lines.append("- Score distribution:")
     lines.append(
@@ -259,15 +261,15 @@ def main():
     md_lines = ["# Open-set Error Analysis", ""]
     md_lines.append("## Cross-run comparison")
     md_lines.append("")
-    md_lines.append("| run | AUROC | FPR95 | known acc all known | unknown reject rate | known accept rate |")
-    md_lines.append("| --- | ---: | ---: | ---: | ---: | ---: |")
+    md_lines.append("| run | AUROC | AUPR | FPR95 | OSCR | known acc all known | unknown reject rate |")
+    md_lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
     for item in items:
         m = item["metrics"]
         run_name = Path(item["run_dir"]).name
         if item.get("score_mode"):
             run_name += f" [{item['score_mode']}]"
         md_lines.append(
-            f"| {run_name} | {m['auroc']:.4f} | {m['fpr95']:.4f} | {m['known_class_accuracy_all_known']:.4f} | {m['unknown_reject_rate']:.4f} | {m['known_accept_rate']:.4f} |"
+            f"| {run_name} | {m['auroc']:.4f} | {m.get('aupr', float('nan')):.4f} | {m['fpr95']:.4f} | {m.get('oscr', float('nan')):.4f} | {m['known_class_accuracy_all_known']:.4f} | {m['unknown_reject_rate']:.4f} |"
         )
     md_lines.append("")
     for item in items:

@@ -116,3 +116,15 @@ def pseudo_unknown_loss(logits: torch.Tensor, uncertainty: torch.Tensor) -> torc
     unc_target = torch.ones_like(uncertainty)
     loss_unc = F.mse_loss(uncertainty, unc_target)
     return confidence.mean() + 0.5 * entropy_gap.mean() + loss_unc
+
+
+def discovery_consistency_loss(
+    first_projection: torch.Tensor,
+    second_projection: torch.Tensor,
+) -> torch.Tensor:
+    """Align two augmented views in normalized projection space."""
+    if first_projection.numel() == 0:
+        return first_projection.new_tensor(0.0)
+    return 1.0 - F.cosine_similarity(
+        first_projection, second_projection, dim=-1
+    ).mean()
