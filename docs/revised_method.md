@@ -25,9 +25,25 @@ L = L_CE + a_kd L_KD + a_feat L_featKD
 
 The standard KD term is temperature-scaled KL divergence. The uncertainty KD
 term multiplies each sample's KL loss by `exp(-u_teacher)`, so reliable teacher
-predictions are transferred more strongly. Feature KD aligns normalized
-teacher and student projections with cosine distance and remains valid for
-different encoder sizes.
+predictions are transferred more strongly. The implementation supports the
+original `raw` weighting and a `mean_normalized` variant, which divides the
+batch weights by their mean to keep the average KD strength approximately
+fixed. Feature KD aligns normalized teacher and student projections with
+cosine distance and remains valid for different encoder sizes.
+
+An optional discovery-pool objective is now available for the NCD/GCD stage:
+
+```text
+L = ... + a_dis L_NT-Xent + a_du L_unknown
+```
+
+`L_NT-Xent` applies SimCLR-style two-view contrastive learning to unlabeled
+discovery images, so different augmentations of the same image remain close
+while other images in the batch act as negatives. `L_unknown` can be enabled
+only for an unknown-only discovery pool; it reduces maximum known-class
+confidence, increases prediction entropy, and raises the uncertainty head on
+unlabeled novel images. This term must not be used for a mixed known/unknown
+pool.
 
 ## Uncertainty
 
@@ -59,4 +75,5 @@ of clusters using silhouette score without unknown labels; it is reported as a
 separate experiment.
 
 This version is still a two-stage discovery pipeline. A later NCD/GCD phase
-will add an unlabeled discovery pool and multi-view pseudo-label consistency.
+should add pseudo-label updates or clustering-assignment consistency on top of
+the current discovery-pool contrastive baseline.

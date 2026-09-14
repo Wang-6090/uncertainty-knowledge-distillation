@@ -1,0 +1,183 @@
+{
+  "protocol": {
+    "dataset": "cifar100",
+    "data_root": ".\\data",
+    "split_path": ".\\splits_cifar100_60_40.json",
+    "num_known": 60,
+    "num_novel": 40,
+    "seed": 123,
+    "image_size": 64,
+    "batch_size": 64,
+    "num_workers": 0,
+    "backbone": "resnet18",
+    "student_ckpt": ".\\runs\\revised_ms_s123_E_full_representation\\student.pt",
+    "mc_samples": 8,
+    "threshold_percentile": 95.0,
+    "work_dir": ".\\analysis\\score_sweep_s123_E",
+    "device": "auto"
+  },
+  "note": "All score modes reuse one validation/test MC extraction.",
+  "results": [
+    {
+      "score_mode": "max_softmax",
+      "threshold": 0.7608774900436401,
+      "metrics": {
+        "auroc": 0.5432539999999999,
+        "fpr95": 0.889,
+        "known_ratio": 0.9519,
+        "known_class_correct": 2386,
+        "known_class_wrong": 3339,
+        "known_class_accuracy_after_accept": 0.4167685589519651,
+        "known_class_accuracy_all_known": 0.39766666666666667,
+        "known_correct": 5725,
+        "known_rejected": 275,
+        "unknown_correct_reject": 206,
+        "unknown_false_accept": 3794,
+        "total": 10000,
+        "known_accept_rate": 0.9541666666666667,
+        "unknown_reject_rate": 0.0515,
+        "cluster_acc": 0.1787941787941788,
+        "cluster_nmi": 0.4997378724895514,
+        "cluster_ari": 0.032644090596629295
+      }
+    },
+    {
+      "score_mode": "energy",
+      "threshold": -8.293886184692383,
+      "metrics": {
+        "auroc": 0.5333312291666666,
+        "fpr95": 0.907,
+        "known_ratio": 0.9548,
+        "known_class_correct": 2376,
+        "known_class_wrong": 3340,
+        "known_class_accuracy_after_accept": 0.41567529741077675,
+        "known_class_accuracy_all_known": 0.396,
+        "known_correct": 5716,
+        "known_rejected": 284,
+        "unknown_correct_reject": 168,
+        "unknown_false_accept": 3832,
+        "total": 10000,
+        "known_accept_rate": 0.9526666666666667,
+        "unknown_reject_rate": 0.042,
+        "cluster_acc": 0.20575221238938052,
+        "cluster_nmi": 0.4863894388074076,
+        "cluster_ari": 0.057661192545597255
+      }
+    },
+    {
+      "score_mode": "entropy_only",
+      "threshold": 2.4966964721679688,
+      "metrics": {
+        "auroc": 0.5475945833333333,
+        "fpr95": 0.8846666666666667,
+        "known_ratio": 0.9507,
+        "known_class_correct": 2378,
+        "known_class_wrong": 3326,
+        "known_class_accuracy_after_accept": 0.4169004207573633,
+        "known_class_accuracy_all_known": 0.3963333333333333,
+        "known_correct": 5704,
+        "known_rejected": 296,
+        "unknown_correct_reject": 197,
+        "unknown_false_accept": 3803,
+        "total": 10000,
+        "known_accept_rate": 0.9506666666666667,
+        "unknown_reject_rate": 0.04925,
+        "cluster_acc": 0.18052738336713997,
+        "cluster_nmi": 0.470703008822174,
+        "cluster_ari": 0.037572774127944485
+      }
+    },
+    {
+      "score_mode": "proto_only",
+      "threshold": 0.25311294198036194,
+      "metrics": {
+        "auroc": 0.5581883958333334,
+        "fpr95": 0.8986666666666666,
+        "known_ratio": 0.9528,
+        "known_class_correct": 2376,
+        "known_class_wrong": 3340,
+        "known_class_accuracy_after_accept": 0.41567529741077675,
+        "known_class_accuracy_all_known": 0.396,
+        "known_correct": 5716,
+        "known_rejected": 284,
+        "unknown_correct_reject": 188,
+        "unknown_false_accept": 3812,
+        "total": 10000,
+        "known_accept_rate": 0.9526666666666667,
+        "unknown_reject_rate": 0.047,
+        "cluster_acc": 0.17796610169491525,
+        "cluster_nmi": 0.47700558638976426,
+        "cluster_ari": 0.025840773733774497
+      }
+    },
+    {
+      "score_mode": "entropy_proto",
+      "threshold": 2.7240285873413086,
+      "metrics": {
+        "auroc": 0.5489235208333333,
+        "fpr95": 0.8806666666666667,
+        "known_ratio": 0.9528,
+        "known_class_correct": 2381,
+        "known_class_wrong": 3332,
+        "known_class_accuracy_after_accept": 0.4167687729739191,
+        "known_class_accuracy_all_known": 0.3968333333333333,
+        "known_correct": 5713,
+        "known_rejected": 287,
+        "unknown_correct_reject": 185,
+        "unknown_false_accept": 3815,
+        "total": 10000,
+        "known_accept_rate": 0.9521666666666667,
+        "unknown_reject_rate": 0.04625,
+        "cluster_acc": 0.17796610169491525,
+        "cluster_nmi": 0.4820319581596715,
+        "cluster_ari": 0.028959346265720862
+      }
+    },
+    {
+      "score_mode": "full",
+      "threshold": 1.9760890007019043,
+      "metrics": {
+        "auroc": 0.5494093124999999,
+        "fpr95": 0.8806666666666667,
+        "known_ratio": 0.9524,
+        "known_class_correct": 2382,
+        "known_class_wrong": 3333,
+        "known_class_accuracy_after_accept": 0.4167979002624672,
+        "known_class_accuracy_all_known": 0.397,
+        "known_correct": 5715,
+        "known_rejected": 285,
+        "unknown_correct_reject": 191,
+        "unknown_false_accept": 3809,
+        "total": 10000,
+        "known_accept_rate": 0.9525,
+        "unknown_reject_rate": 0.04775,
+        "cluster_acc": 0.17647058823529413,
+        "cluster_nmi": 0.4854422004439771,
+        "cluster_ari": 0.03414348666917263
+      }
+    },
+    {
+      "score_mode": "normalized_entropy_mahalanobis",
+      "threshold": 2.552194595336914,
+      "metrics": {
+        "auroc": 0.5738916875,
+        "fpr95": 0.8823333333333333,
+        "known_ratio": 0.9449,
+        "known_class_correct": 2368,
+        "known_class_wrong": 3328,
+        "known_class_accuracy_after_accept": 0.4157303370786517,
+        "known_class_accuracy_all_known": 0.39466666666666667,
+        "known_correct": 5696,
+        "known_rejected": 304,
+        "unknown_correct_reject": 247,
+        "unknown_false_accept": 3753,
+        "total": 10000,
+        "known_accept_rate": 0.9493333333333334,
+        "unknown_reject_rate": 0.06175,
+        "cluster_acc": 0.17785843920145192,
+        "cluster_nmi": 0.48497241454231493,
+        "cluster_ari": 0.030755353453084666
+      }
+    }
+  ]
+}

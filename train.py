@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import argparse
 import copy
+import os
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from novel_discovery.data import build_data_bundle
+# Keep downloaded torchvision weights inside the project by default.
+os.environ.setdefault("TORCH_HOME", str(Path.cwd() / ".torch_cache"))
+
+from novel_discovery.data import TwoViewDataset, build_data_bundle
 from novel_discovery.metrics import compute_auroc
 from novel_discovery.models import build_model
 from novel_discovery.pipeline import (
@@ -51,6 +55,8 @@ def parse_args():
         p.add_argument("--limit-train", type=int, default=0)
         p.add_argument("--limit-val", type=int, default=0)
         p.add_argument("--limit-test", type=int, default=0)
+        p.add_argument("--limit-discovery", type=int, default=0)
+        p.add_argument("--discovery-pool-mode", choices=["unknown", "mixed"], default="unknown")
 
     p = sub.add_parser("train_teacher")
     add_common(p)
@@ -83,14 +89,52 @@ def parse_args():
     p.add_argument("--pseudo-feature-noise", type=float, default=0.05)
     p.add_argument("--uncertainty-target-mode", choices=["confidence", "classification_error", "margin"], default="confidence")
     p.add_argument("--temperature", type=float, default=2.0)
+    p.add_argument("--uncertainty-weight-mode", choices=["raw", "mean_normalized"], default="raw")
     p.add_argument("--teacher-ckpt", default="./runs/teacher.pt")
     p.add_argument("--student-ckpt", default="./runs/student.pt")
+    p.add_argument(
+        "--discovery-pool",
+        action="store_true",
+        help="Use unlabeled discovery images for two-view representation learning.",
+    )
+    p.add_argument("--alpha-discovery", type=float, default=0.0)
+    p.add_argument("--alpha-discovery-unknown", type=float, default=0.0)
+    p.add_argument("--discovery-batch-size", type=int, default=0)
+    p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
+    p.add_argument("--discovery-temperature", type=float, default=0.2)
 
     p = sub.add_parser("discover")
     add_common(p)
     p.add_argument("--student-ckpt", default="./runs/student.pt")
     p.add_argument("--num-novel", type=int, default=40)
     p.add_argument("--cluster-k", choices=["oracle", "auto"], default="oracle")
+    p.add_argument(
+        "--cluster-method",
+        choices=["kmeans", "agglomerative", "spectral"],
+        default="kmeans",
+        help="Clustering algorithm for the rejected/unknown candidate pool.",
+    )
+    p.add_argument(
+        "--cluster-feature",
+        choices=["projection", "projection_pca", "feature", "feature_pca"],
+        default="projection",
+        help="Representation used for clustering; *_pca applies PCA and whitening.",
+    )
+    p.add_argument(
+        "--cluster-selection",
+        choices=["silhouette", "composite", "stability"],
+        default="silhouette",
+        help="K selection criterion: silhouette, composite internal metrics, or stability.",
+    )
+    p.add_argument("--cluster-pca-dim", type=int, default=32)
+    p.add_argument(
+        "--cluster-normalize",
+        action="store_true",
+        help="L2-normalize clustering features (default remains raw features for compatibility).",
+    )
+    p.add_argument("--cluster-no-whiten", action="store_true")
+    p.add_argument("--cluster-n-init", type=int, default=10)
+    p.add_argument("--cluster-stability-repeats", type=int, default=5)
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument("--mc-samples", type=int, default=8)
     p.add_argument(
@@ -219,6 +263,8 @@ def fit_teacher(args):
         limit_train=args.limit_train or None,
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
@@ -292,12 +338,24 @@ def fit_student(args):
         limit_train=args.limit_train or None,
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
     print(f"device: {device}")
     train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
+    discovery_loader = None
+    if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
+        if args.discovery_pool_mode == "mixed" and args.alpha_discovery_unknown > 0.0:
+            raise ValueError("alpha-discovery-unknown requires --discovery-pool-mode unknown.")
+        discovery_loader = build_loader(
+            TwoViewDataset(bundle.discovery_pool),
+            args.discovery_batch_size or args.batch_size,
+            True,
+            args.num_workers,
+        )
     teacher_backbone = args.teacher_backbone or args.backbone
     student_backbone = args.student_backbone or args.backbone
     teacher = build_model(
@@ -338,6 +396,12 @@ def fit_student(args):
             uncertainty_target_mode=args.uncertainty_target_mode,
             temperature=args.temperature,
             kd_mode=args.kd_mode,
+            uncertainty_weight_mode=args.uncertainty_weight_mode,
+            discovery_loader=discovery_loader,
+            alpha_discovery=args.alpha_discovery,
+            alpha_discovery_unknown=args.alpha_discovery_unknown,
+            discovery_loss_mode=args.discovery_loss,
+            discovery_temperature=args.discovery_temperature,
         )
         val_stats = evaluate_classification(student, val_loader, device)
         print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
@@ -381,6 +445,8 @@ def discover(args):
         limit_train=args.limit_train or None,
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
         open_val_ratio=args.open_val_ratio,
     )
     device = resolve_device(args.device)
@@ -468,9 +534,24 @@ def discover(args):
         normalization=score_normalization,
         gaussian_stats=gaussian_stats,
         cluster_k=args.cluster_k,
+        cluster_method=args.cluster_method,
+        cluster_feature=args.cluster_feature,
+        cluster_selection=args.cluster_selection,
+        cluster_pca_dim=args.cluster_pca_dim,
+        cluster_normalize=args.cluster_normalize,
+        cluster_whiten=not args.cluster_no_whiten,
+        cluster_n_init=args.cluster_n_init,
+        cluster_stability_repeats=args.cluster_stability_repeats,
     )
     run_dir = ensure_dir(args.work_dir)
     save_json(run_dir / "config.json", vars(args))
+    torch.save(
+        {
+            "known_classes": list(bundle.known_classes),
+            "novel_classes": list(bundle.novel_classes),
+        },
+        run_dir / "split.pt",
+    )
     save_json(run_dir / "discovery_report.json", result)
     if calibration_report is not None:
         save_json(run_dir / "calibration_report.json", calibration_report)
@@ -491,6 +572,10 @@ def discover(args):
         "raw_labels": detail["raw_labels"].tolist(),
         "pred_cluster": None if detail["pred_cluster"] is None else detail["pred_cluster"].tolist(),
         "cluster_k": detail.get("cluster_k"),
+        "cluster_method": detail.get("cluster_method"),
+        "cluster_feature": detail.get("cluster_feature"),
+        "cluster_selection": detail.get("cluster_selection"),
+        "cluster_diagnostics": detail.get("cluster_diagnostics", []),
     })
     np.save(run_dir / "open_scores.npy", scores_test)
     print(result)
@@ -522,6 +607,8 @@ def inspect_data(args):
         limit_train=args.limit_train or None,
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
     )
     print("dataset:", args.dataset)
     print("known classes:", len(bundle.known_classes))
@@ -529,6 +616,7 @@ def inspect_data(args):
     print("train size:", len(bundle.train))
     print("val size:", len(bundle.val))
     print("test size:", len(bundle.test))
+    print("discovery pool size:", len(bundle.discovery_pool) if bundle.discovery_pool is not None else 0)
     print("first known classes:", list(bundle.known_classes)[: min(args.sample_count, len(bundle.known_classes))])
     print("first novel classes:", list(bundle.novel_classes)[: min(args.sample_count, len(bundle.novel_classes))])
 

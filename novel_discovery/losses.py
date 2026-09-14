@@ -4,6 +4,25 @@ import torch
 from torch.nn import functional as F
 
 
+def uncertainty_weights(
+    uncertainty: torch.Tensor,
+    mode: str = "raw",
+) -> torch.Tensor:
+    """Convert uncertainty to per-sample transfer weights.
+
+    ``raw`` preserves the original implementation. ``mean_normalized`` keeps
+    the batch-average KD strength close to one, so an ablation measures the
+    effect of reallocating transfer strength across samples rather than also
+    changing the total KD coefficient.
+    """
+    weights = torch.exp(-uncertainty.detach())
+    if mode == "raw":
+        return weights
+    if mode == "mean_normalized":
+        return weights / weights.mean().clamp_min(1e-6)
+    raise ValueError(f"Unsupported uncertainty weight mode: {mode}")
+
+
 def classification_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     return F.cross_entropy(logits, labels)
 
@@ -46,12 +65,13 @@ def distillation_loss(
     teacher_uncertainty: torch.Tensor | None = None,
     temperature: float = 2.0,
     uncertainty_weighted: bool = True,
+    uncertainty_weight_mode: str = "raw",
 ) -> torch.Tensor:
     student_log_prob = F.log_softmax(student_logits / temperature, dim=-1)
     teacher_prob = F.softmax(teacher_logits / temperature, dim=-1).detach()
     per_sample = F.kl_div(student_log_prob, teacher_prob, reduction="none").sum(dim=1) * (temperature**2)
     if teacher_uncertainty is not None and uncertainty_weighted:
-        weight = torch.exp(-teacher_uncertainty.detach())
+        weight = uncertainty_weights(teacher_uncertainty, mode=uncertainty_weight_mode)
         per_sample = per_sample * weight
     return per_sample.mean()
 
@@ -60,6 +80,7 @@ def feature_distillation_loss(
     student_projection: torch.Tensor,
     teacher_projection: torch.Tensor,
     teacher_uncertainty: torch.Tensor | None = None,
+    uncertainty_weight_mode: str = "raw",
 ) -> torch.Tensor:
     """Distill relationally useful normalized representations.
 
@@ -70,7 +91,8 @@ def feature_distillation_loss(
         student_projection, teacher_projection.detach(), dim=-1
     )
     if teacher_uncertainty is not None:
-        per_sample = per_sample * torch.exp(-teacher_uncertainty.detach())
+        weight = uncertainty_weights(teacher_uncertainty, mode=uncertainty_weight_mode)
+        per_sample = per_sample * weight
     return per_sample.mean()
 
 
@@ -116,3 +138,75 @@ def pseudo_unknown_loss(logits: torch.Tensor, uncertainty: torch.Tensor) -> torc
     unc_target = torch.ones_like(uncertainty)
     loss_unc = F.mse_loss(uncertainty, unc_target)
     return confidence.mean() + 0.5 * entropy_gap.mean() + loss_unc
+
+
+def discovery_unknown_loss(
+    logits: torch.Tensor,
+    uncertainty: torch.Tensor,
+) -> torch.Tensor:
+    """Encourage unlabeled discovery samples to leave the known classifier.
+
+    This loss uses no class labels. It is intended for a discovery pool known
+    by the data protocol to contain novel samples; do not apply it to a mixed
+    pool containing known samples.
+    """
+    if logits.numel() == 0:
+        return logits.new_tensor(0.0)
+    probs = logits.softmax(dim=-1)
+    confidence = probs.max(dim=-1).values
+    entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=-1)
+    max_entropy = logits.new_tensor(float(logits.size(-1))).log()
+    normalized_entropy = entropy / max_entropy.clamp_min(1e-8)
+    return (
+        confidence.mean()
+        + (1.0 - normalized_entropy).pow(2).mean()
+        + F.mse_loss(uncertainty, torch.ones_like(uncertainty))
+    )
+
+
+def discovery_consistency_loss(
+    first_projection: torch.Tensor,
+    second_projection: torch.Tensor,
+) -> torch.Tensor:
+    """Align two augmented views in normalized projection space."""
+    if first_projection.numel() == 0:
+        return first_projection.new_tensor(0.0)
+    return 1.0 - F.cosine_similarity(
+        first_projection, second_projection, dim=-1
+    ).mean()
+
+
+def discovery_contrastive_loss(
+    first_projection: torch.Tensor,
+    second_projection: torch.Tensor,
+    temperature: float = 0.2,
+) -> torch.Tensor:
+    """SimCLR-style NT-Xent loss for unlabeled discovery samples."""
+    if first_projection.size(0) <= 1:
+        return discovery_consistency_loss(first_projection, second_projection)
+
+    first_projection = F.normalize(first_projection, dim=-1)
+    second_projection = F.normalize(second_projection, dim=-1)
+    features = torch.cat([first_projection, second_projection], dim=0)
+    logits = torch.matmul(features, features.T) / temperature
+    logits = logits.masked_fill(
+        torch.eye(logits.size(0), dtype=torch.bool, device=logits.device),
+        float("-inf"),
+    )
+    batch_size = first_projection.size(0)
+    targets = torch.arange(2 * batch_size, device=logits.device)
+    targets = (targets + batch_size) % (2 * batch_size)
+    return F.cross_entropy(logits, targets)
+
+
+def discovery_view_loss(
+    first_projection: torch.Tensor,
+    second_projection: torch.Tensor,
+    mode: str = "nt_xent",
+    temperature: float = 0.2,
+) -> torch.Tensor:
+    if mode == "consistency":
+        return discovery_consistency_loss(first_projection, second_projection)
+    if mode == "nt_xent":
+        return discovery_contrastive_loss(first_projection, second_projection, temperature)
+    raise ValueError(f"Unsupported discovery loss mode: {mode}")

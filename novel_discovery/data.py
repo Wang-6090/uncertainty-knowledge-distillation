@@ -181,6 +181,50 @@ class DataBundle:
     test: Dataset
     known_classes: Sequence
     novel_classes: Sequence
+    discovery_pool: Dataset | None = None
+
+
+class TwoViewDataset(Dataset):
+    """Return two independently augmented views from one sample."""
+
+    def __init__(self, dataset: Dataset) -> None:
+        self.dataset = dataset
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int):
+        first = self.dataset[index]
+        second = self.dataset[index]
+        return first[0], second[0]
+
+
+def unknown_subset(dataset: Dataset) -> Dataset:
+    """Build an unlabeled subset containing only samples outside known classes."""
+    if hasattr(dataset, "allowed_indices") and hasattr(dataset, "base"):
+        allowed_indices = list(dataset.allowed_indices)
+        if hasattr(dataset.base, "targets"):
+            raw_targets = dataset.base.targets
+            indices = [
+                local_index
+                for local_index, real_index in enumerate(allowed_indices)
+                if int(raw_targets[real_index]) not in dataset.known_to_idx
+            ]
+            return Subset(dataset, indices)
+        if hasattr(dataset.base, "samples"):
+            indices = []
+            for local_index, real_index in enumerate(allowed_indices):
+                raw_label = int(dataset.base.samples[real_index][1])
+                class_name = dataset.base.classes[raw_label]
+                if class_name not in dataset.known_to_idx:
+                    indices.append(local_index)
+            return Subset(dataset, indices)
+
+    indices = []
+    for index in range(len(dataset)):
+        if int(dataset[index][3]) == 0:
+            indices.append(index)
+    return Subset(dataset, indices)
 
 
 def split_dataset(dataset: Dataset, ratio: float, seed: int):
@@ -206,14 +250,20 @@ def build_data_bundle(
     limit_train: int | None = None,
     limit_val: int | None = None,
     limit_test: int | None = None,
+    limit_discovery: int | None = None,
+    discovery_pool_mode: str = "unknown",
     open_val_ratio: float = 0.0,
 ) -> DataBundle:
+    if discovery_pool_mode not in {"unknown", "mixed"}:
+        raise ValueError(f"Unsupported discovery pool mode: {discovery_pool_mode}")
+
     if dataset_name.lower() == "cifar100":
         known_classes, novel_classes = make_class_split(list(range(100)), num_known, seed, split_path)
         train_tf = build_transforms(image_size, train=True)
         test_tf = build_transforms(image_size, train=False)
         train_full = OpenSetCIFAR100(root, known_classes, train=True, transform=train_tf, download=download, include_unknown=False)
         val_full = OpenSetCIFAR100(root, known_classes, train=True, transform=test_tf, download=download, include_unknown=False)
+        pool_full = OpenSetCIFAR100(root, known_classes, train=True, transform=train_tf, download=download, include_unknown=True)
         test_open = OpenSetCIFAR100(root, known_classes, train=False, transform=test_tf, download=download, include_unknown=True)
         train_indices, val_indices = split_known_indices(len(train_full), val_ratio=0.1, seed=seed)
         train_set = Subset(train_full, train_indices)
@@ -223,6 +273,7 @@ def build_data_bundle(
         open_val, test_open = split_dataset(test_open, open_val_ratio, seed)
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
+        discovery_pool = unknown_subset(pool_full) if discovery_pool_mode == "unknown" else pool_full
         return DataBundle(
             train=train_set,
             val=val_set,
@@ -230,6 +281,7 @@ def build_data_bundle(
             test=test_open,
             known_classes=known_classes,
             novel_classes=novel_classes,
+            discovery_pool=limit_dataset(discovery_pool, limit_discovery, seed),
         )
 
     if dataset_name.lower() == "imagefolder":
@@ -239,6 +291,7 @@ def build_data_bundle(
         test_tf = build_transforms(image_size, train=False)
         train_full = OpenSetImageFolder(root, known_classes, transform=train_tf, include_unknown=False)
         val_full = OpenSetImageFolder(root, known_classes, transform=test_tf, include_unknown=False)
+        pool_full = OpenSetImageFolder(root, known_classes, transform=train_tf, include_unknown=True)
         test_open = OpenSetImageFolder(root, known_classes, transform=test_tf, include_unknown=True)
         train_indices, val_indices = split_known_indices(len(train_full), val_ratio=0.1, seed=seed)
         train_set = Subset(train_full, train_indices)
@@ -248,6 +301,7 @@ def build_data_bundle(
         open_val, test_open = split_dataset(test_open, open_val_ratio, seed)
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
+        discovery_pool = unknown_subset(pool_full) if discovery_pool_mode == "unknown" else pool_full
         return DataBundle(
             train=train_set,
             val=val_set,
@@ -255,6 +309,7 @@ def build_data_bundle(
             test=test_open,
             known_classes=known_classes,
             novel_classes=novel_classes,
+            discovery_pool=limit_dataset(discovery_pool, limit_discovery, seed),
         )
 
     if dataset_name.lower() in {"toy", "fake"}:
@@ -263,6 +318,7 @@ def build_data_bundle(
         test_tf = build_transforms(image_size, train=False)
         train_full = OpenSetFakeData(1000, known_classes, image_size, transform=train_tf, include_unknown=False, random_offset=0)
         val_full = OpenSetFakeData(200, known_classes, image_size, transform=test_tf, include_unknown=False, random_offset=10000)
+        pool_full = OpenSetFakeData(1000, known_classes, image_size, transform=train_tf, include_unknown=True, random_offset=30000)
         test_open = OpenSetFakeData(1000, known_classes, image_size, transform=test_tf, include_unknown=True, random_offset=20000)
         train_set, _ = split_known_dataset(train_full, val_ratio=0.1, seed=seed)
         train_set = limit_dataset(train_set, limit_train, seed)
@@ -270,6 +326,7 @@ def build_data_bundle(
         open_val, test_open = split_dataset(test_open, open_val_ratio, seed)
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
+        discovery_pool = unknown_subset(pool_full) if discovery_pool_mode == "unknown" else pool_full
         return DataBundle(
             train=train_set,
             val=val_set,
@@ -277,6 +334,7 @@ def build_data_bundle(
             test=test_open,
             known_classes=known_classes,
             novel_classes=novel_classes,
+            discovery_pool=limit_dataset(discovery_pool, limit_discovery, seed),
         )
 
     raise ValueError(f"Unsupported dataset: {dataset_name}")

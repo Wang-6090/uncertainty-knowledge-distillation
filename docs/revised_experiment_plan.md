@@ -19,6 +19,8 @@
 | C | CE + uncertainty-weighted KL | Effect of the proposed weighting |
 | D | C + feature KD | Effect of representation transfer |
 | E | D + uncertainty head + SupCon + prototype | Full representation model |
+| F | E + discovery-pool NT-Xent | Effect of unlabeled novel representation learning |
+| G | F + discovery unknown loss | Effect of explicitly pushing novel-pool samples away from known classes |
 
 Run the table with:
 
@@ -29,10 +31,31 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_revised_ablation.ps1
 The output should be summarized with mean and standard deviation over at least
 three seeds before making a final claim.
 
+The reproducible multi-seed runner is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_revised_multiseed.ps1
+```
+
+It repeats the A-E ablation for seeds 42, 123, and 3407 and evaluates both
+`oracle K` and `auto K`. The summary is written to
+`analysis/revised_multiseed/multiseed_summary.md` and
+`analysis/revised_multiseed/multiseed_summary.json`.
+
+The current quick discovery-pool comparison is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\scripts\\run_discovery_pool_compare.ps1
+```
+
+It is intentionally small (`limit-train=1200`, `epochs=2`) and should be used
+only as a sanity check. If F or G is promising, rerun the same comparison with
+full training size and multiple seeds before writing a conclusion.
+
 ## Required reports
 
-For every row report known accuracy, AUROC, FPR95, known acceptance rate,
-unknown rejection rate, cluster ACC, NMI, and ARI. Also report parameter
+For every row report known accuracy, AUROC, AUPR, FPR95, OSCR, known acceptance
+rate, unknown rejection rate, cluster ACC, NMI, and ARI. Also report parameter
 count, FLOPs or an equivalent model-size measure, and inference time for the
 ResNet-18/MobileNetV3-Small compression comparison.
 
