@@ -16,7 +16,7 @@ Uncertainty-Aware Knowledge Distillation for Novel Class Discovery
 - 原型距离、Entropy、Mahalanobis 等开放集打分
 - 未知样本聚类与结果分析
 - AUPR、FPR95、OSCR 以及已知/未知分离后的聚类指标
-- 可选的无标注 discovery pool 双视图一致性训练
+- 可选的无标注 discovery pool 双视图一致性训练和 NT-Xent 对比训练
 
 ## 当前状态
 
@@ -39,6 +39,28 @@ Uncertainty-Aware Knowledge Distillation for Novel Class Discovery
 - 当前特征蒸馏版本没有带来稳定提升。
 - 完整模型在这次单种子实验里 AUROC 和未知拒识率最好，但聚类指标最差。
 - 这说明检测与聚类目标仍然存在明显冲突，后续还需要多 seed 和真正的新类发现训练。
+
+## 本次改进
+
+为回应当前文档中提到的主要问题，代码已经做了以下增强：
+
+- 修正 `supervised_contrastive_loss`：只对 batch 内存在同类正样本的 anchor 计算监督对比损失，避免单样本类别稀释 SupCon。
+- 增加 `--uncertainty-weight-mode`：支持 `raw` 和 `mean_normalized`，便于公平比较标准 KD 与不确定性加权 KD。
+- 增强 discovery pool 训练：支持 `--discovery-loss consistency|nt_xent`、`--alpha-discovery-unknown` 和 `--discovery-pool-mode unknown|mixed`。
+- 增强聚类评估：`discover` 现在可选择 KMeans、Agglomerative、Spectral，可选择 projection/feature/PCA 特征，并记录 auto-K 诊断。
+- 增加候选池污染诊断：`discovery_report.json` 会记录 candidate count、true unknown count、false reject count、candidate purity 和 K 估计误差。
+- 改进分析脚本：`analyze_results.py` 的 Markdown 汇总会展示 candidate purity、estimated K 和更清晰的缺失文件错误。
+
+## 推荐实验协议
+
+短期不要继续叠加复杂模块，建议先固定协议验证当前最有价值的方向：
+
+1. 固定 CIFAR-100 60/40 split、backbone、epoch、batch size、score mode 和 cluster config。
+2. 至少跑 3 个 seed，并报告 mean ± std。
+3. 主对照保持 `CE`、`standard KD`、`uncertainty KD`、`full representation`、`full + discovery pool`。
+4. 主检测分数优先比较 `entropy_proto` 与 `normalized_entropy_mahalanobis`。
+5. 聚类同时报告 oracle-K 和 auto-K；oracle-K 只作为上限分析，不作为最终无监督结论。
+6. 每次报告 candidate purity，先判断候选池是否被误拒已知样本污染，再解释聚类指标。
 
 ## 项目成员
 
@@ -100,9 +122,50 @@ python train.py train_student `
 该开关只使用未知类别训练图像的两个随机增强视图，不把标签传给损失函数。`--limit-discovery` 用于控制实验规模；`--alpha-discovery 0` 或不传
 `--discovery-pool` 时，行为与旧版学生训练一致。
 
+启用 discovery pool NT-Xent 和候选池诊断：
+
+```powershell
+python train.py train_student `
+  --dataset cifar100 `
+  --data-root .\data `
+  --num-known 60 `
+  --split-path .\splits_cifar100_60_40.json `
+  --teacher-ckpt .\runs\teacher\teacher.pt `
+  --student-ckpt .\runs\student_discovery\student.pt `
+  --work-dir .\runs\student_discovery `
+  --discovery-pool `
+  --discovery-pool-mode unknown `
+  --alpha-discovery 0.1 `
+  --discovery-loss nt_xent `
+  --uncertainty-weight-mode mean_normalized `
+  --device auto
+
+python train.py discover `
+  --dataset cifar100 `
+  --data-root .\data `
+  --num-known 60 `
+  --num-novel 40 `
+  --split-path .\splits_cifar100_60_40.json `
+  --student-ckpt .\runs\student_discovery\student.pt `
+  --work-dir .\runs\student_discovery_detect `
+  --score-mode normalized_entropy_mahalanobis `
+  --cluster-k auto `
+  --cluster-method kmeans `
+  --cluster-feature projection_pca `
+  --cluster-selection composite `
+  --cluster-normalize `
+  --device auto
+```
+
+运行轻量测试：
+
+```bash
+python -m unittest discover -s tests
+```
+
 ## 说明
 
 - 仓库默认不包含 `data/`、`runs/` 和缓存权重等大文件。
 - 结果摘要保存在 `analysis/` 下的 Markdown 和 JSON 文件中。
-- `discovery_report.json` 现在额外记录 AUPR、OSCR、估计 K 误差，以及包含误拒已知样本和仅真实未知样本的两组聚类指标。
+- `discovery_report.json` 现在额外记录 AUPR、OSCR、估计 K 误差、candidate purity，以及包含误拒已知样本和仅真实未知样本的两组聚类指标。
 - 当前结果是单种子结果，后续还需要补多 seed 才能形成最终结论。

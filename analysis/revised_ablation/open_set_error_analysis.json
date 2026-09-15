@@ -24,9 +24,19 @@
       "limit_train": 0,
       "limit_val": 0,
       "limit_test": 0,
+      "limit_discovery": 0,
+      "discovery_pool_mode": "unknown",
       "student_ckpt": ".\\runs\\revised_A_ce\\student.pt",
       "num_novel": 40,
-      "cluster_k": "oracle",
+      "cluster_k": "auto",
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalize": false,
+      "cluster_no_whiten": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
       "threshold_percentile": 95.0,
       "mc_samples": 8,
       "score_mode": "normalized_entropy_mahalanobis",
@@ -34,127 +44,334 @@
       "auto_calibrate_score": false
     },
     "metrics": {
-      "auroc": 0.5938584583333333,
-      "fpr95": 0.8811666666666667,
-      "known_ratio": 0.9434,
-      "known_class_correct": 2716,
-      "known_class_wrong": 2987,
-      "known_class_accuracy_after_accept": 0.4762405751358934,
-      "known_class_accuracy_all_known": 0.45266666666666666,
-      "known_correct": 5703,
-      "known_rejected": 297,
-      "unknown_correct_reject": 269,
-      "unknown_false_accept": 3731,
+      "auroc": 0.5811240416666666,
+      "aupr": 0.44631231853739034,
+      "fpr95": 0.8881666666666667,
+      "oscr": 0.31804191666666665,
+      "known_ratio": 0.9415,
+      "known_class_correct": 2567,
+      "known_class_wrong": 3101,
+      "known_class_accuracy_after_accept": 0.45289343683839095,
+      "known_class_accuracy_all_known": 0.42783333333333334,
+      "known_correct": 5668,
+      "known_rejected": 332,
+      "unknown_correct_reject": 253,
+      "unknown_false_accept": 3747,
       "total": 10000,
-      "known_accept_rate": 0.9505,
-      "unknown_reject_rate": 0.06725,
-      "cluster_acc": 0.18197879858657243,
-      "cluster_nmi": 0.5126866492189237,
-      "cluster_ari": 0.05345672100837879
+      "known_accept_rate": 0.9446666666666667,
+      "unknown_reject_rate": 0.06325,
+      "cluster_acc": 0.041025641025641026,
+      "cluster_nmi": 0.05930773167558996,
+      "cluster_ari": 0.0032243468774365808,
+      "cluster_unknown_only_acc": 0.09090909090909091,
+      "cluster_unknown_only_nmi": 0.0650493423137941,
+      "cluster_unknown_only_ari": 0.007183219356612563,
+      "cluster_candidate_count": 585,
+      "cluster_true_unknown_count": 253,
+      "cluster_false_reject_count": 332,
+      "cluster_candidate_purity": 0.4324786324786325,
+      "cluster_true_k": 40,
+      "cluster_k_abs_error": 38,
+      "cluster_k": 2,
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalized": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
+      "cluster_diagnostics": [
+        {
+          "k": 2,
+          "silhouette": 0.060994673520326614,
+          "calinski_harabasz": 39.534094155200556,
+          "davies_bouldin": 3.8125448354603786,
+          "stability_nmi": 0.8490304663557229,
+          "internal_score": 0.75,
+          "selection_score": 1.0
+        },
+        {
+          "k": 3,
+          "silhouette": 0.05769961699843407,
+          "calinski_harabasz": 34.2693885966848,
+          "davies_bouldin": 3.508618156670028,
+          "stability_nmi": 0.6729263193270649,
+          "internal_score": 0.6207252209014962,
+          "selection_score": 0.7117083231750643
+        },
+        {
+          "k": 4,
+          "silhouette": 0.05431515350937843,
+          "calinski_harabasz": 30.599582177624193,
+          "davies_bouldin": 3.2238883804189427,
+          "stability_nmi": 0.44878061919873957,
+          "internal_score": 0.4987448463434156,
+          "selection_score": 0.41559423592650585
+        },
+        {
+          "k": 5,
+          "silhouette": 0.05238557979464531,
+          "calinski_harabasz": 27.492043229531376,
+          "davies_bouldin": 3.1887247664716316,
+          "stability_nmi": 0.5192283494725888,
+          "internal_score": 0.3920173437890363,
+          "selection_score": 0.24677162603141742
+        },
+        {
+          "k": 6,
+          "silhouette": 0.053394485265016556,
+          "calinski_harabasz": 25.247607019626646,
+          "davies_bouldin": 2.994628404452586,
+          "stability_nmi": 0.5730803494437993,
+          "internal_score": 0.4564037728131758,
+          "selection_score": 0.33504296458925176
+        },
+        {
+          "k": 7,
+          "silhouette": 0.05143332853913307,
+          "calinski_harabasz": 23.90652115340599,
+          "davies_bouldin": 3.0203879260679583,
+          "stability_nmi": 0.5372443894263539,
+          "internal_score": 0.3521552453696322,
+          "selection_score": 0.16345708821201863
+        },
+        {
+          "k": 8,
+          "silhouette": 0.05078791454434395,
+          "calinski_harabasz": 22.216511367798912,
+          "davies_bouldin": 2.959151715496677,
+          "stability_nmi": 0.5449977993410642,
+          "internal_score": 0.3208632348390886,
+          "selection_score": 0.1069884110989574
+        },
+        {
+          "k": 9,
+          "silhouette": 0.054219167679548264,
+          "calinski_harabasz": 20.786152212183673,
+          "davies_bouldin": 2.913671566688952,
+          "stability_nmi": 0.5555232454305077,
+          "internal_score": 0.46701076255178103,
+          "selection_score": 0.40719622646921166
+        },
+        {
+          "k": 10,
+          "silhouette": 0.05562065914273262,
+          "calinski_harabasz": 20.356347522772502,
+          "davies_bouldin": 2.8076884967210107,
+          "stability_nmi": 0.5253149827385821,
+          "internal_score": 0.5470336704278077,
+          "selection_score": 0.529815769197173
+        },
+        {
+          "k": 11,
+          "silhouette": 0.05467784404754639,
+          "calinski_harabasz": 18.969552217777743,
+          "davies_bouldin": 2.8647026306435466,
+          "stability_nmi": 0.5615383417141193,
+          "internal_score": 0.4801558740753096,
+          "selection_score": 0.44732682161123405
+        },
+        {
+          "k": 12,
+          "silhouette": 0.05455709621310234,
+          "calinski_harabasz": 17.842322689822584,
+          "davies_bouldin": 2.8021546707855136,
+          "stability_nmi": 0.5567417881170622,
+          "internal_score": 0.4775131216882081,
+          "selection_score": 0.436762330400364
+        },
+        {
+          "k": 13,
+          "silhouette": 0.05264782905578613,
+          "calinski_harabasz": 17.386612322232573,
+          "davies_bouldin": 2.792576441059755,
+          "stability_nmi": 0.5694080670506565,
+          "internal_score": 0.3916707758312513,
+          "selection_score": 0.26971638547274085
+        },
+        {
+          "k": 14,
+          "silhouette": 0.054556749761104584,
+          "calinski_harabasz": 16.691331985029745,
+          "davies_bouldin": 2.7965329245749087,
+          "stability_nmi": 0.5568220399060074,
+          "internal_score": 0.4676365150500179,
+          "selection_score": 0.43673201855997246
+        },
+        {
+          "k": 15,
+          "silhouette": 0.04956508055329323,
+          "calinski_harabasz": 15.87855871202507,
+          "davies_bouldin": 2.7991320980256353,
+          "stability_nmi": 0.5755359319844496,
+          "internal_score": 0.2408906705249473,
+          "selection_score": 0.0
+        },
+        {
+          "k": 16,
+          "silhouette": 0.05450419336557388,
+          "calinski_harabasz": 15.337433772695935,
+          "davies_bouldin": 2.69618646856328,
+          "stability_nmi": 0.5794440519410371,
+          "internal_score": 0.4739448725177813,
+          "selection_score": 0.43213374496595297
+        },
+        {
+          "k": 17,
+          "silhouette": 0.054636094719171524,
+          "calinski_harabasz": 14.844237899051965,
+          "davies_bouldin": 2.6917989582424866,
+          "stability_nmi": 0.5710821638553899,
+          "internal_score": 0.4759159958822684,
+          "selection_score": 0.4436740818771699
+        },
+        {
+          "k": 18,
+          "silhouette": 0.05249651521444321,
+          "calinski_harabasz": 14.291485832523566,
+          "davies_bouldin": 2.787592799100656,
+          "stability_nmi": 0.573633627632482,
+          "internal_score": 0.35634830741765955,
+          "selection_score": 0.25647760769829486
+        },
+        {
+          "k": 19,
+          "silhouette": 0.05181972682476044,
+          "calinski_harabasz": 13.888220751851208,
+          "davies_bouldin": 2.652900503202581,
+          "stability_nmi": 0.5668189583676178,
+          "internal_score": 0.35189916034421365,
+          "selection_score": 0.1972639163940774
+        },
+        {
+          "k": 20,
+          "silhouette": 0.05149086192250252,
+          "calinski_harabasz": 13.548621584740966,
+          "davies_bouldin": 2.678838775968849,
+          "stability_nmi": 0.5683825593445985,
+          "internal_score": 0.3286535451463488,
+          "selection_score": 0.16849080931961977
+        }
+      ]
     },
     "score_summary": {
       "known": {
         "count": 6000,
-        "mean": -0.006793744567471246,
-        "std": 1.5699659940175255,
-        "p25": -1.298681527376175,
-        "median": -0.0691966637969017,
-        "p75": 1.1630281209945679
+        "mean": 0.009106425045679012,
+        "std": 1.5699529781263695,
+        "p25": -1.254739373922348,
+        "median": -0.013075485825538635,
+        "p75": 1.1761199235916138
       },
       "unknown": {
         "count": 4000,
-        "mean": 0.4923990408233367,
-        "std": 1.4835853062918232,
-        "p25": -0.6527508050203323,
-        "median": 0.5804979801177979,
-        "p75": 1.563370794057846
+        "mean": 0.42290730530116705,
+        "std": 1.4255310148777296,
+        "p25": -0.6338676810264587,
+        "median": 0.5050692856311798,
+        "p75": 1.4808402955532074
       }
     },
     "class_summary": {
       "known_total": 6000,
       "unknown_total": 4000,
-      "known_rejected": 297,
-      "unknown_false_accept": 3731,
-      "known_class_correct": 0,
-      "known_class_accuracy_after_accept": 0.4762405751358934,
-      "known_class_accuracy_all_known": 0.45266666666666666
+      "known_rejected": 332,
+      "unknown_false_accept": 3747,
+      "known_class_correct": 2567,
+      "known_class_accuracy_after_accept": 0.45289343683839095,
+      "known_class_accuracy_all_known": 0.42783333333333334
+    },
+    "candidate_pool": {
+      "count": 585,
+      "true_unknown_count": 253,
+      "false_reject_count": 332,
+      "purity": 0.4324786324786325,
+      "true_k": 40,
+      "estimated_k": 2,
+      "k_abs_error": 38
+    },
+    "cluster_config": {
+      "method": "kmeans",
+      "feature": "projection",
+      "selection": "silhouette",
+      "normalized": false
     },
     "top_known_reject_classes": [
       {
         "raw_label": 48,
         "name": "motorcycle",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.55,
+        "reject_rate": 0.16
+      },
+      {
+        "raw_label": 45,
+        "name": "lobster",
+        "count": 100,
+        "accuracy": 0.14,
         "reject_rate": 0.15
       },
       {
-        "raw_label": 8,
-        "name": "bicycle",
+        "raw_label": 59,
+        "name": "pine_tree",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.39,
         "reject_rate": 0.14
+      },
+      {
+        "raw_label": 96,
+        "name": "willow_tree",
+        "count": 100,
+        "accuracy": 0.32,
+        "reject_rate": 0.11
+      },
+      {
+        "raw_label": 51,
+        "name": "mushroom",
+        "count": 100,
+        "accuracy": 0.44,
+        "reject_rate": 0.1
+      },
+      {
+        "raw_label": 26,
+        "name": "crab",
+        "count": 100,
+        "accuracy": 0.16,
+        "reject_rate": 0.1
       },
       {
         "raw_label": 85,
         "name": "tank",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.11
-      },
-      {
-        "raw_label": 1,
-        "name": "aquarium_fish",
-        "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.11
-      },
-      {
-        "raw_label": 44,
-        "name": "lizard",
-        "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.1
-      },
-      {
-        "raw_label": 63,
-        "name": "porcupine",
-        "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.45,
         "reject_rate": 0.09
       },
       {
-        "raw_label": 22,
-        "name": "clock",
+        "raw_label": 68,
+        "name": "road",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.09
-      },
-      {
-        "raw_label": 36,
-        "name": "hamster",
-        "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.55,
         "reject_rate": 0.09
       }
     ],
     "top_novel_false_accept_classes": [
       {
-        "raw_label": 95,
-        "name": "whale",
-        "count": 100,
-        "false_accept_rate": 1.0,
-        "correct_reject_rate": 0.0
-      },
-      {
-        "raw_label": 67,
-        "name": "ray",
+        "raw_label": 97,
+        "name": "wolf",
         "count": 100,
         "false_accept_rate": 0.99,
         "correct_reject_rate": 0.01
       },
       {
-        "raw_label": 77,
-        "name": "snail",
+        "raw_label": 93,
+        "name": "turtle",
+        "count": 100,
+        "false_accept_rate": 0.99,
+        "correct_reject_rate": 0.01
+      },
+      {
+        "raw_label": 35,
+        "name": "girl",
         "count": 100,
         "false_accept_rate": 0.98,
         "correct_reject_rate": 0.02
@@ -167,39 +384,141 @@
         "correct_reject_rate": 0.02
       },
       {
-        "raw_label": 88,
-        "name": "tiger",
+        "raw_label": 94,
+        "name": "wardrobe",
         "count": 100,
         "false_accept_rate": 0.98,
         "correct_reject_rate": 0.02
       },
       {
-        "raw_label": 71,
-        "name": "sea",
+        "raw_label": 5,
+        "name": "bed",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 0,
+        "name": "apple",
         "count": 100,
         "false_accept_rate": 0.97,
         "correct_reject_rate": 0.03
       },
       {
-        "raw_label": 97,
-        "name": "wolf",
-        "count": 100,
-        "false_accept_rate": 0.97,
-        "correct_reject_rate": 0.03
-      },
-      {
-        "raw_label": 93,
-        "name": "turtle",
+        "raw_label": 75,
+        "name": "skunk",
         "count": 100,
         "false_accept_rate": 0.97,
         "correct_reject_rate": 0.03
       }
     ],
-    "known_classes": [],
-    "novel_classes": [],
+    "known_classes": [
+      1,
+      2,
+      7,
+      8,
+      9,
+      10,
+      12,
+      15,
+      16,
+      18,
+      21,
+      22,
+      23,
+      26,
+      30,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      55,
+      56,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      65,
+      66,
+      68,
+      70,
+      72,
+      73,
+      74,
+      76,
+      78,
+      80,
+      83,
+      85,
+      87,
+      91,
+      92,
+      96,
+      98,
+      99
+    ],
+    "novel_classes": [
+      0,
+      3,
+      4,
+      5,
+      6,
+      11,
+      13,
+      14,
+      17,
+      19,
+      20,
+      24,
+      25,
+      27,
+      28,
+      29,
+      31,
+      35,
+      43,
+      53,
+      54,
+      57,
+      64,
+      67,
+      69,
+      71,
+      75,
+      77,
+      79,
+      81,
+      82,
+      84,
+      86,
+      88,
+      89,
+      90,
+      93,
+      94,
+      95,
+      97
+    ],
     "pred_cluster_summary": {
-      "non_negative": 566,
-      "unique_clusters": 40
+      "non_negative": 585,
+      "unique_clusters": 2
     }
   },
   {
@@ -227,9 +546,19 @@
       "limit_train": 0,
       "limit_val": 0,
       "limit_test": 0,
+      "limit_discovery": 0,
+      "discovery_pool_mode": "unknown",
       "student_ckpt": ".\\runs\\revised_B_standard_kd\\student.pt",
       "num_novel": 40,
-      "cluster_k": "oracle",
+      "cluster_k": "auto",
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalize": false,
+      "cluster_no_whiten": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
       "threshold_percentile": 95.0,
       "mc_samples": 8,
       "score_mode": "normalized_entropy_mahalanobis",
@@ -237,172 +566,481 @@
       "auto_calibrate_score": false
     },
     "metrics": {
-      "auroc": 0.59547875,
-      "fpr95": 0.8631666666666666,
-      "known_ratio": 0.9451,
-      "known_class_correct": 2456,
-      "known_class_wrong": 3246,
-      "known_class_accuracy_after_accept": 0.43072606103121713,
-      "known_class_accuracy_all_known": 0.4093333333333333,
-      "known_correct": 5702,
-      "known_rejected": 298,
-      "unknown_correct_reject": 251,
-      "unknown_false_accept": 3749,
+      "auroc": 0.5922992291666667,
+      "aupr": 0.4535053423443866,
+      "fpr95": 0.8645,
+      "oscr": 0.3216063333333333,
+      "known_ratio": 0.954,
+      "known_class_correct": 2543,
+      "known_class_wrong": 3216,
+      "known_class_accuracy_after_accept": 0.44156971696475084,
+      "known_class_accuracy_all_known": 0.42383333333333334,
+      "known_correct": 5759,
+      "known_rejected": 241,
+      "unknown_correct_reject": 219,
+      "unknown_false_accept": 3781,
       "total": 10000,
-      "known_accept_rate": 0.9503333333333334,
-      "unknown_reject_rate": 0.06275,
-      "cluster_acc": 0.20218579234972678,
-      "cluster_nmi": 0.518994321819013,
-      "cluster_ari": 0.057080682994772994
+      "known_accept_rate": 0.9598333333333333,
+      "unknown_reject_rate": 0.05475,
+      "cluster_acc": 0.08043478260869565,
+      "cluster_nmi": 0.11708254528936957,
+      "cluster_ari": 0.014518695490684592,
+      "cluster_unknown_only_acc": 0.1050228310502283,
+      "cluster_unknown_only_nmi": 0.12447153946388292,
+      "cluster_unknown_only_ari": 0.020412425384259976,
+      "cluster_candidate_count": 460,
+      "cluster_true_unknown_count": 219,
+      "cluster_false_reject_count": 241,
+      "cluster_candidate_purity": 0.47608695652173916,
+      "cluster_true_k": 40,
+      "cluster_k_abs_error": 38,
+      "cluster_k": 2,
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalized": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
+      "cluster_diagnostics": [
+        {
+          "k": 2,
+          "silhouette": 0.09716612100601196,
+          "calinski_harabasz": 50.791494580923136,
+          "davies_bouldin": 2.94922898927508,
+          "stability_nmi": 0.9301066880437785,
+          "internal_score": 0.8243057299913202,
+          "selection_score": 1.0
+        },
+        {
+          "k": 3,
+          "silhouette": 0.08394728600978851,
+          "calinski_harabasz": 39.379922010947176,
+          "davies_bouldin": 3.1973916157879905,
+          "stability_nmi": 0.8879285484610075,
+          "internal_score": 0.4957455169762113,
+          "selection_score": 0.6491657413164812
+        },
+        {
+          "k": 4,
+          "silhouette": 0.08298873156309128,
+          "calinski_harabasz": 33.92769383867719,
+          "davies_bouldin": 2.9816720884523233,
+          "stability_nmi": 0.7588358336026705,
+          "internal_score": 0.5099498114830845,
+          "selection_score": 0.623725243813419
+        },
+        {
+          "k": 5,
+          "silhouette": 0.08276117593050003,
+          "calinski_harabasz": 31.238046829298582,
+          "davies_bouldin": 2.8614763989640677,
+          "stability_nmi": 0.6995790829563717,
+          "internal_score": 0.5243379658561934,
+          "selection_score": 0.6176858075323687
+        },
+        {
+          "k": 6,
+          "silhouette": 0.0753992348909378,
+          "calinski_harabasz": 28.8732456533897,
+          "davies_bouldin": 2.6222389694340493,
+          "stability_nmi": 0.6335181201564021,
+          "internal_score": 0.4819392147545315,
+          "selection_score": 0.4222963403195254
+        },
+        {
+          "k": 7,
+          "silhouette": 0.07771304249763489,
+          "calinski_harabasz": 27.20089340921584,
+          "davies_bouldin": 2.5277331797107445,
+          "stability_nmi": 0.8151816175266084,
+          "internal_score": 0.5293877377552497,
+          "selection_score": 0.48370591057770423
+        },
+        {
+          "k": 8,
+          "silhouette": 0.07429046928882599,
+          "calinski_harabasz": 24.79972861223653,
+          "davies_bouldin": 2.5811290803790397,
+          "stability_nmi": 0.6526278761883635,
+          "internal_score": 0.45139282329318514,
+          "selection_score": 0.3928691662771973
+        },
+        {
+          "k": 9,
+          "silhouette": 0.06732344627380371,
+          "calinski_harabasz": 23.390792325358778,
+          "davies_bouldin": 2.537900624650019,
+          "stability_nmi": 0.6274620930272332,
+          "internal_score": 0.36214866537812573,
+          "selection_score": 0.20796101397749242
+        },
+        {
+          "k": 10,
+          "silhouette": 0.06997634470462799,
+          "calinski_harabasz": 21.68924357463118,
+          "davies_bouldin": 2.5446802516525544,
+          "stability_nmi": 0.6203322503143285,
+          "internal_score": 0.3835680629064582,
+          "selection_score": 0.2783702183140932
+        },
+        {
+          "k": 11,
+          "silhouette": 0.061835743486881256,
+          "calinski_harabasz": 20.875789889597687,
+          "davies_bouldin": 2.6002634222081547,
+          "stability_nmi": 0.6139942834028973,
+          "internal_score": 0.2532776309244466,
+          "selection_score": 0.062314734280721866
+        },
+        {
+          "k": 12,
+          "silhouette": 0.07541074603796005,
+          "calinski_harabasz": 19.887236463602246,
+          "davies_bouldin": 2.4434800980842866,
+          "stability_nmi": 0.6272291967116587,
+          "internal_score": 0.47353634116109894,
+          "selection_score": 0.4226018517154465
+        },
+        {
+          "k": 13,
+          "silhouette": 0.06954022496938705,
+          "calinski_harabasz": 19.130160568546128,
+          "davies_bouldin": 2.4586723036683935,
+          "stability_nmi": 0.6157058546890217,
+          "internal_score": 0.3858539142211388,
+          "selection_score": 0.26679539011976144
+        },
+        {
+          "k": 14,
+          "silhouette": 0.06615468859672546,
+          "calinski_harabasz": 17.95144005625533,
+          "davies_bouldin": 2.487221708628494,
+          "stability_nmi": 0.6577852095179485,
+          "internal_score": 0.3242354233906464,
+          "selection_score": 0.17694162132030555
+        },
+        {
+          "k": 15,
+          "silhouette": 0.0677931010723114,
+          "calinski_harabasz": 17.429544147896827,
+          "davies_bouldin": 2.44685809804039,
+          "stability_nmi": 0.6389298088155109,
+          "internal_score": 0.35445782605884363,
+          "selection_score": 0.22042587893107396
+        },
+        {
+          "k": 16,
+          "silhouette": 0.0638667568564415,
+          "calinski_harabasz": 17.128687581414,
+          "davies_bouldin": 2.465505383332805,
+          "stability_nmi": 0.625743064791105,
+          "internal_score": 0.29469237420835925,
+          "selection_score": 0.11621880904143674
+        },
+        {
+          "k": 17,
+          "silhouette": 0.0683058649301529,
+          "calinski_harabasz": 16.309027165035495,
+          "davies_bouldin": 2.4870579583938817,
+          "stability_nmi": 0.6198412680293742,
+          "internal_score": 0.3414844008823143,
+          "selection_score": 0.23403487911883
+        },
+        {
+          "k": 18,
+          "silhouette": 0.0696183517575264,
+          "calinski_harabasz": 15.724935324868024,
+          "davies_bouldin": 2.3624538978559455,
+          "stability_nmi": 0.6253351232376863,
+          "internal_score": 0.3921755812371585,
+          "selection_score": 0.2688689127719484
+        },
+        {
+          "k": 19,
+          "silhouette": 0.05951260030269623,
+          "calinski_harabasz": 15.269744627642803,
+          "davies_bouldin": 2.4412911752405937,
+          "stability_nmi": 0.6429238469004763,
+          "internal_score": 0.23131938043797473,
+          "selection_score": 0.0006573932917409394
+        },
+        {
+          "k": 20,
+          "silhouette": 0.059487830847501755,
+          "calinski_harabasz": 14.60442069713426,
+          "davies_bouldin": 2.3903390801861195,
+          "stability_nmi": 0.6410763501773389,
+          "internal_score": 0.24165052023304223,
+          "selection_score": 0.0
+        }
+      ]
     },
     "score_summary": {
       "known": {
         "count": 6000,
-        "mean": -0.009984729921445251,
-        "std": 1.5888958777084616,
-        "p25": -1.2838668823242188,
-        "median": 0.10278970003128052,
-        "p75": 1.1596876680850983
+        "mean": -0.039744005465569596,
+        "std": 1.4982250169099467,
+        "p25": -1.205615222454071,
+        "median": 0.06784655153751373,
+        "p75": 1.1015319526195526
       },
       "unknown": {
         "count": 4000,
-        "mean": 0.5067667566782329,
-        "std": 1.3954961781787092,
-        "p25": -0.38917504251003265,
-        "median": 0.6574869751930237,
-        "p75": 1.4724189341068268
+        "mean": 0.43771022602031007,
+        "std": 1.2754063930361965,
+        "p25": -0.37342092394828796,
+        "median": 0.5905592441558838,
+        "p75": 1.3040394186973572
       }
     },
     "class_summary": {
       "known_total": 6000,
       "unknown_total": 4000,
-      "known_rejected": 298,
-      "unknown_false_accept": 3749,
-      "known_class_correct": 0,
-      "known_class_accuracy_after_accept": 0.43072606103121713,
-      "known_class_accuracy_all_known": 0.4093333333333333
+      "known_rejected": 241,
+      "unknown_false_accept": 3781,
+      "known_class_correct": 2543,
+      "known_class_accuracy_after_accept": 0.44156971696475084,
+      "known_class_accuracy_all_known": 0.42383333333333334
+    },
+    "candidate_pool": {
+      "count": 460,
+      "true_unknown_count": 219,
+      "false_reject_count": 241,
+      "purity": 0.47608695652173916,
+      "true_k": 40,
+      "estimated_k": 2,
+      "k_abs_error": 38
+    },
+    "cluster_config": {
+      "method": "kmeans",
+      "feature": "projection",
+      "selection": "silhouette",
+      "normalized": false
     },
     "top_known_reject_classes": [
       {
         "raw_label": 48,
         "name": "motorcycle",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.19
+        "accuracy": 0.31,
+        "reject_rate": 0.27
       },
       {
         "raw_label": 8,
         "name": "bicycle",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.17
+        "accuracy": 0.25,
+        "reject_rate": 0.16
       },
       {
-        "raw_label": 85,
-        "name": "tank",
+        "raw_label": 1,
+        "name": "aquarium_fish",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.12
-      },
-      {
-        "raw_label": 63,
-        "name": "porcupine",
-        "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.41,
         "reject_rate": 0.1
       },
       {
-        "raw_label": 41,
-        "name": "lawn_mower",
+        "raw_label": 61,
+        "name": "plate",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.09
+        "accuracy": 0.45,
+        "reject_rate": 0.08
       },
       {
-        "raw_label": 42,
-        "name": "leopard",
+        "raw_label": 56,
+        "name": "palm_tree",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.09
+        "accuracy": 0.62,
+        "reject_rate": 0.08
       },
       {
-        "raw_label": 7,
-        "name": "beetle",
+        "raw_label": 45,
+        "name": "lobster",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.09
+        "accuracy": 0.08,
+        "reject_rate": 0.08
       },
       {
         "raw_label": 59,
         "name": "pine_tree",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.09
+        "accuracy": 0.17,
+        "reject_rate": 0.07
+      },
+      {
+        "raw_label": 44,
+        "name": "lizard",
+        "count": 100,
+        "accuracy": 0.36,
+        "reject_rate": 0.07
       }
     ],
     "top_novel_false_accept_classes": [
       {
-        "raw_label": 0,
-        "name": "apple",
+        "raw_label": 64,
+        "name": "possum",
+        "count": 100,
+        "false_accept_rate": 1.0,
+        "correct_reject_rate": 0.0
+      },
+      {
+        "raw_label": 43,
+        "name": "lion",
         "count": 100,
         "false_accept_rate": 0.99,
         "correct_reject_rate": 0.01
-      },
-      {
-        "raw_label": 28,
-        "name": "cup",
-        "count": 100,
-        "false_accept_rate": 0.99,
-        "correct_reject_rate": 0.01
-      },
-      {
-        "raw_label": 71,
-        "name": "sea",
-        "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
-      },
-      {
-        "raw_label": 77,
-        "name": "snail",
-        "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
-      },
-      {
-        "raw_label": 14,
-        "name": "butterfly",
-        "count": 100,
-        "false_accept_rate": 0.97,
-        "correct_reject_rate": 0.03
-      },
-      {
-        "raw_label": 93,
-        "name": "turtle",
-        "count": 100,
-        "false_accept_rate": 0.97,
-        "correct_reject_rate": 0.03
-      },
-      {
-        "raw_label": 24,
-        "name": "cockroach",
-        "count": 100,
-        "false_accept_rate": 0.97,
-        "correct_reject_rate": 0.03
       },
       {
         "raw_label": 4,
         "name": "beaver",
         "count": 100,
-        "false_accept_rate": 0.97,
-        "correct_reject_rate": 0.03
+        "false_accept_rate": 0.99,
+        "correct_reject_rate": 0.01
+      },
+      {
+        "raw_label": 35,
+        "name": "girl",
+        "count": 100,
+        "false_accept_rate": 0.99,
+        "correct_reject_rate": 0.01
+      },
+      {
+        "raw_label": 24,
+        "name": "cockroach",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 67,
+        "name": "ray",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 19,
+        "name": "cattle",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 3,
+        "name": "bear",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
       }
     ],
-    "known_classes": [],
-    "novel_classes": [],
+    "known_classes": [
+      1,
+      2,
+      7,
+      8,
+      9,
+      10,
+      12,
+      15,
+      16,
+      18,
+      21,
+      22,
+      23,
+      26,
+      30,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      55,
+      56,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      65,
+      66,
+      68,
+      70,
+      72,
+      73,
+      74,
+      76,
+      78,
+      80,
+      83,
+      85,
+      87,
+      91,
+      92,
+      96,
+      98,
+      99
+    ],
+    "novel_classes": [
+      0,
+      3,
+      4,
+      5,
+      6,
+      11,
+      13,
+      14,
+      17,
+      19,
+      20,
+      24,
+      25,
+      27,
+      28,
+      29,
+      31,
+      35,
+      43,
+      53,
+      54,
+      57,
+      64,
+      67,
+      69,
+      71,
+      75,
+      77,
+      79,
+      81,
+      82,
+      84,
+      86,
+      88,
+      89,
+      90,
+      93,
+      94,
+      95,
+      97
+    ],
     "pred_cluster_summary": {
-      "non_negative": 549,
-      "unique_clusters": 40
+      "non_negative": 460,
+      "unique_clusters": 2
     }
   },
   {
@@ -430,9 +1068,19 @@
       "limit_train": 0,
       "limit_val": 0,
       "limit_test": 0,
+      "limit_discovery": 0,
+      "discovery_pool_mode": "unknown",
       "student_ckpt": ".\\runs\\revised_C_uncertainty_kd\\student.pt",
       "num_novel": 40,
-      "cluster_k": "oracle",
+      "cluster_k": "auto",
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalize": false,
+      "cluster_no_whiten": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
       "threshold_percentile": 95.0,
       "mc_samples": 8,
       "score_mode": "normalized_entropy_mahalanobis",
@@ -440,172 +1088,481 @@
       "auto_calibrate_score": false
     },
     "metrics": {
-      "auroc": 0.5897517708333333,
-      "fpr95": 0.8613333333333333,
-      "known_ratio": 0.9523,
-      "known_class_correct": 2574,
-      "known_class_wrong": 3152,
-      "known_class_accuracy_after_accept": 0.4495284666433811,
-      "known_class_accuracy_all_known": 0.429,
-      "known_correct": 5726,
-      "known_rejected": 274,
-      "unknown_correct_reject": 203,
-      "unknown_false_accept": 3797,
+      "auroc": 0.6085495,
+      "aupr": 0.47323589965501056,
+      "fpr95": 0.8631666666666666,
+      "oscr": 0.344835,
+      "known_ratio": 0.9417,
+      "known_class_correct": 2656,
+      "known_class_wrong": 3049,
+      "known_class_accuracy_after_accept": 0.46555652936021036,
+      "known_class_accuracy_all_known": 0.44266666666666665,
+      "known_correct": 5705,
+      "known_rejected": 295,
+      "unknown_correct_reject": 288,
+      "unknown_false_accept": 3712,
       "total": 10000,
-      "known_accept_rate": 0.9543333333333334,
-      "unknown_reject_rate": 0.05075,
-      "cluster_acc": 0.21174004192872117,
-      "cluster_nmi": 0.5387474665021675,
-      "cluster_ari": 0.06281678234601785
+      "known_accept_rate": 0.9508333333333333,
+      "unknown_reject_rate": 0.072,
+      "cluster_acc": 0.058319039451114926,
+      "cluster_nmi": 0.08524170573103955,
+      "cluster_ari": 0.005545249994160874,
+      "cluster_unknown_only_acc": 0.1076388888888889,
+      "cluster_unknown_only_nmi": 0.08740026392633769,
+      "cluster_unknown_only_ari": 0.010689891967090609,
+      "cluster_candidate_count": 583,
+      "cluster_true_unknown_count": 288,
+      "cluster_false_reject_count": 295,
+      "cluster_candidate_purity": 0.4939965694682676,
+      "cluster_true_k": 40,
+      "cluster_k_abs_error": 38,
+      "cluster_k": 2,
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalized": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
+      "cluster_diagnostics": [
+        {
+          "k": 2,
+          "silhouette": 0.08647269010543823,
+          "calinski_harabasz": 55.28831333143952,
+          "davies_bouldin": 3.2060899972567185,
+          "stability_nmi": 0.9220444291094643,
+          "internal_score": 0.766084353890507,
+          "selection_score": 1.0
+        },
+        {
+          "k": 3,
+          "silhouette": 0.0655457004904747,
+          "calinski_harabasz": 43.971754438460195,
+          "davies_bouldin": 3.245672286251191,
+          "stability_nmi": 0.8633726112603359,
+          "internal_score": 0.41866256507368516,
+          "selection_score": 0.47697094216803104
+        },
+        {
+          "k": 4,
+          "silhouette": 0.05752274766564369,
+          "calinski_harabasz": 37.096336851136265,
+          "davies_bouldin": 2.97282087716452,
+          "stability_nmi": 0.624583511195061,
+          "internal_score": 0.3868562091055653,
+          "selection_score": 0.2764529730664819
+        },
+        {
+          "k": 5,
+          "silhouette": 0.05784960091114044,
+          "calinski_harabasz": 33.57304393613144,
+          "davies_bouldin": 3.023828109174408,
+          "stability_nmi": 0.7416894676183647,
+          "internal_score": 0.3484751957016605,
+          "selection_score": 0.2846220288259041
+        },
+        {
+          "k": 6,
+          "silhouette": 0.058728620409965515,
+          "calinski_harabasz": 30.248162209231342,
+          "davies_bouldin": 2.985381068683266,
+          "stability_nmi": 0.6031636019998464,
+          "internal_score": 0.3545684796906407,
+          "selection_score": 0.3065913970315283
+        },
+        {
+          "k": 7,
+          "silhouette": 0.058181051164865494,
+          "calinski_harabasz": 27.743614277223294,
+          "davies_bouldin": 2.9446941591807585,
+          "stability_nmi": 0.654839669409695,
+          "internal_score": 0.3488059863602672,
+          "selection_score": 0.292905977789114
+        },
+        {
+          "k": 8,
+          "silhouette": 0.05148119106888771,
+          "calinski_harabasz": 25.867468373989976,
+          "davies_bouldin": 2.861660869117566,
+          "stability_nmi": 0.5720475164667447,
+          "internal_score": 0.28724604666303516,
+          "selection_score": 0.12545611624287306
+        },
+        {
+          "k": 9,
+          "silhouette": 0.04885369539260864,
+          "calinski_harabasz": 23.721074736591312,
+          "davies_bouldin": 2.8894325785039388,
+          "stability_nmi": 0.5814878909476185,
+          "internal_score": 0.2298831995534878,
+          "selection_score": 0.05978701555964954
+        },
+        {
+          "k": 10,
+          "silhouette": 0.05341314896941185,
+          "calinski_harabasz": 22.816930510373556,
+          "davies_bouldin": 2.8632454689782376,
+          "stability_nmi": 0.5544334722750085,
+          "internal_score": 0.29192314210671366,
+          "selection_score": 0.17374161449531392
+        },
+        {
+          "k": 11,
+          "silhouette": 0.04945283755660057,
+          "calinski_harabasz": 21.276125167321172,
+          "davies_bouldin": 2.7940426393994,
+          "stability_nmi": 0.5416846932598095,
+          "internal_score": 0.2610470294629769,
+          "selection_score": 0.07476139875120212
+        },
+        {
+          "k": 12,
+          "silhouette": 0.05313090607523918,
+          "calinski_harabasz": 20.158037324392364,
+          "davies_bouldin": 2.815134292039889,
+          "stability_nmi": 0.5711782517150581,
+          "internal_score": 0.2915408660894628,
+          "selection_score": 0.16668750696551687
+        },
+        {
+          "k": 13,
+          "silhouette": 0.05243230238556862,
+          "calinski_harabasz": 19.052279860454874,
+          "davies_bouldin": 2.8033894051495403,
+          "stability_nmi": 0.5376560677523727,
+          "internal_score": 0.28076081542233355,
+          "selection_score": 0.14922727803010108
+        },
+        {
+          "k": 14,
+          "silhouette": 0.04704307019710541,
+          "calinski_harabasz": 18.683990325301938,
+          "davies_bouldin": 2.7700959447309095,
+          "stability_nmi": 0.5622810348079258,
+          "internal_score": 0.2246707076324208,
+          "selection_score": 0.014533990279141139
+        },
+        {
+          "k": 15,
+          "silhouette": 0.04842165485024452,
+          "calinski_harabasz": 17.739417427532107,
+          "davies_bouldin": 2.765065618086022,
+          "stability_nmi": 0.5695898708662372,
+          "internal_score": 0.23811430919658758,
+          "selection_score": 0.048989009636411424
+        },
+        {
+          "k": 16,
+          "silhouette": 0.04715506359934807,
+          "calinski_harabasz": 17.061868405990687,
+          "davies_bouldin": 2.7342406738227627,
+          "stability_nmi": 0.5385686461364867,
+          "internal_score": 0.23063165225137633,
+          "selection_score": 0.017333045696863128
+        },
+        {
+          "k": 17,
+          "silhouette": 0.046461548656225204,
+          "calinski_harabasz": 16.348224587633247,
+          "davies_bouldin": 2.6940210204462773,
+          "stability_nmi": 0.5489999115392531,
+          "internal_score": 0.2339053119571018,
+          "selection_score": 0.0
+        },
+        {
+          "k": 18,
+          "silhouette": 0.05192225053906441,
+          "calinski_harabasz": 16.15799215787979,
+          "davies_bouldin": 2.712480530908899,
+          "stability_nmi": 0.5349811723837026,
+          "internal_score": 0.2934702841620332,
+          "selection_score": 0.13647953257645962
+        },
+        {
+          "k": 19,
+          "silhouette": 0.04873397946357727,
+          "calinski_harabasz": 15.350455795449532,
+          "davies_bouldin": 2.726169310470256,
+          "stability_nmi": 0.5850022961625871,
+          "internal_score": 0.24308304564388264,
+          "selection_score": 0.056794950732323136
+        },
+        {
+          "k": 20,
+          "silhouette": 0.0474858433008194,
+          "calinski_harabasz": 14.769522509037232,
+          "davies_bouldin": 2.63044258439425,
+          "stability_nmi": 0.5466740118905973,
+          "internal_score": 0.2628001177608786,
+          "selection_score": 0.025600235521757133
+        }
+      ]
     },
     "score_summary": {
       "known": {
         "count": 6000,
-        "mean": -0.018111835706125325,
-        "std": 1.5531992047029306,
-        "p25": -1.316286861896515,
-        "median": 0.07254602015018463,
-        "p75": 1.1964498460292816
+        "mean": -0.05897755591198802,
+        "std": 1.623088276541528,
+        "p25": -1.3829949498176575,
+        "median": 0.04198051989078522,
+        "p75": 1.1777771413326263
       },
       "unknown": {
         "count": 4000,
-        "mean": 0.460645902819233,
-        "std": 1.3251678136968383,
-        "p25": -0.43574894964694977,
-        "median": 0.5756666958332062,
-        "p75": 1.4034009277820587
+        "mean": 0.5423139522287529,
+        "std": 1.4511720484573634,
+        "p25": -0.429283507168293,
+        "median": 0.7404248118400574,
+        "p75": 1.573498249053955
       }
     },
     "class_summary": {
       "known_total": 6000,
       "unknown_total": 4000,
-      "known_rejected": 274,
-      "unknown_false_accept": 3797,
-      "known_class_correct": 0,
-      "known_class_accuracy_after_accept": 0.4495284666433811,
-      "known_class_accuracy_all_known": 0.429
+      "known_rejected": 295,
+      "unknown_false_accept": 3712,
+      "known_class_correct": 2656,
+      "known_class_accuracy_after_accept": 0.46555652936021036,
+      "known_class_accuracy_all_known": 0.44266666666666665
+    },
+    "candidate_pool": {
+      "count": 583,
+      "true_unknown_count": 288,
+      "false_reject_count": 295,
+      "purity": 0.4939965694682676,
+      "true_k": 40,
+      "estimated_k": 2,
+      "k_abs_error": 38
+    },
+    "cluster_config": {
+      "method": "kmeans",
+      "feature": "projection",
+      "selection": "silhouette",
+      "normalized": false
     },
     "top_known_reject_classes": [
-      {
-        "raw_label": 48,
-        "name": "motorcycle",
-        "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.23
-      },
       {
         "raw_label": 8,
         "name": "bicycle",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.3,
         "reject_rate": 0.19
       },
       {
-        "raw_label": 44,
-        "name": "lizard",
+        "raw_label": 1,
+        "name": "aquarium_fish",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.12
+        "accuracy": 0.48,
+        "reject_rate": 0.11
       },
       {
-        "raw_label": 33,
-        "name": "forest",
+        "raw_label": 45,
+        "name": "lobster",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.15,
+        "reject_rate": 0.11
+      },
+      {
+        "raw_label": 63,
+        "name": "porcupine",
+        "count": 100,
+        "accuracy": 0.12,
+        "reject_rate": 0.1
+      },
+      {
+        "raw_label": 61,
+        "name": "plate",
+        "count": 100,
+        "accuracy": 0.33,
         "reject_rate": 0.09
       },
       {
-        "raw_label": 78,
-        "name": "snake",
+        "raw_label": 10,
+        "name": "bowl",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.36,
         "reject_rate": 0.09
       },
       {
-        "raw_label": 47,
-        "name": "maple_tree",
+        "raw_label": 85,
+        "name": "tank",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.38,
         "reject_rate": 0.09
       },
       {
-        "raw_label": 96,
-        "name": "willow_tree",
+        "raw_label": 16,
+        "name": "can",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.09
-      },
-      {
-        "raw_label": 49,
-        "name": "mountain",
-        "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.07
+        "accuracy": 0.41,
+        "reject_rate": 0.08
       }
     ],
     "top_novel_false_accept_classes": [
       {
-        "raw_label": 0,
-        "name": "apple",
+        "raw_label": 4,
+        "name": "beaver",
         "count": 100,
         "false_accept_rate": 1.0,
         "correct_reject_rate": 0.0
       },
       {
-        "raw_label": 35,
-        "name": "girl",
+        "raw_label": 64,
+        "name": "possum",
         "count": 100,
         "false_accept_rate": 0.99,
         "correct_reject_rate": 0.01
+      },
+      {
+        "raw_label": 67,
+        "name": "ray",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 86,
+        "name": "telephone",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 75,
+        "name": "skunk",
+        "count": 100,
+        "false_accept_rate": 0.97,
+        "correct_reject_rate": 0.03
+      },
+      {
+        "raw_label": 97,
+        "name": "wolf",
+        "count": 100,
+        "false_accept_rate": 0.97,
+        "correct_reject_rate": 0.03
       },
       {
         "raw_label": 95,
         "name": "whale",
         "count": 100,
-        "false_accept_rate": 0.99,
-        "correct_reject_rate": 0.01
+        "false_accept_rate": 0.97,
+        "correct_reject_rate": 0.03
       },
       {
         "raw_label": 71,
         "name": "sea",
         "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
-      },
-      {
-        "raw_label": 20,
-        "name": "chair",
-        "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
-      },
-      {
-        "raw_label": 82,
-        "name": "sunflower",
-        "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
-      },
-      {
-        "raw_label": 64,
-        "name": "possum",
-        "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
-      },
-      {
-        "raw_label": 94,
-        "name": "wardrobe",
-        "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
+        "false_accept_rate": 0.96,
+        "correct_reject_rate": 0.04
       }
     ],
-    "known_classes": [],
-    "novel_classes": [],
+    "known_classes": [
+      1,
+      2,
+      7,
+      8,
+      9,
+      10,
+      12,
+      15,
+      16,
+      18,
+      21,
+      22,
+      23,
+      26,
+      30,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      55,
+      56,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      65,
+      66,
+      68,
+      70,
+      72,
+      73,
+      74,
+      76,
+      78,
+      80,
+      83,
+      85,
+      87,
+      91,
+      92,
+      96,
+      98,
+      99
+    ],
+    "novel_classes": [
+      0,
+      3,
+      4,
+      5,
+      6,
+      11,
+      13,
+      14,
+      17,
+      19,
+      20,
+      24,
+      25,
+      27,
+      28,
+      29,
+      31,
+      35,
+      43,
+      53,
+      54,
+      57,
+      64,
+      67,
+      69,
+      71,
+      75,
+      77,
+      79,
+      81,
+      82,
+      84,
+      86,
+      88,
+      89,
+      90,
+      93,
+      94,
+      95,
+      97
+    ],
     "pred_cluster_summary": {
-      "non_negative": 477,
-      "unique_clusters": 40
+      "non_negative": 583,
+      "unique_clusters": 2
     }
   },
   {
@@ -633,9 +1590,19 @@
       "limit_train": 0,
       "limit_val": 0,
       "limit_test": 0,
+      "limit_discovery": 0,
+      "discovery_pool_mode": "unknown",
       "student_ckpt": ".\\runs\\revised_D_uncertainty_feature_kd\\student.pt",
       "num_novel": 40,
-      "cluster_k": "oracle",
+      "cluster_k": "auto",
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalize": false,
+      "cluster_no_whiten": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
       "threshold_percentile": 95.0,
       "mc_samples": 8,
       "score_mode": "normalized_entropy_mahalanobis",
@@ -643,172 +1610,481 @@
       "auto_calibrate_score": false
     },
     "metrics": {
-      "auroc": 0.58456475,
-      "fpr95": 0.879,
-      "known_ratio": 0.9437,
-      "known_class_correct": 2468,
-      "known_class_wrong": 3230,
-      "known_class_accuracy_after_accept": 0.4331344331344331,
-      "known_class_accuracy_all_known": 0.41133333333333333,
-      "known_correct": 5698,
-      "known_rejected": 302,
-      "unknown_correct_reject": 261,
-      "unknown_false_accept": 3739,
+      "auroc": 0.6020762916666667,
+      "aupr": 0.47007730533064357,
+      "fpr95": 0.8561666666666666,
+      "oscr": 0.34024879166666666,
+      "known_ratio": 0.9365,
+      "known_class_correct": 2627,
+      "known_class_wrong": 3058,
+      "known_class_accuracy_after_accept": 0.4620932277924362,
+      "known_class_accuracy_all_known": 0.43783333333333335,
+      "known_correct": 5685,
+      "known_rejected": 315,
+      "unknown_correct_reject": 320,
+      "unknown_false_accept": 3680,
       "total": 10000,
-      "known_accept_rate": 0.9496666666666667,
-      "unknown_reject_rate": 0.06525,
-      "cluster_acc": 0.18650088809946713,
-      "cluster_nmi": 0.5083333875582943,
-      "cluster_ari": 0.04833481629177748
+      "known_accept_rate": 0.9475,
+      "unknown_reject_rate": 0.08,
+      "cluster_acc": 0.05511811023622047,
+      "cluster_nmi": 0.08960005863949337,
+      "cluster_ari": 0.008220083928081908,
+      "cluster_unknown_only_acc": 0.109375,
+      "cluster_unknown_only_nmi": 0.10583051073287517,
+      "cluster_unknown_only_ari": 0.020556611088926754,
+      "cluster_candidate_count": 635,
+      "cluster_true_unknown_count": 320,
+      "cluster_false_reject_count": 315,
+      "cluster_candidate_purity": 0.5039370078740157,
+      "cluster_true_k": 40,
+      "cluster_k_abs_error": 38,
+      "cluster_k": 2,
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalized": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
+      "cluster_diagnostics": [
+        {
+          "k": 2,
+          "silhouette": 0.15293850004673004,
+          "calinski_harabasz": 126.75764436991818,
+          "davies_bouldin": 2.192749875179155,
+          "stability_nmi": 0.9907783366848972,
+          "internal_score": 1.0,
+          "selection_score": 1.0
+        },
+        {
+          "k": 3,
+          "silhouette": 0.1335669308900833,
+          "calinski_harabasz": 91.38186730310633,
+          "davies_bouldin": 2.4930771077476983,
+          "stability_nmi": 0.9698074891439342,
+          "internal_score": 0.6526056088655684,
+          "selection_score": 0.767502700537246
+        },
+        {
+          "k": 4,
+          "silhouette": 0.10080472379922867,
+          "calinski_harabasz": 72.96956882165718,
+          "davies_bouldin": 2.7214355497778486,
+          "stability_nmi": 0.7179973446743274,
+          "internal_score": 0.3016257564233689,
+          "selection_score": 0.37429115368381893
+        },
+        {
+          "k": 5,
+          "silhouette": 0.08082395046949387,
+          "calinski_harabasz": 63.10146148128954,
+          "davies_bouldin": 2.49820149366883,
+          "stability_nmi": 0.7390707080460275,
+          "internal_score": 0.2624192992704736,
+          "selection_score": 0.13448219433852934
+        },
+        {
+          "k": 6,
+          "silhouette": 0.08602862060070038,
+          "calinski_harabasz": 57.731053947768025,
+          "davies_bouldin": 2.329109097441123,
+          "stability_nmi": 0.775273631727715,
+          "internal_score": 0.360080520864487,
+          "selection_score": 0.1969485717555996
+        },
+        {
+          "k": 7,
+          "silhouette": 0.08547677099704742,
+          "calinski_harabasz": 52.612296000841894,
+          "davies_bouldin": 2.4908352789310655,
+          "stability_nmi": 0.7878196907479585,
+          "internal_score": 0.26739650858110225,
+          "selection_score": 0.19032528060549264
+        },
+        {
+          "k": 8,
+          "silhouette": 0.07413813471794128,
+          "calinski_harabasz": 48.3401643018064,
+          "davies_bouldin": 2.470565873199976,
+          "stability_nmi": 0.6915059284782996,
+          "internal_score": 0.19817454524429262,
+          "selection_score": 0.054239128102040964
+        },
+        {
+          "k": 9,
+          "silhouette": 0.0846254751086235,
+          "calinski_harabasz": 45.072323197771,
+          "davies_bouldin": 2.372593435170922,
+          "stability_nmi": 0.6510104699283505,
+          "internal_score": 0.2992039306305305,
+          "selection_score": 0.18010803937419073
+        },
+        {
+          "k": 10,
+          "silhouette": 0.07212617993354797,
+          "calinski_harabasz": 42.486609164449106,
+          "davies_bouldin": 2.3973549597627573,
+          "stability_nmi": 0.6315014619718525,
+          "internal_score": 0.20597200419667594,
+          "selection_score": 0.030091675191541416
+        },
+        {
+          "k": 11,
+          "silhouette": 0.07460491359233856,
+          "calinski_harabasz": 39.647633433021966,
+          "davies_bouldin": 2.4284714520572197,
+          "stability_nmi": 0.6361081765100236,
+          "internal_score": 0.19897994814641912,
+          "selection_score": 0.0598414015609463
+        },
+        {
+          "k": 12,
+          "silhouette": 0.0743650272488594,
+          "calinski_harabasz": 37.762035189905546,
+          "davies_bouldin": 2.353343168372453,
+          "stability_nmi": 0.659041489511338,
+          "internal_score": 0.2283155693995409,
+          "selection_score": 0.056962289054060825
+        },
+        {
+          "k": 13,
+          "silhouette": 0.07332505285739899,
+          "calinski_harabasz": 35.72271024717746,
+          "davies_bouldin": 2.3582755693986064,
+          "stability_nmi": 0.6410706425250581,
+          "internal_score": 0.21460419400479608,
+          "selection_score": 0.04448053109373547
+        },
+        {
+          "k": 14,
+          "silhouette": 0.07670722156763077,
+          "calinski_harabasz": 34.25836879363636,
+          "davies_bouldin": 2.3056220247724144,
+          "stability_nmi": 0.6372295346817872,
+          "internal_score": 0.25610945744859637,
+          "selection_score": 0.08507327219269317
+        },
+        {
+          "k": 15,
+          "silhouette": 0.06961895525455475,
+          "calinski_harabasz": 33.1359463961085,
+          "davies_bouldin": 2.3167407909450666,
+          "stability_nmi": 0.6201660195508684,
+          "internal_score": 0.20548712269864897,
+          "selection_score": 0.0
+        },
+        {
+          "k": 16,
+          "silhouette": 0.0734342709183693,
+          "calinski_harabasz": 31.89439488413871,
+          "davies_bouldin": 2.3333185518218,
+          "stability_nmi": 0.6483520724595306,
+          "internal_score": 0.21741555990041161,
+          "selection_score": 0.0457913647191799
+        },
+        {
+          "k": 17,
+          "silhouette": 0.07636129856109619,
+          "calinski_harabasz": 30.509751766621047,
+          "davies_bouldin": 2.267759156258276,
+          "stability_nmi": 0.6400965325764789,
+          "internal_score": 0.2624931257220508,
+          "selection_score": 0.08092150915321167
+        },
+        {
+          "k": 18,
+          "silhouette": 0.07089756429195404,
+          "calinski_harabasz": 29.181822619693317,
+          "davies_bouldin": 2.3462109227976935,
+          "stability_nmi": 0.6388263482884593,
+          "internal_score": 0.1892620116523455,
+          "selection_score": 0.015345847611008177
+        },
+        {
+          "k": 19,
+          "silhouette": 0.07045542448759079,
+          "calinski_harabasz": 28.502514556863336,
+          "davies_bouldin": 2.264445950598155,
+          "stability_nmi": 0.633834048829365,
+          "internal_score": 0.22356147254236222,
+          "selection_score": 0.010039291922710981
+        },
+        {
+          "k": 20,
+          "silhouette": 0.07114630192518234,
+          "calinski_harabasz": 27.532166904442175,
+          "davies_bouldin": 2.289458470006351,
+          "stability_nmi": 0.6522603935774149,
+          "internal_score": 0.21343492925701124,
+          "selection_score": 0.01833119317246954
+        }
+      ]
     },
     "score_summary": {
       "known": {
         "count": 6000,
-        "mean": 0.030306629184943933,
-        "std": 1.5460813529623245,
-        "p25": -1.2078763842582703,
-        "median": 0.15277991443872452,
-        "p75": 1.194234699010849
+        "mean": -0.00017015301374097665,
+        "std": 1.6491521059021281,
+        "p25": -1.3501753509044647,
+        "median": 0.09208648651838303,
+        "p75": 1.2840710282325745
       },
       "unknown": {
         "count": 4000,
-        "mean": 0.4779349372202996,
-        "std": 1.370019773209185,
-        "p25": -0.4276174232363701,
-        "median": 0.6081756353378296,
-        "p75": 1.4299399852752686
+        "mean": 0.5850778556009755,
+        "std": 1.4726943391267462,
+        "p25": -0.44656098634004593,
+        "median": 0.738846629858017,
+        "p75": 1.6469035744667053
       }
     },
     "class_summary": {
       "known_total": 6000,
       "unknown_total": 4000,
-      "known_rejected": 302,
-      "unknown_false_accept": 3739,
-      "known_class_correct": 0,
-      "known_class_accuracy_after_accept": 0.4331344331344331,
-      "known_class_accuracy_all_known": 0.41133333333333333
+      "known_rejected": 315,
+      "unknown_false_accept": 3680,
+      "known_class_correct": 2627,
+      "known_class_accuracy_after_accept": 0.4620932277924362,
+      "known_class_accuracy_all_known": 0.43783333333333335
+    },
+    "candidate_pool": {
+      "count": 635,
+      "true_unknown_count": 320,
+      "false_reject_count": 315,
+      "purity": 0.5039370078740157,
+      "true_k": 40,
+      "estimated_k": 2,
+      "k_abs_error": 38
+    },
+    "cluster_config": {
+      "method": "kmeans",
+      "feature": "projection",
+      "selection": "silhouette",
+      "normalized": false
     },
     "top_known_reject_classes": [
-      {
-        "raw_label": 48,
-        "name": "motorcycle",
-        "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.24
-      },
       {
         "raw_label": 8,
         "name": "bicycle",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.22
+        "accuracy": 0.32,
+        "reject_rate": 0.16
       },
       {
-        "raw_label": 58,
-        "name": "pickup_truck",
+        "raw_label": 48,
+        "name": "motorcycle",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.11
+        "accuracy": 0.59,
+        "reject_rate": 0.14
       },
       {
         "raw_label": 85,
         "name": "tank",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.39,
         "reject_rate": 0.11
       },
       {
-        "raw_label": 1,
-        "name": "aquarium_fish",
+        "raw_label": 7,
+        "name": "beetle",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.47,
         "reject_rate": 0.1
       },
       {
-        "raw_label": 44,
-        "name": "lizard",
+        "raw_label": 47,
+        "name": "maple_tree",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.21,
         "reject_rate": 0.1
       },
       {
-        "raw_label": 49,
-        "name": "mountain",
+        "raw_label": 36,
+        "name": "hamster",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.53,
+        "reject_rate": 0.1
+      },
+      {
+        "raw_label": 15,
+        "name": "camel",
+        "count": 100,
+        "accuracy": 0.42,
         "reject_rate": 0.09
       },
       {
-        "raw_label": 61,
-        "name": "plate",
+        "raw_label": 16,
+        "name": "can",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.58,
         "reject_rate": 0.09
       }
     ],
     "top_novel_false_accept_classes": [
       {
-        "raw_label": 0,
-        "name": "apple",
-        "count": 100,
-        "false_accept_rate": 0.99,
-        "correct_reject_rate": 0.01
-      },
-      {
-        "raw_label": 6,
-        "name": "bee",
-        "count": 100,
-        "false_accept_rate": 0.99,
-        "correct_reject_rate": 0.01
-      },
-      {
-        "raw_label": 28,
-        "name": "cup",
-        "count": 100,
-        "false_accept_rate": 0.99,
-        "correct_reject_rate": 0.01
-      },
-      {
-        "raw_label": 94,
-        "name": "wardrobe",
-        "count": 100,
-        "false_accept_rate": 0.99,
-        "correct_reject_rate": 0.01
-      },
-      {
-        "raw_label": 31,
-        "name": "elephant",
-        "count": 100,
-        "false_accept_rate": 0.99,
-        "correct_reject_rate": 0.01
-      },
-      {
-        "raw_label": 4,
-        "name": "beaver",
+        "raw_label": 71,
+        "name": "sea",
         "count": 100,
         "false_accept_rate": 0.98,
         "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 0,
+        "name": "apple",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 75,
+        "name": "skunk",
+        "count": 100,
+        "false_accept_rate": 0.97,
+        "correct_reject_rate": 0.03
+      },
+      {
+        "raw_label": 93,
+        "name": "turtle",
+        "count": 100,
+        "false_accept_rate": 0.97,
+        "correct_reject_rate": 0.03
+      },
+      {
+        "raw_label": 11,
+        "name": "boy",
+        "count": 100,
+        "false_accept_rate": 0.97,
+        "correct_reject_rate": 0.03
+      },
+      {
+        "raw_label": 27,
+        "name": "crocodile",
+        "count": 100,
+        "false_accept_rate": 0.97,
+        "correct_reject_rate": 0.03
       },
       {
         "raw_label": 35,
         "name": "girl",
         "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
+        "false_accept_rate": 0.97,
+        "correct_reject_rate": 0.03
       },
       {
-        "raw_label": 3,
-        "name": "bear",
+        "raw_label": 67,
+        "name": "ray",
         "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
+        "false_accept_rate": 0.97,
+        "correct_reject_rate": 0.03
       }
     ],
-    "known_classes": [],
-    "novel_classes": [],
+    "known_classes": [
+      1,
+      2,
+      7,
+      8,
+      9,
+      10,
+      12,
+      15,
+      16,
+      18,
+      21,
+      22,
+      23,
+      26,
+      30,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      55,
+      56,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      65,
+      66,
+      68,
+      70,
+      72,
+      73,
+      74,
+      76,
+      78,
+      80,
+      83,
+      85,
+      87,
+      91,
+      92,
+      96,
+      98,
+      99
+    ],
+    "novel_classes": [
+      0,
+      3,
+      4,
+      5,
+      6,
+      11,
+      13,
+      14,
+      17,
+      19,
+      20,
+      24,
+      25,
+      27,
+      28,
+      29,
+      31,
+      35,
+      43,
+      53,
+      54,
+      57,
+      64,
+      67,
+      69,
+      71,
+      75,
+      77,
+      79,
+      81,
+      82,
+      84,
+      86,
+      88,
+      89,
+      90,
+      93,
+      94,
+      95,
+      97
+    ],
     "pred_cluster_summary": {
-      "non_negative": 563,
-      "unique_clusters": 40
+      "non_negative": 635,
+      "unique_clusters": 2
     }
   },
   {
@@ -836,9 +2112,19 @@
       "limit_train": 0,
       "limit_val": 0,
       "limit_test": 0,
+      "limit_discovery": 0,
+      "discovery_pool_mode": "unknown",
       "student_ckpt": ".\\runs\\revised_E_full_representation\\student.pt",
       "num_novel": 40,
-      "cluster_k": "oracle",
+      "cluster_k": "auto",
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalize": false,
+      "cluster_no_whiten": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
       "threshold_percentile": 95.0,
       "mc_samples": 8,
       "score_mode": "normalized_entropy_mahalanobis",
@@ -846,172 +2132,481 @@
       "auto_calibrate_score": false
     },
     "metrics": {
-      "auroc": 0.5976663333333334,
-      "fpr95": 0.8713333333333333,
-      "known_ratio": 0.9372,
-      "known_class_correct": 2625,
-      "known_class_wrong": 3046,
-      "known_class_accuracy_after_accept": 0.46288132604478927,
-      "known_class_accuracy_all_known": 0.4375,
-      "known_correct": 5671,
-      "known_rejected": 329,
-      "unknown_correct_reject": 299,
-      "unknown_false_accept": 3701,
+      "auroc": 0.5934910416666667,
+      "aupr": 0.46154949727728967,
+      "fpr95": 0.8801666666666667,
+      "oscr": 0.33072291666666664,
+      "known_ratio": 0.9358,
+      "known_class_correct": 2594,
+      "known_class_wrong": 3068,
+      "known_class_accuracy_after_accept": 0.45814199929353583,
+      "known_class_accuracy_all_known": 0.43233333333333335,
+      "known_correct": 5662,
+      "known_rejected": 338,
+      "unknown_correct_reject": 304,
+      "unknown_false_accept": 3696,
       "total": 10000,
-      "known_accept_rate": 0.9451666666666667,
-      "unknown_reject_rate": 0.07475,
-      "cluster_acc": 0.1767515923566879,
-      "cluster_nmi": 0.47586849356180877,
-      "cluster_ari": 0.03979657819392924
+      "known_accept_rate": 0.9436666666666667,
+      "unknown_reject_rate": 0.076,
+      "cluster_acc": 0.13551401869158877,
+      "cluster_nmi": 0.3310423590872392,
+      "cluster_ari": 0.04506876008779042,
+      "cluster_unknown_only_acc": 0.18421052631578946,
+      "cluster_unknown_only_nmi": 0.32673670195176197,
+      "cluster_unknown_only_ari": 0.05665172310849425,
+      "cluster_candidate_count": 642,
+      "cluster_true_unknown_count": 304,
+      "cluster_false_reject_count": 338,
+      "cluster_candidate_purity": 0.4735202492211838,
+      "cluster_true_k": 40,
+      "cluster_k_abs_error": 30,
+      "cluster_k": 10,
+      "cluster_method": "kmeans",
+      "cluster_feature": "projection",
+      "cluster_selection": "silhouette",
+      "cluster_pca_dim": 32,
+      "cluster_normalized": false,
+      "cluster_n_init": 10,
+      "cluster_stability_repeats": 5,
+      "cluster_diagnostics": [
+        {
+          "k": 2,
+          "silhouette": 0.12287499010562897,
+          "calinski_harabasz": 83.33545669765434,
+          "davies_bouldin": 2.7000461185015814,
+          "stability_nmi": 0.9540806287651705,
+          "internal_score": 0.7301689838981638,
+          "selection_score": 0.9603379677963276
+        },
+        {
+          "k": 3,
+          "silhouette": 0.09488539397716522,
+          "calinski_harabasz": 69.43955085840274,
+          "davies_bouldin": 2.6477363867626855,
+          "stability_nmi": 0.9763194276377947,
+          "internal_score": 0.19903819085171626,
+          "selection_score": 0.0
+        },
+        {
+          "k": 4,
+          "silhouette": 0.10473255068063736,
+          "calinski_harabasz": 64.02551698965644,
+          "davies_bouldin": 2.4644731209461677,
+          "stability_nmi": 0.8977610172281117,
+          "internal_score": 0.40228589857117947,
+          "selection_score": 0.33786119720275715
+        },
+        {
+          "k": 5,
+          "silhouette": 0.11212901026010513,
+          "calinski_harabasz": 59.38559019932945,
+          "davies_bouldin": 2.264525344802745,
+          "stability_nmi": 0.7578928317120635,
+          "internal_score": 0.5728484108497345,
+          "selection_score": 0.5916376693187779
+        },
+        {
+          "k": 6,
+          "silhouette": 0.11554162204265594,
+          "calinski_harabasz": 57.143407515444466,
+          "davies_bouldin": 2.140754439005068,
+          "stability_nmi": 0.9014952619754656,
+          "internal_score": 0.6615270054213245,
+          "selection_score": 0.708726199252937
+        },
+        {
+          "k": 7,
+          "silhouette": 0.11413400620222092,
+          "calinski_harabasz": 54.46127684980146,
+          "davies_bouldin": 2.0816987766737616,
+          "stability_nmi": 0.8277887702582912,
+          "internal_score": 0.6438256437398736,
+          "selection_score": 0.6604301491978736
+        },
+        {
+          "k": 8,
+          "silhouette": 0.11835838854312897,
+          "calinski_harabasz": 52.76992939013832,
+          "davies_bouldin": 2.021246053883841,
+          "stability_nmi": 0.8342184026216144,
+          "internal_score": 0.728081398697199,
+          "selection_score": 0.805370959842039
+        },
+        {
+          "k": 9,
+          "silhouette": 0.12283211201429367,
+          "calinski_harabasz": 50.38945387648713,
+          "davies_bouldin": 2.0130018383660073,
+          "stability_nmi": 0.8093638973376296,
+          "internal_score": 0.7958607555518099,
+          "selection_score": 0.9588667976191328
+        },
+        {
+          "k": 10,
+          "silhouette": 0.1240309625864029,
+          "calinski_harabasz": 48.16950933733318,
+          "davies_bouldin": 1.9804947250600207,
+          "stability_nmi": 0.811749553393831,
+          "internal_score": 0.8163180117997013,
+          "selection_score": 1.0
+        },
+        {
+          "k": 11,
+          "silhouette": 0.12105432152748108,
+          "calinski_harabasz": 45.208763059472645,
+          "davies_bouldin": 2.0238971647084196,
+          "stability_nmi": 0.766005441822249,
+          "internal_score": 0.7362528421928549,
+          "selection_score": 0.8978698580621148
+        },
+        {
+          "k": 12,
+          "silhouette": 0.11697763204574585,
+          "calinski_harabasz": 43.71850048550285,
+          "davies_bouldin": 1.9992482667937461,
+          "stability_nmi": 0.7422486998296407,
+          "internal_score": 0.6671828547739489,
+          "selection_score": 0.7579964681690412
+        },
+        {
+          "k": 13,
+          "silhouette": 0.11313872784376144,
+          "calinski_harabasz": 41.455701410987054,
+          "davies_bouldin": 1.9978604056910312,
+          "stability_nmi": 0.7120187847025978,
+          "internal_score": 0.590655434836209,
+          "selection_score": 0.6262816180162235
+        },
+        {
+          "k": 14,
+          "silhouette": 0.11967364698648453,
+          "calinski_harabasz": 39.89321816105343,
+          "davies_bouldin": 2.030040081782608,
+          "stability_nmi": 0.7237455910214581,
+          "internal_score": 0.6843747451667967,
+          "selection_score": 0.8504981783564409
+        },
+        {
+          "k": 15,
+          "silhouette": 0.11614421010017395,
+          "calinski_harabasz": 38.341113675246795,
+          "davies_bouldin": 1.9912829535507655,
+          "stability_nmi": 0.6922346205492602,
+          "internal_score": 0.6290809996684866,
+          "selection_score": 0.7294013168187344
+        },
+        {
+          "k": 16,
+          "silhouette": 0.11270708590745926,
+          "calinski_harabasz": 36.640878368701394,
+          "davies_bouldin": 2.035562366823466,
+          "stability_nmi": 0.694462575980284,
+          "internal_score": 0.54702538773431,
+          "selection_score": 0.611471753021331
+        },
+        {
+          "k": 17,
+          "silhouette": 0.1117088794708252,
+          "calinski_harabasz": 35.61917367058391,
+          "davies_bouldin": 2.0091792788265503,
+          "stability_nmi": 0.6765132131635236,
+          "internal_score": 0.5336493815516326,
+          "selection_score": 0.5772227579161993
+        },
+        {
+          "k": 18,
+          "silhouette": 0.11649937182664871,
+          "calinski_harabasz": 34.45915952966508,
+          "davies_bouldin": 2.010322470138899,
+          "stability_nmi": 0.6799355241678523,
+          "internal_score": 0.6097447901772558,
+          "selection_score": 0.741587105033626
+        },
+        {
+          "k": 19,
+          "silhouette": 0.10493887215852737,
+          "calinski_harabasz": 33.4362807602252,
+          "davies_bouldin": 2.0065899680591337,
+          "stability_nmi": 0.6816627050094151,
+          "internal_score": 0.40763078093040067,
+          "selection_score": 0.3449401971240221
+        },
+        {
+          "k": 20,
+          "silhouette": 0.11473487317562103,
+          "calinski_harabasz": 32.516088861556526,
+          "davies_bouldin": 1.9483611580206428,
+          "stability_nmi": 0.6858334765188443,
+          "internal_score": 0.5905231077249344,
+          "selection_score": 0.6810462154498688
+        }
+      ]
     },
     "score_summary": {
       "known": {
         "count": 6000,
-        "mean": -0.008331046724071105,
-        "std": 1.6154451115392254,
-        "p25": -1.3666050732135773,
-        "median": 0.07190094888210297,
-        "p75": 1.244560420513153
+        "mean": -0.005648263581718008,
+        "std": 1.5776459287241158,
+        "p25": -1.2934074103832245,
+        "median": 0.0047522783279418945,
+        "p75": 1.1726449728012085
       },
       "unknown": {
         "count": 4000,
-        "mean": 0.5374896921501495,
-        "std": 1.4553769373361043,
-        "p25": -0.46649690717458725,
-        "median": 0.6995784938335419,
-        "p75": 1.5827294290065765
+        "mean": 0.4958943545641378,
+        "std": 1.4499375709844557,
+        "p25": -0.5004435777664185,
+        "median": 0.5712699890136719,
+        "p75": 1.505600094795227
       }
     },
     "class_summary": {
       "known_total": 6000,
       "unknown_total": 4000,
-      "known_rejected": 329,
-      "unknown_false_accept": 3701,
-      "known_class_correct": 0,
-      "known_class_accuracy_after_accept": 0.46288132604478927,
-      "known_class_accuracy_all_known": 0.4375
+      "known_rejected": 338,
+      "unknown_false_accept": 3696,
+      "known_class_correct": 2594,
+      "known_class_accuracy_after_accept": 0.45814199929353583,
+      "known_class_accuracy_all_known": 0.43233333333333335
+    },
+    "candidate_pool": {
+      "count": 642,
+      "true_unknown_count": 304,
+      "false_reject_count": 338,
+      "purity": 0.4735202492211838,
+      "true_k": 40,
+      "estimated_k": 10,
+      "k_abs_error": 30
+    },
+    "cluster_config": {
+      "method": "kmeans",
+      "feature": "projection",
+      "selection": "silhouette",
+      "normalized": false
     },
     "top_known_reject_classes": [
       {
         "raw_label": 8,
         "name": "bicycle",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.23
+        "accuracy": 0.28,
+        "reject_rate": 0.2
       },
       {
-        "raw_label": 45,
-        "name": "lobster",
+        "raw_label": 48,
+        "name": "motorcycle",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.4,
+        "reject_rate": 0.2
+      },
+      {
+        "raw_label": 1,
+        "name": "aquarium_fish",
+        "count": 100,
+        "accuracy": 0.53,
         "reject_rate": 0.13
       },
       {
-        "raw_label": 63,
-        "name": "porcupine",
+        "raw_label": 61,
+        "name": "plate",
         "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.12
-      },
-      {
-        "raw_label": 44,
-        "name": "lizard",
-        "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.48,
         "reject_rate": 0.12
       },
       {
         "raw_label": 58,
         "name": "pickup_truck",
         "count": 100,
-        "accuracy": 0.0,
+        "accuracy": 0.68,
+        "reject_rate": 0.12
+      },
+      {
+        "raw_label": 47,
+        "name": "maple_tree",
+        "count": 100,
+        "accuracy": 0.26,
+        "reject_rate": 0.12
+      },
+      {
+        "raw_label": 96,
+        "name": "willow_tree",
+        "count": 100,
+        "accuracy": 0.3,
+        "reject_rate": 0.12
+      },
+      {
+        "raw_label": 49,
+        "name": "mountain",
+        "count": 100,
+        "accuracy": 0.53,
         "reject_rate": 0.1
-      },
-      {
-        "raw_label": 7,
-        "name": "beetle",
-        "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.1
-      },
-      {
-        "raw_label": 16,
-        "name": "can",
-        "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.09
-      },
-      {
-        "raw_label": 56,
-        "name": "palm_tree",
-        "count": 100,
-        "accuracy": 0.0,
-        "reject_rate": 0.09
       }
     ],
     "top_novel_false_accept_classes": [
       {
-        "raw_label": 71,
-        "name": "sea",
+        "raw_label": 97,
+        "name": "wolf",
         "count": 100,
         "false_accept_rate": 1.0,
         "correct_reject_rate": 0.0
       },
       {
-        "raw_label": 53,
-        "name": "orange",
-        "count": 100,
-        "false_accept_rate": 0.99,
-        "correct_reject_rate": 0.01
-      },
-      {
-        "raw_label": 4,
-        "name": "beaver",
-        "count": 100,
-        "false_accept_rate": 0.99,
-        "correct_reject_rate": 0.01
-      },
-      {
         "raw_label": 0,
         "name": "apple",
         "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
+        "false_accept_rate": 0.99,
+        "correct_reject_rate": 0.01
       },
       {
-        "raw_label": 35,
-        "name": "girl",
+        "raw_label": 95,
+        "name": "whale",
         "count": 100,
-        "false_accept_rate": 0.98,
-        "correct_reject_rate": 0.02
+        "false_accept_rate": 0.99,
+        "correct_reject_rate": 0.01
+      },
+      {
+        "raw_label": 64,
+        "name": "possum",
+        "count": 100,
+        "false_accept_rate": 0.99,
+        "correct_reject_rate": 0.01
       },
       {
         "raw_label": 28,
         "name": "cup",
         "count": 100,
+        "false_accept_rate": 0.99,
+        "correct_reject_rate": 0.01
+      },
+      {
+        "raw_label": 93,
+        "name": "turtle",
+        "count": 100,
         "false_accept_rate": 0.98,
         "correct_reject_rate": 0.02
       },
       {
-        "raw_label": 57,
-        "name": "pear",
+        "raw_label": 11,
+        "name": "boy",
         "count": 100,
-        "false_accept_rate": 0.97,
-        "correct_reject_rate": 0.03
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
       },
       {
-        "raw_label": 82,
-        "name": "sunflower",
+        "raw_label": 4,
+        "name": "beaver",
         "count": 100,
-        "false_accept_rate": 0.97,
-        "correct_reject_rate": 0.03
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
       }
     ],
-    "known_classes": [],
-    "novel_classes": [],
+    "known_classes": [
+      1,
+      2,
+      7,
+      8,
+      9,
+      10,
+      12,
+      15,
+      16,
+      18,
+      21,
+      22,
+      23,
+      26,
+      30,
+      32,
+      33,
+      34,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      55,
+      56,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      65,
+      66,
+      68,
+      70,
+      72,
+      73,
+      74,
+      76,
+      78,
+      80,
+      83,
+      85,
+      87,
+      91,
+      92,
+      96,
+      98,
+      99
+    ],
+    "novel_classes": [
+      0,
+      3,
+      4,
+      5,
+      6,
+      11,
+      13,
+      14,
+      17,
+      19,
+      20,
+      24,
+      25,
+      27,
+      28,
+      29,
+      31,
+      35,
+      43,
+      53,
+      54,
+      57,
+      64,
+      67,
+      69,
+      71,
+      75,
+      77,
+      79,
+      81,
+      82,
+      84,
+      86,
+      88,
+      89,
+      90,
+      93,
+      94,
+      95,
+      97
+    ],
     "pred_cluster_summary": {
-      "non_negative": 628,
-      "unique_clusters": 40
+      "non_negative": 642,
+      "unique_clusters": 10
     }
   }
 ]

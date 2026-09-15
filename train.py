@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import copy
+import os
 from pathlib import Path
 
 import numpy as np
 import torch
+
+# Keep downloaded torchvision weights inside the project by default.
+os.environ.setdefault("TORCH_HOME", str(Path.cwd() / ".torch_cache"))
 
 from novel_discovery.data import TwoViewDataset, build_data_bundle
 from novel_discovery.metrics import compute_auroc
@@ -52,6 +56,7 @@ def parse_args():
         p.add_argument("--limit-val", type=int, default=0)
         p.add_argument("--limit-test", type=int, default=0)
         p.add_argument("--limit-discovery", type=int, default=0)
+        p.add_argument("--discovery-pool-mode", choices=["unknown", "mixed"], default="unknown")
 
     p = sub.add_parser("train_teacher")
     add_common(p)
@@ -84,6 +89,7 @@ def parse_args():
     p.add_argument("--pseudo-feature-noise", type=float, default=0.05)
     p.add_argument("--uncertainty-target-mode", choices=["confidence", "classification_error", "margin"], default="confidence")
     p.add_argument("--temperature", type=float, default=2.0)
+    p.add_argument("--uncertainty-weight-mode", choices=["raw", "mean_normalized"], default="raw")
     p.add_argument("--teacher-ckpt", default="./runs/teacher.pt")
     p.add_argument("--student-ckpt", default="./runs/student.pt")
     p.add_argument(
@@ -92,13 +98,43 @@ def parse_args():
         help="Use unlabeled novel-class training images for two-view consistency learning.",
     )
     p.add_argument("--alpha-discovery", type=float, default=0.0)
+    p.add_argument("--alpha-discovery-unknown", type=float, default=0.0)
     p.add_argument("--discovery-batch-size", type=int, default=0)
+    p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
+    p.add_argument("--discovery-temperature", type=float, default=0.2)
 
     p = sub.add_parser("discover")
     add_common(p)
     p.add_argument("--student-ckpt", default="./runs/student.pt")
     p.add_argument("--num-novel", type=int, default=40)
     p.add_argument("--cluster-k", choices=["oracle", "auto"], default="auto")
+    p.add_argument(
+        "--cluster-method",
+        choices=["kmeans", "agglomerative", "spectral"],
+        default="kmeans",
+        help="Clustering algorithm for the rejected/unknown candidate pool.",
+    )
+    p.add_argument(
+        "--cluster-feature",
+        choices=["projection", "projection_pca", "feature", "feature_pca"],
+        default="projection",
+        help="Representation used for clustering; *_pca applies PCA and whitening.",
+    )
+    p.add_argument(
+        "--cluster-selection",
+        choices=["silhouette", "composite", "stability"],
+        default="silhouette",
+        help="K selection criterion: silhouette, composite internal metrics, or stability.",
+    )
+    p.add_argument("--cluster-pca-dim", type=int, default=32)
+    p.add_argument(
+        "--cluster-normalize",
+        action="store_true",
+        help="L2-normalize clustering features (default remains raw features for compatibility).",
+    )
+    p.add_argument("--cluster-no-whiten", action="store_true")
+    p.add_argument("--cluster-n-init", type=int, default=10)
+    p.add_argument("--cluster-stability-repeats", type=int, default=5)
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument("--mc-samples", type=int, default=8)
     p.add_argument(
@@ -197,8 +233,23 @@ def _select_score_mode(outputs_known, outputs_open, prototypes, score_modes):
     unknown_mask = np.asarray(outputs_open["is_known"], dtype=bool) == 0
     results = []
     for score_mode in score_modes:
-        known_scores, _ = compute_open_score(outputs_known, prototypes=prototypes, score_mode=score_mode)
-        open_scores, _ = compute_open_score(outputs_open, prototypes=prototypes, score_mode=score_mode)
+        try:
+            known_scores, _ = compute_open_score(
+                outputs_known, prototypes=prototypes, score_mode=score_mode
+            )
+            open_scores, _ = compute_open_score(
+                outputs_open, prototypes=prototypes, score_mode=score_mode
+            )
+        except ValueError as exc:
+            results.append(
+                {
+                    "score_mode": score_mode,
+                    "auroc": float("nan"),
+                    "status": "skipped",
+                    "reason": str(exc),
+                }
+            )
+            continue
         unknown_scores = open_scores[unknown_mask]
         labels = np.concatenate([np.zeros_like(known_scores), np.ones_like(unknown_scores)])
         scores = np.concatenate([known_scores, unknown_scores])
@@ -207,11 +258,15 @@ def _select_score_mode(outputs_known, outputs_open, prototypes, score_modes):
             {
                 "score_mode": score_mode,
                 "auroc": auroc,
+                "status": "ok",
             }
         )
 
-    results.sort(key=lambda x: x["auroc"], reverse=True)
-    return results[0], results
+    valid = [item for item in results if item["status"] == "ok" and np.isfinite(item["auroc"])]
+    if not valid:
+        raise ValueError("No usable score mode was available for automatic calibration.")
+    valid.sort(key=lambda x: x["auroc"], reverse=True)
+    return valid[0], results
 
 
 def fit_teacher(args):
@@ -228,6 +283,7 @@ def fit_teacher(args):
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
@@ -302,6 +358,7 @@ def fit_student(args):
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
@@ -309,7 +366,13 @@ def fit_student(args):
     train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
     discovery_loader = None
+    if args.alpha_discovery_unknown > 0.0 and not args.discovery_pool:
+        raise ValueError("alpha-discovery-unknown requires --discovery-pool.")
     if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
+        if args.discovery_pool_mode == "mixed" and args.alpha_discovery_unknown > 0.0:
+            raise ValueError(
+                "alpha-discovery-unknown requires --discovery-pool-mode unknown."
+            )
         discovery_loader = build_loader(
             TwoViewDataset(bundle.discovery_pool),
             args.discovery_batch_size or args.batch_size,
@@ -356,8 +419,12 @@ def fit_student(args):
             uncertainty_target_mode=args.uncertainty_target_mode,
             temperature=args.temperature,
             kd_mode=args.kd_mode,
+            uncertainty_weight_mode=args.uncertainty_weight_mode,
             discovery_loader=discovery_loader,
             alpha_discovery=args.alpha_discovery,
+            alpha_discovery_unknown=args.alpha_discovery_unknown,
+            discovery_loss_mode=args.discovery_loss,
+            discovery_temperature=args.discovery_temperature,
         )
         val_stats = evaluate_classification(student, val_loader, device)
         print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
@@ -402,6 +469,7 @@ def discover(args):
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
         open_val_ratio=args.open_val_ratio,
     )
     device = resolve_device(args.device)
@@ -435,7 +503,12 @@ def discover(args):
             for key, value in gaussian_stats.items()
         }
     selected_score_mode = args.score_mode
-    score_normalization = fit_score_normalization(outputs_val, proto, gaussian_stats)
+    needs_normalization = selected_score_mode.startswith("normalized_")
+    score_normalization = (
+        fit_score_normalization(outputs_val, proto, gaussian_stats)
+        if needs_normalization or args.score_mode == "auto" or args.auto_calibrate_score
+        else {}
+    )
     calibration_report = None
     threshold = None
     if (args.score_mode == "auto" or args.auto_calibrate_score) and outputs_open_val is not None:
@@ -489,6 +562,14 @@ def discover(args):
         normalization=score_normalization,
         gaussian_stats=gaussian_stats,
         cluster_k=args.cluster_k,
+        cluster_method=args.cluster_method,
+        cluster_feature=args.cluster_feature,
+        cluster_selection=args.cluster_selection,
+        cluster_pca_dim=args.cluster_pca_dim,
+        cluster_normalize=args.cluster_normalize,
+        cluster_whiten=not args.cluster_no_whiten,
+        cluster_n_init=args.cluster_n_init,
+        cluster_stability_repeats=args.cluster_stability_repeats,
     )
     run_dir = ensure_dir(args.work_dir)
     save_json(run_dir / "config.json", vars(args))
@@ -519,6 +600,10 @@ def discover(args):
         "raw_labels": detail["raw_labels"].tolist(),
         "pred_cluster": None if detail["pred_cluster"] is None else detail["pred_cluster"].tolist(),
         "cluster_k": detail.get("cluster_k"),
+        "cluster_method": detail.get("cluster_method"),
+        "cluster_feature": detail.get("cluster_feature"),
+        "cluster_selection": detail.get("cluster_selection"),
+        "cluster_diagnostics": detail.get("cluster_diagnostics", []),
     })
     np.save(run_dir / "open_scores.npy", scores_test)
     print(result)
@@ -551,6 +636,7 @@ def inspect_data(args):
         limit_val=args.limit_val or None,
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
     )
     print("dataset:", args.dataset)
     print("known classes:", len(bundle.known_classes))

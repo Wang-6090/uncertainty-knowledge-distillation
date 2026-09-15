@@ -251,8 +251,12 @@ def build_data_bundle(
     limit_val: int | None = None,
     limit_test: int | None = None,
     limit_discovery: int | None = None,
+    discovery_pool_mode: str = "unknown",
     open_val_ratio: float = 0.0,
 ) -> DataBundle:
+    if discovery_pool_mode not in {"unknown", "mixed"}:
+        raise ValueError(f"Unsupported discovery pool mode: {discovery_pool_mode}")
+
     if dataset_name.lower() == "cifar100":
         known_classes, novel_classes = make_class_split(list(range(100)), num_known, seed, split_path)
         train_tf = build_transforms(image_size, train=True)
@@ -269,6 +273,7 @@ def build_data_bundle(
         open_val, test_open = split_dataset(test_open, open_val_ratio, seed)
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
+        discovery_pool = unknown_subset(pool_full) if discovery_pool_mode == "unknown" else pool_full
         return DataBundle(
             train=train_set,
             val=val_set,
@@ -276,7 +281,7 @@ def build_data_bundle(
             test=test_open,
             known_classes=known_classes,
             novel_classes=novel_classes,
-            discovery_pool=limit_dataset(unknown_subset(pool_full), limit_discovery, seed),
+            discovery_pool=limit_dataset(discovery_pool, limit_discovery, seed),
         )
 
     if dataset_name.lower() == "imagefolder":
@@ -296,6 +301,7 @@ def build_data_bundle(
         open_val, test_open = split_dataset(test_open, open_val_ratio, seed)
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
+        discovery_pool = unknown_subset(pool_full) if discovery_pool_mode == "unknown" else pool_full
         return DataBundle(
             train=train_set,
             val=val_set,
@@ -303,7 +309,7 @@ def build_data_bundle(
             test=test_open,
             known_classes=known_classes,
             novel_classes=novel_classes,
-            discovery_pool=limit_dataset(unknown_subset(pool_full), limit_discovery, seed),
+            discovery_pool=limit_dataset(discovery_pool, limit_discovery, seed),
         )
 
     if dataset_name.lower() in {"toy", "fake"}:
@@ -320,6 +326,7 @@ def build_data_bundle(
         open_val, test_open = split_dataset(test_open, open_val_ratio, seed)
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
+        discovery_pool = unknown_subset(pool_full) if discovery_pool_mode == "unknown" else pool_full
         return DataBundle(
             train=train_set,
             val=val_set,
@@ -327,7 +334,7 @@ def build_data_bundle(
             test=test_open,
             known_classes=known_classes,
             novel_classes=novel_classes,
-            discovery_pool=limit_dataset(unknown_subset(pool_full), limit_discovery, seed),
+            discovery_pool=limit_dataset(discovery_pool, limit_discovery, seed),
         )
 
     raise ValueError(f"Unsupported dataset: {dataset_name}")

@@ -66,7 +66,8 @@ def compute_oscr(
     fpr = np.cumsum(accepted_unknown) / unknown_count
     fpr = np.concatenate(([0.0], fpr))
     ccr = np.concatenate(([0.0], ccr))
-    return float(np.trapz(ccr, fpr))
+    integrate = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+    return float(integrate(ccr, fpr))
 
 
 def clustering_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
