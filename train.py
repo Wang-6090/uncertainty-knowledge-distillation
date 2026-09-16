@@ -23,6 +23,9 @@ from novel_discovery.pipeline import (
     evaluate_classification,
     extract_outputs,
     compute_open_score,
+    calibration_diagnostics,
+    fit_temperature,
+    uncertainty_error_diagnostics,
     run_discovery,
     train_one_epoch_student,
     train_one_epoch_teacher,
@@ -35,8 +38,8 @@ def parse_args():
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_common(p):
-        p.add_argument("--dataset", default="cifar100", choices=["cifar100", "imagefolder", "toy", "fake"])
-        p.add_argument("--data-root", default="./data")
+        p.add_argument("--dataset", default="imagefolder", choices=["cifar100", "imagefolder", "toy", "fake"])
+        p.add_argument("--data-root", default="./CIFAR-100-dataset-main")
         p.add_argument("--split-path", default="./splits.json")
         p.add_argument("--num-known", type=int, default=60)
         p.add_argument("--seed", type=int, default=42)
@@ -158,8 +161,6 @@ def parse_args():
             "normalized_entropy_mahalanobis",
         ],
     )
-    p.add_argument("--open-val-ratio", type=float, default=0.0)
-    p.add_argument("--auto-calibrate-score", action="store_true")
 
     p = sub.add_parser("inspect_data")
     add_common(p)
@@ -458,168 +459,88 @@ def fit_student(args):
 def discover(args):
     set_seed(args.seed)
     bundle = build_data_bundle(
-        args.dataset,
-        args.data_root,
-        args.num_known,
-        args.seed,
-        args.image_size,
-        download=args.download,
-        split_path=args.split_path,
-        limit_train=args.limit_train or None,
-        limit_val=args.limit_val or None,
-        limit_test=args.limit_test or None,
-        limit_discovery=args.limit_discovery or None,
-        discovery_pool_mode=args.discovery_pool_mode,
-        open_val_ratio=args.open_val_ratio,
+        args.dataset, args.data_root, args.num_known, args.seed, args.image_size,
+        download=args.download, split_path=args.split_path,
+        limit_train=args.limit_train or None, limit_val=args.limit_val or None,
+        limit_test=args.limit_test or None, limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode, open_val_ratio=args.open_val_ratio,
     )
     device = resolve_device(args.device)
     print(f"device: {device}")
     test_loader = build_loader(bundle.test, args.batch_size, False, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
-    model = build_model(
-        len(bundle.known_classes),
-        backbone=args.student_backbone or args.backbone,
-        proj_dim=args.proj_dim,
-        dropout=args.dropout,
-        pretrained=args.pretrained,
-    ).to(device)
+    model = build_model(len(bundle.known_classes), backbone=args.student_backbone or args.backbone,
+                        proj_dim=args.proj_dim, dropout=args.dropout, pretrained=args.pretrained).to(device)
+    parameter_count = int(sum(parameter.numel() for parameter in model.parameters()))
     ckpt_path = resolve_input_checkpoint(args.student_ckpt, args.work_dir, "student.pt")
     ckpt = load_checkpoint(model, ckpt_path, device)
     outputs_test = extract_outputs(model, test_loader, device, mc_samples=args.mc_samples)
     outputs_val = extract_outputs(model, val_loader, device, mc_samples=args.mc_samples)
     open_val_loader = build_loader(bundle.open_val, args.batch_size, False, args.num_workers) if bundle.open_val is not None else None
-    outputs_open_val = (
-        extract_outputs(model, open_val_loader, device, mc_samples=args.mc_samples)
-        if open_val_loader is not None
-        else None
-    )
+    outputs_open_val = extract_outputs(model, open_val_loader, device, mc_samples=args.mc_samples) if open_val_loader is not None else None
+    temperature = fit_temperature(outputs_val) if args.temperature_calibration else 1.0
+    if args.temperature_calibration:
+        outputs_test = apply_logit_temperature(outputs_test, temperature)
+        outputs_val = apply_logit_temperature(outputs_val, temperature)
+        if outputs_open_val is not None:
+            outputs_open_val = apply_logit_temperature(outputs_open_val, temperature)
     proto = ckpt.get("prototypes")
-    if proto is not None and torch.is_tensor(proto):
+    if torch.is_tensor(proto):
         proto = proto.detach().cpu().numpy()
     gaussian_stats = ckpt.get("gaussian_stats")
     if gaussian_stats is not None:
-        gaussian_stats = {
-            key: value.detach().cpu().numpy() if torch.is_tensor(value) else np.asarray(value)
-            for key, value in gaussian_stats.items()
-        }
+        gaussian_stats = {key: value.detach().cpu().numpy() if torch.is_tensor(value) else np.asarray(value) for key, value in gaussian_stats.items()}
+    score_normalization = fit_score_normalization(outputs_val, proto, gaussian_stats)
     selected_score_mode = args.score_mode
-    needs_normalization = selected_score_mode.startswith("normalized_")
-    score_normalization = (
-        fit_score_normalization(outputs_val, proto, gaussian_stats)
-        if needs_normalization or args.score_mode == "auto" or args.auto_calibrate_score
-        else {}
-    )
-    calibration_report = None
-    threshold = None
+    calibration_report = {
+        "parameter_count": parameter_count,
+        "temperature": float(temperature),
+        "temperature_enabled": bool(args.temperature_calibration),
+        "reliability": calibration_diagnostics(outputs_val["probs"], outputs_val["labels"], args.calibration_bins),
+        "uncertainty_error": uncertainty_error_diagnostics(outputs_val),
+    }
     if (args.score_mode == "auto" or args.auto_calibrate_score) and outputs_open_val is not None:
-        candidate_modes = [
-            "full",
-            "entropy_proto",
-            "entropy_only",
-            "proto_only",
-            "max_softmax",
-            "energy",
-        ]
-        selected, all_candidates = _select_score_mode(outputs_val, outputs_open_val, proto, candidate_modes)
+        candidate_modes = ["max_softmax", "energy", "entropy_only", "proto_only", "entropy_proto", "mahalanobis", "entropy_mahalanobis", "normalized_entropy_mahalanobis"]
+        selected, candidates = _select_score_mode(outputs_val, outputs_open_val, proto, candidate_modes)
         selected_score_mode = selected["score_mode"]
-        scores_val, _ = compute_open_score(
-            outputs_val,
-            prototypes=proto,
-            score_mode=selected_score_mode,
-            normalization=score_normalization,
-            gaussian_stats=gaussian_stats,
-        )
-        threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
-        calibration_report = {
-            "selected": selected,
-            "candidates": all_candidates,
-            "open_val_size": int(len(outputs_open_val["labels"])),
-            "open_val_unknown_size": int(np.sum(np.asarray(outputs_open_val["is_known"], dtype=bool) == 0)),
-            "threshold_policy": {
-                "type": "known_val_percentile",
-                "percentile": args.threshold_percentile,
-            },
-            "known_val_threshold": float(threshold),
-        }
-    else:
-        if selected_score_mode == "auto":
-            selected_score_mode = "full"
-        scores_val, _ = compute_open_score(
-            outputs_val,
-            prototypes=proto,
-            score_mode=selected_score_mode,
-            normalization=score_normalization,
-            gaussian_stats=gaussian_stats,
-        )
-        threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
-
-    result, scores_test, pred_known, detail = run_discovery(
-        outputs_test,
-        threshold,
-        args.num_novel,
-        prototypes=proto,
-        score_mode=selected_score_mode,
-        normalization=score_normalization,
-        gaussian_stats=gaussian_stats,
-        cluster_k=args.cluster_k,
-        cluster_method=args.cluster_method,
-        cluster_feature=args.cluster_feature,
-        cluster_selection=args.cluster_selection,
-        cluster_pca_dim=args.cluster_pca_dim,
-        cluster_normalize=args.cluster_normalize,
-        cluster_whiten=not args.cluster_no_whiten,
-        cluster_n_init=args.cluster_n_init,
-        cluster_stability_repeats=args.cluster_stability_repeats,
+        calibration_report["selected"] = selected
+        calibration_report["candidates"] = candidates
+    if selected_score_mode == "auto":
+        selected_score_mode = "entropy_proto"
+    scores_val, _ = compute_open_score(outputs_val, prototypes=proto, score_mode=selected_score_mode, normalization=score_normalization, gaussian_stats=gaussian_stats)
+    threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
+    calibration_report["threshold_policy"] = {"type": "known_val_percentile", "percentile": args.threshold_percentile}
+    calibration_report["known_val_threshold"] = float(threshold)
+    result, scores_test, _, detail = run_discovery(
+        outputs_test, threshold, args.num_novel, prototypes=proto, score_mode=selected_score_mode,
+        normalization=score_normalization, gaussian_stats=gaussian_stats, cluster_k=args.cluster_k,
+        cluster_method=args.cluster_method, cluster_feature=args.cluster_feature,
+        cluster_selection=args.cluster_selection, cluster_pca_dim=args.cluster_pca_dim,
+        cluster_normalize=args.cluster_normalize, cluster_whiten=not args.cluster_no_whiten,
+        cluster_n_init=args.cluster_n_init, cluster_stability_repeats=args.cluster_stability_repeats,
     )
     run_dir = ensure_dir(args.work_dir)
     save_json(run_dir / "config.json", vars(args))
-    torch.save(
-        {
-            "known_classes": list(bundle.known_classes),
-            "novel_classes": list(bundle.novel_classes),
-        },
-        run_dir / "split.pt",
-    )
+    torch.save({"known_classes": list(bundle.known_classes), "novel_classes": list(bundle.novel_classes)}, run_dir / "split.pt")
     save_json(run_dir / "discovery_report.json", result)
-    if calibration_report is not None:
-        save_json(run_dir / "calibration_report.json", calibration_report)
+    save_json(run_dir / "calibration_report.json", calibration_report)
     save_json(run_dir / "discovery_detail.json", {
-        "score_mode": detail["score_mode"],
-        "score": detail["score"].tolist(),
-        "entropy": detail["entropy"].tolist(),
-        "epistemic": detail["epistemic"].tolist(),
-        "aleatoric": detail["aleatoric"].tolist(),
-        "expected_entropy": detail["expected_entropy"].tolist(),
-        "head_uncertainty": detail["head_uncertainty"].tolist(),
-        "proto_dist": detail["proto_dist"].tolist(),
-        "mahalanobis": detail["mahalanobis"].tolist(),
-        "pred_known": detail["pred_known"].astype(int).tolist(),
-        "true_known": detail["true_known"].astype(int).tolist(),
-        "pred_class": detail["pred_class"].tolist(),
-        "true_label": detail["true_label"].tolist(),
-        "raw_labels": detail["raw_labels"].tolist(),
+        "score_mode": detail["score_mode"], "score": detail["score"].tolist(),
+        "entropy": detail["entropy"].tolist(), "epistemic": detail["epistemic"].tolist(),
+        "aleatoric": detail["aleatoric"].tolist(), "expected_entropy": detail["expected_entropy"].tolist(),
+        "head_uncertainty": detail["head_uncertainty"].tolist(), "proto_dist": detail["proto_dist"].tolist(),
+        "mahalanobis": detail["mahalanobis"].tolist(), "pred_known": detail["pred_known"].astype(int).tolist(),
+        "true_known": detail["true_known"].astype(int).tolist(), "pred_class": detail["pred_class"].tolist(),
+        "true_label": detail["true_label"].tolist(), "raw_labels": detail["raw_labels"].tolist(),
         "pred_cluster": None if detail["pred_cluster"] is None else detail["pred_cluster"].tolist(),
-        "cluster_k": detail.get("cluster_k"),
-        "cluster_method": detail.get("cluster_method"),
-        "cluster_feature": detail.get("cluster_feature"),
-        "cluster_selection": detail.get("cluster_selection"),
+        "cluster_k": detail.get("cluster_k"), "cluster_method": detail.get("cluster_method"),
+        "cluster_feature": detail.get("cluster_feature"), "cluster_selection": detail.get("cluster_selection"),
         "cluster_diagnostics": detail.get("cluster_diagnostics", []),
     })
     np.save(run_dir / "open_scores.npy", scores_test)
-    print(result)
-    if calibration_report is not None:
-        selected = calibration_report["selected"]
-        print(
-            "calibration:",
-            {
-                "selected_score_mode": selected["score_mode"],
-                "auroc": selected["auroc"],
-                "known_val_threshold": calibration_report["known_val_threshold"],
-                "threshold_policy": calibration_report["threshold_policy"]["type"],
-            },
-        )
     save_json(run_dir / "score_normalization.json", score_normalization)
-    print(f"threshold={threshold:.6f}")
+    print(result)
+    print(f"threshold={threshold:.6f}, temperature={temperature:.4f}")
 
 
 def inspect_data(args):

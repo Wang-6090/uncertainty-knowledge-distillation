@@ -196,12 +196,19 @@ def analyze_run(run_dir: Path):
             "true_k": report.get("cluster_true_k"),
             "estimated_k": report.get("cluster_k"),
             "k_abs_error": report.get("cluster_k_abs_error"),
+            "all_unknown_oracle_nmi": report.get("cluster_all_unknown_oracle_nmi"),
+            "candidate_unknown_oracle_nmi": report.get("cluster_candidate_unknown_oracle_nmi"),
         },
         "cluster_config": {
             "method": report.get("cluster_method"),
             "feature": report.get("cluster_feature"),
             "selection": report.get("cluster_selection"),
             "normalized": report.get("cluster_normalized"),
+        },
+        "calibration": {
+            "temperature": calibration.get("temperature"),
+            "ece": calibration.get("reliability", {}).get("ece"),
+            "uncertainty_error_correlation": calibration.get("uncertainty_error", {}).get("head_uncertainty_error_correlation"),
         },
         "top_known_reject_classes": top_known_reject,
         "top_novel_false_accept_classes": top_novel_false_accept,
@@ -236,6 +243,12 @@ def format_run_md(item):
     lines.append(f"- unknown reject rate: {m['unknown_reject_rate']:.4f}")
     lines.append(f"- known class acc after accept: {m['known_class_accuracy_after_accept']:.4f}")
     lines.append(f"- known class acc all known: {m['known_class_accuracy_all_known']:.4f}")
+    calibration = item.get("calibration", {})
+    lines.append(f"- ECE: {fmt_float(calibration.get('ece'))}")
+    lines.append(f"- temperature: {fmt_float(calibration.get('temperature'))}")
+    lines.append(f"- uncertainty/error correlation: {fmt_float(calibration.get('uncertainty_error_correlation'))}")
+    lines.append(f"- all-unknown oracle NMI: {fmt_float(m.get('cluster_all_unknown_oracle_nmi'))}")
+    lines.append(f"- candidate-unknown oracle NMI: {fmt_float(m.get('cluster_candidate_unknown_oracle_nmi'))}")
     lines.append(f"- cluster NMI: {m.get('cluster_nmi', float('nan')):.4f}")
     lines.append(f"- cluster ARI: {m.get('cluster_ari', float('nan')):.4f}")
     pool = item["candidate_pool"]

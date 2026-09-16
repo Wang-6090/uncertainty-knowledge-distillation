@@ -351,6 +351,69 @@ def extract_outputs(model, loader, device, mc_samples: int = 8):
     }
 
 
+def calibration_diagnostics(probabilities: np.ndarray, labels: np.ndarray, num_bins: int = 15) -> dict:
+    """Calculate ECE and reliability-bin values using known validation labels."""
+    probabilities = np.asarray(probabilities, dtype=float)
+    labels = np.asarray(labels, dtype=int)
+    valid = labels >= 0
+    probabilities, labels = probabilities[valid], labels[valid]
+    if len(labels) == 0:
+        return {"ece": float("nan"), "accuracy": float("nan"), "bins": []}
+    confidence = probabilities.max(axis=1)
+    correct = probabilities.argmax(axis=1) == labels
+    edges = np.linspace(0.0, 1.0, num_bins + 1)
+    bins, ece = [], 0.0
+    for index in range(num_bins):
+        mask = (confidence >= edges[index]) & ((confidence < edges[index + 1]) if index < num_bins - 1 else (confidence <= edges[index + 1]))
+        count = int(mask.sum())
+        mean_conf = float(confidence[mask].mean()) if count else float("nan")
+        accuracy = float(correct[mask].mean()) if count else float("nan")
+        if count:
+            ece += count / len(labels) * abs(mean_conf - accuracy)
+        bins.append({"lower": float(edges[index]), "upper": float(edges[index + 1]), "count": count, "confidence": mean_conf, "accuracy": accuracy})
+    return {"ece": float(ece), "accuracy": float(correct.mean()), "bins": bins}
+
+
+def uncertainty_error_diagnostics(outputs: Dict[str, np.ndarray]) -> dict:
+    labels = np.asarray(outputs["labels"], dtype=int)
+    valid = labels >= 0
+    if valid.sum() < 2:
+        return {"error_rate": float("nan"), "correlation": float("nan")}
+    errors = (np.asarray(outputs["logits"])[valid].argmax(axis=1) != labels[valid]).astype(float)
+    uncertainty = np.asarray(outputs["head_uncertainty"])[valid]
+    correlation = float("nan") if np.std(errors) == 0 or np.std(uncertainty) == 0 else float(np.corrcoef(errors, uncertainty)[0, 1])
+    return {"error_rate": float(errors.mean()), "correlation": correlation}
+
+
+def fit_temperature(outputs: Dict[str, np.ndarray]) -> float:
+    labels = torch.as_tensor(outputs["labels"], dtype=torch.long)
+    logits = torch.as_tensor(outputs["logits"], dtype=torch.float32)
+    valid = labels >= 0
+    if int(valid.sum()) < 2:
+        return 1.0
+    log_temp = torch.zeros(1, requires_grad=True)
+    optimizer = torch.optim.LBFGS([log_temp], lr=0.1, max_iter=50)
+    def closure():
+        optimizer.zero_grad()
+        loss = torch.nn.functional.cross_entropy(logits[valid] / log_temp.exp().clamp(0.05, 20.0), labels[valid])
+        loss.backward()
+        return loss
+    optimizer.step(closure)
+    return float(log_temp.exp().detach().clamp(0.05, 20.0).item())
+
+
+def apply_temperature(outputs: Dict[str, np.ndarray], temperature: float) -> Dict[str, np.ndarray]:
+    calibrated = dict(outputs)
+    logits = np.asarray(outputs["logits"], dtype=float) / max(float(temperature), 1e-6)
+    logits -= logits.max(axis=1, keepdims=True)
+    probs = np.exp(logits)
+    probs /= probs.sum(axis=1, keepdims=True)
+    calibrated["logits"] = logits
+    calibrated["probs"] = probs
+    calibrated["entropy"] = -(probs * np.log(np.clip(probs, 1e-8, None))).sum(axis=1)
+    return calibrated
+
+
 def compute_prototype_distance(features: np.ndarray, prototypes: np.ndarray) -> np.ndarray:
     feat = features / np.clip(np.linalg.norm(features, axis=1, keepdims=True), 1e-8, None)
     proto = prototypes / np.clip(np.linalg.norm(prototypes, axis=1, keepdims=True), 1e-8, None)
@@ -714,7 +777,6 @@ def run_discovery(
         "known_class_accuracy_after_accept": float(known_class_correct / max(known_class_correct + known_class_wrong, 1)),
         "known_class_accuracy_all_known": float(known_class_correct / max(known_total, 1)),
     }
-    result.update(open_confusion)
     novel_mask = ~pred_known
     selected_cluster_k = None
     cluster_diagnostics = []
@@ -780,40 +842,15 @@ def run_discovery(
             )
             result["cluster_true_k"] = true_unknown_k
             result["cluster_k_abs_error"] = abs(int(selected_cluster_k) - true_unknown_k)
-    result.update(
-        {
-            "cluster_k": None if selected_cluster_k is None else int(selected_cluster_k),
-            "cluster_method": cluster_method,
-            "cluster_feature": cluster_feature,
-            "cluster_selection": cluster_selection if cluster_k != "oracle" else "oracle",
-            "cluster_pca_dim": int(cluster_pca_dim),
-            "cluster_normalized": bool(cluster_normalize or cluster_feature.endswith("_pca")),
-            "cluster_n_init": int(cluster_n_init),
-            "cluster_stability_repeats": int(cluster_stability_repeats),
-            "cluster_diagnostics": cluster_diagnostics,
-        }
-    )
     detail = {
-        "score": score,
-        "score_mode": score_mode,
-        "entropy": entropy,
-        "epistemic": epistemic,
-        "aleatoric": aleatoric,
+        "score": score, "score_mode": score_mode, "entropy": entropy,
+        "epistemic": epistemic, "aleatoric": aleatoric,
         "expected_entropy": outputs.get("expected_entropy", aleatoric),
         "head_uncertainty": outputs.get("head_uncertainty", aleatoric),
-        "proto_dist": proto_dist,
-        "mahalanobis": mahalanobis,
-        "pred_known": pred_known,
-        "true_known": known_mask,
-        "pred_class": pred_class,
-        "true_label": true_labels,
-        "raw_labels": outputs["raw_labels"],
-        "pred_cluster": None,
-        "cluster_k": selected_cluster_k,
-        "cluster_method": cluster_method,
-        "cluster_feature": cluster_feature,
-        "cluster_selection": cluster_selection,
-        "cluster_diagnostics": cluster_diagnostics,
+        "proto_dist": proto_dist, "mahalanobis": mahalanobis,
+        "pred_known": pred_known, "true_known": known_mask,
+        "pred_class": pred_class, "true_label": true_labels,
+        "raw_labels": outputs["raw_labels"], "pred_cluster": None,
     }
     if novel_mask.sum() > 1 and num_novel > 0:
         pred_cluster = np.full(len(score), -1, dtype=np.int64)

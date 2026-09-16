@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from novel_discovery.losses import supervised_contrastive_loss
-from novel_discovery.pipeline import fit_score_normalization, run_discovery
+from novel_discovery.pipeline import calibration_diagnostics, fit_score_normalization, run_discovery
 
 
 class LossBehaviorTest(unittest.TestCase):
@@ -52,6 +52,17 @@ class ScoreBehaviorTest(unittest.TestCase):
 
         self.assertIn("entropy", stats)
         self.assertNotIn("proto_dist", stats)
+
+
+class CalibrationTest(unittest.TestCase):
+    def test_calibration_diagnostics_reports_ece(self):
+        result = calibration_diagnostics(
+            np.array([[0.9, 0.1], [0.6, 0.4], [0.2, 0.8]]),
+            np.array([0, 1, 1]),
+            num_bins=5,
+        )
+        self.assertGreaterEqual(result["ece"], 0.0)
+        self.assertEqual(sum(item["count"] for item in result["bins"]), 3)
 
 
 class DiscoveryReportTest(unittest.TestCase):
