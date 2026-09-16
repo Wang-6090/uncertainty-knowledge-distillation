@@ -2,34 +2,28 @@ from __future__ import annotations
 
 import argparse
 import copy
+import os
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from novel_discovery.data import build_data_bundle
+# Keep downloaded torchvision weights inside the project by default.
+os.environ.setdefault("TORCH_HOME", str(Path.cwd() / ".torch_cache"))
+
+from novel_discovery.data import TwoViewDataset, build_data_bundle
 from novel_discovery.metrics import compute_auroc
 from novel_discovery.models import build_model
 from novel_discovery.pipeline import (
-    apply_temperature_to_outputs,
-    assign_discovery_pseudo_labels,
     build_loader,
     calibrate_threshold,
     collect_diagonal_gaussian_stats,
-    collect_discovery_features,
     collect_prototypes,
-    collect_simple_outputs,
-    compare_score_modes,
-    count_parameters,
     fit_score_normalization,
-    fit_temperature_scaling,
     evaluate_classification,
     extract_outputs,
     compute_open_score,
-    measure_inference_time,
     run_discovery,
-    teacher_uncertainty_diagnostics,
-    train_one_epoch_discovery,
     train_one_epoch_student,
     train_one_epoch_teacher,
 )
@@ -62,8 +56,7 @@ def parse_args():
         p.add_argument("--limit-val", type=int, default=0)
         p.add_argument("--limit-test", type=int, default=0)
         p.add_argument("--limit-discovery", type=int, default=0)
-        p.add_argument("--include-discovery-pool", action="store_true")
-        p.add_argument("--discovery-include-known", action="store_true")
+        p.add_argument("--discovery-pool-mode", choices=["unknown", "mixed"], default="unknown")
 
     p = sub.add_parser("train_teacher")
     add_common(p)
@@ -96,57 +89,57 @@ def parse_args():
     p.add_argument("--pseudo-feature-noise", type=float, default=0.05)
     p.add_argument("--uncertainty-target-mode", choices=["confidence", "classification_error", "margin"], default="confidence")
     p.add_argument("--temperature", type=float, default=2.0)
+    p.add_argument("--uncertainty-weight-mode", choices=["raw", "mean_normalized"], default="raw")
     p.add_argument("--teacher-ckpt", default="./runs/teacher.pt")
     p.add_argument("--student-ckpt", default="./runs/student.pt")
-    p.add_argument("--kd-weight-clip-min", type=float, default=0.05)
-    p.add_argument("--kd-weight-clip-max", type=float, default=1.0)
-    p.add_argument("--no-normalize-kd-weights", action="store_true")
-    p.add_argument("--discovery-epochs", type=int, default=0)
-    p.add_argument("--alpha-consistency", type=float, default=0.5)
-    p.add_argument("--alpha-contrast", type=float, default=0.1)
-    p.add_argument("--alpha-cluster", type=float, default=0.0)
-    p.add_argument("--discovery-cluster-k", default="fixed8")
-    p.add_argument("--discovery-cluster-every", type=int, default=2)
-    p.add_argument("--discovery-confidence-percentile", type=float, default=50.0)
-    p.add_argument("--contrast-temperature", type=float, default=0.2)
-
-    p = sub.add_parser("train_discovery")
-    add_common(p)
-    p.add_argument("--epochs", type=int, default=10)
-    p.add_argument("--lr", type=float, default=1e-4)
-    p.add_argument("--weight-decay", type=float, default=1e-4)
-    p.add_argument("--alpha-unc", type=float, default=0.1)
-    p.add_argument("--alpha-kd", type=float, default=1.0)
-    p.add_argument("--alpha-feat-kd", type=float, default=0.0)
-    p.add_argument("--kd-mode", choices=["standard", "uncertainty"], default="uncertainty")
-    p.add_argument("--alpha-supcon", type=float, default=0.1)
-    p.add_argument("--alpha-proto", type=float, default=0.0)
-    p.add_argument("--alpha-consistency", type=float, default=0.5)
-    p.add_argument("--alpha-contrast", type=float, default=0.1)
-    p.add_argument("--alpha-cluster", type=float, default=0.0)
-    p.add_argument("--uncertainty-target-mode", choices=["confidence", "classification_error", "margin"], default="confidence")
-    p.add_argument("--temperature", type=float, default=2.0)
-    p.add_argument("--kd-weight-clip-min", type=float, default=0.05)
-    p.add_argument("--kd-weight-clip-max", type=float, default=1.0)
-    p.add_argument("--no-normalize-kd-weights", action="store_true")
-    p.add_argument("--discovery-cluster-k", default="fixed8")
-    p.add_argument("--discovery-cluster-every", type=int, default=2)
-    p.add_argument("--discovery-confidence-percentile", type=float, default=50.0)
-    p.add_argument("--contrast-temperature", type=float, default=0.2)
-    p.add_argument("--teacher-ckpt", default="")
-    p.add_argument("--student-ckpt", default="./runs/student.pt")
-    p.add_argument("--output-ckpt", default="./runs/student_discovery.pt")
+    p.add_argument(
+        "--discovery-pool",
+        action="store_true",
+        help="Use unlabeled novel-class training images for two-view consistency learning.",
+    )
+    p.add_argument("--alpha-discovery", type=float, default=0.0)
+    p.add_argument("--alpha-discovery-unknown", type=float, default=0.0)
+    p.add_argument("--discovery-batch-size", type=int, default=0)
+    p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
+    p.add_argument("--discovery-temperature", type=float, default=0.2)
 
     p = sub.add_parser("discover")
     add_common(p)
     p.add_argument("--student-ckpt", default="./runs/student.pt")
     p.add_argument("--num-novel", type=int, default=40)
-    p.add_argument("--cluster-k", choices=["oracle", "auto", "both"], default="oracle")
+    p.add_argument("--cluster-k", choices=["oracle", "auto"], default="auto")
+    p.add_argument(
+        "--cluster-method",
+        choices=["kmeans", "agglomerative", "spectral"],
+        default="kmeans",
+        help="Clustering algorithm for the rejected/unknown candidate pool.",
+    )
+    p.add_argument(
+        "--cluster-feature",
+        choices=["projection", "projection_pca", "feature", "feature_pca"],
+        default="projection",
+        help="Representation used for clustering; *_pca applies PCA and whitening.",
+    )
+    p.add_argument(
+        "--cluster-selection",
+        choices=["silhouette", "composite", "stability"],
+        default="silhouette",
+        help="K selection criterion: silhouette, composite internal metrics, or stability.",
+    )
+    p.add_argument("--cluster-pca-dim", type=int, default=32)
+    p.add_argument(
+        "--cluster-normalize",
+        action="store_true",
+        help="L2-normalize clustering features (default remains raw features for compatibility).",
+    )
+    p.add_argument("--cluster-no-whiten", action="store_true")
+    p.add_argument("--cluster-n-init", type=int, default=10)
+    p.add_argument("--cluster-stability-repeats", type=int, default=5)
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument("--mc-samples", type=int, default=8)
     p.add_argument(
         "--score-mode",
-        default="full",
+        default="entropy_proto",
         choices=[
             "auto",
             "full",
@@ -163,16 +156,10 @@ def parse_args():
             "mahalanobis",
             "entropy_mahalanobis",
             "normalized_entropy_mahalanobis",
-            "zscore_fusion",
         ],
     )
     p.add_argument("--open-val-ratio", type=float, default=0.0)
     p.add_argument("--auto-calibrate-score", action="store_true")
-    p.add_argument("--temperature-scaling", action="store_true")
-    p.add_argument("--compare-scores", action="store_true")
-    p.add_argument("--report-efficiency", action="store_true")
-    p.add_argument("--cluster-confidence-percentile", type=float, default=0.0)
-    p.add_argument("--k-criterion", default="combined", choices=["combined", "silhouette", "calinski_harabasz", "davies_bouldin"])
 
     p = sub.add_parser("inspect_data")
     add_common(p)
@@ -242,36 +229,27 @@ def resolve_input_checkpoint(path_arg: str, work_dir: str, default_name: str) ->
     )
 
 
-def _data_kwargs(args, include_discovery_pool: bool | None = None):
-    return dict(
-        download=args.download,
-        split_path=args.split_path,
-        limit_train=args.limit_train or None,
-        limit_val=args.limit_val or None,
-        limit_test=args.limit_test or None,
-        open_val_ratio=getattr(args, "open_val_ratio", 0.0),
-        include_discovery_pool=args.include_discovery_pool if include_discovery_pool is None else include_discovery_pool,
-        discovery_include_known=getattr(args, "discovery_include_known", False),
-        limit_discovery=getattr(args, "limit_discovery", 0) or None,
-    )
-
-
-def _parse_discovery_cluster_k(value: str):
-    if value == "auto":
-        return "auto"
-    if value == "oracle":
-        raise ValueError("discovery-cluster-k cannot use oracle; pass fixedK or auto")
-    if value.startswith("fixed"):
-        return int(value.replace("fixed", ""))
-    return int(value)
-
-
 def _select_score_mode(outputs_known, outputs_open, prototypes, score_modes):
     unknown_mask = np.asarray(outputs_open["is_known"], dtype=bool) == 0
     results = []
     for score_mode in score_modes:
-        known_scores, _ = compute_open_score(outputs_known, prototypes=prototypes, score_mode=score_mode)
-        open_scores, _ = compute_open_score(outputs_open, prototypes=prototypes, score_mode=score_mode)
+        try:
+            known_scores, _ = compute_open_score(
+                outputs_known, prototypes=prototypes, score_mode=score_mode
+            )
+            open_scores, _ = compute_open_score(
+                outputs_open, prototypes=prototypes, score_mode=score_mode
+            )
+        except ValueError as exc:
+            results.append(
+                {
+                    "score_mode": score_mode,
+                    "auroc": float("nan"),
+                    "status": "skipped",
+                    "reason": str(exc),
+                }
+            )
+            continue
         unknown_scores = open_scores[unknown_mask]
         labels = np.concatenate([np.zeros_like(known_scores), np.ones_like(unknown_scores)])
         scores = np.concatenate([known_scores, unknown_scores])
@@ -280,11 +258,15 @@ def _select_score_mode(outputs_known, outputs_open, prototypes, score_modes):
             {
                 "score_mode": score_mode,
                 "auroc": auroc,
+                "status": "ok",
             }
         )
 
-    results.sort(key=lambda x: x["auroc"], reverse=True)
-    return results[0], results
+    valid = [item for item in results if item["status"] == "ok" and np.isfinite(item["auroc"])]
+    if not valid:
+        raise ValueError("No usable score mode was available for automatic calibration.")
+    valid.sort(key=lambda x: x["auroc"], reverse=True)
+    return valid[0], results
 
 
 def fit_teacher(args):
@@ -295,7 +277,14 @@ def fit_teacher(args):
         args.num_known,
         args.seed,
         args.image_size,
-        **_data_kwargs(args, include_discovery_pool=False),
+        download=args.download,
+        split_path=args.split_path,
+        limit_train=args.limit_train or None,
+        limit_val=args.limit_val or None,
+        limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
+        open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
     print(f"device: {device}")
@@ -363,12 +352,33 @@ def fit_student(args):
         args.num_known,
         args.seed,
         args.image_size,
-        **_data_kwargs(args, include_discovery_pool=args.include_discovery_pool or args.discovery_epochs > 0),
+        download=args.download,
+        split_path=args.split_path,
+        limit_train=args.limit_train or None,
+        limit_val=args.limit_val or None,
+        limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
+        open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
     print(f"device: {device}")
     train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
+    discovery_loader = None
+    if args.alpha_discovery_unknown > 0.0 and not args.discovery_pool:
+        raise ValueError("alpha-discovery-unknown requires --discovery-pool.")
+    if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
+        if args.discovery_pool_mode == "mixed" and args.alpha_discovery_unknown > 0.0:
+            raise ValueError(
+                "alpha-discovery-unknown requires --discovery-pool-mode unknown."
+            )
+        discovery_loader = build_loader(
+            TwoViewDataset(bundle.discovery_pool),
+            args.discovery_batch_size or args.batch_size,
+            True,
+            args.num_workers,
+        )
     teacher_backbone = args.teacher_backbone or args.backbone
     student_backbone = args.student_backbone or args.backbone
     teacher = build_model(
@@ -409,9 +419,12 @@ def fit_student(args):
             uncertainty_target_mode=args.uncertainty_target_mode,
             temperature=args.temperature,
             kd_mode=args.kd_mode,
-            kd_weight_clip_min=args.kd_weight_clip_min,
-            kd_weight_clip_max=args.kd_weight_clip_max,
-            normalize_kd_weights=not args.no_normalize_kd_weights,
+            uncertainty_weight_mode=args.uncertainty_weight_mode,
+            discovery_loader=discovery_loader,
+            alpha_discovery=args.alpha_discovery,
+            alpha_discovery_unknown=args.alpha_discovery_unknown,
+            discovery_loss_mode=args.discovery_loss,
+            discovery_temperature=args.discovery_temperature,
         )
         val_stats = evaluate_classification(student, val_loader, device)
         print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
@@ -421,42 +434,14 @@ def fit_student(args):
             best_epoch = epoch + 1
     if best_state is not None:
         student.load_state_dict(best_state)
-    discovery_log = None
-    discovery_val_acc = None
-    if args.discovery_epochs > 0:
-        if bundle.discovery_pool is None or bundle.discovery_pool_eval is None:
-            raise ValueError("discovery_epochs > 0 requires an unlabeled discovery pool")
-        discovery_log = _run_discovery_training(
-            args,
-            student,
-            teacher,
-            train_loader,
-            bundle,
-            device,
-            epochs=args.discovery_epochs,
-        )
-        val_stats = evaluate_classification(student, val_loader, device)
-        discovery_val_acc = val_stats["known_acc"]
-        print(f"[student][discovery] {val_stats}")
     run_dir = ensure_dir(args.work_dir)
-    extra_config = {**vars(args), "best_epoch": best_epoch, "best_val_known_acc": best_acc}
-    if discovery_log is not None:
-        extra_config["discovery_log"] = discovery_log
-        extra_config["discovery_val_known_acc"] = discovery_val_acc
-    save_json(run_dir / "config.json", extra_config)
+    save_json(run_dir / "config.json", {**vars(args), "best_epoch": best_epoch, "best_val_known_acc": best_acc})
     proto_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
     prototypes = collect_prototypes(student, proto_loader, device, len(bundle.known_classes)).cpu()
     gaussian_stats = collect_diagonal_gaussian_stats(
         student, proto_loader, device, len(bundle.known_classes)
     )
     gaussian_stats = {key: torch.as_tensor(value, dtype=torch.float32) for key, value in gaussian_stats.items()}
-    teacher_simple = collect_simple_outputs(teacher, val_loader, device)
-    diagnostics = teacher_uncertainty_diagnostics(
-        teacher_simple["uncertainty"],
-        teacher_simple["logits"],
-        teacher_simple["labels"],
-    )
-    save_json(run_dir / "teacher_uncertainty_diagnostics.json", diagnostics)
     student_ckpt = resolve_output_checkpoint(args.student_ckpt, args.work_dir, "student.pt")
     save_checkpoint(
         student,
@@ -470,116 +455,6 @@ def fit_student(args):
     print(f"saved to {student_ckpt} (best_epoch={best_epoch}, best_val_known_acc={best_acc:.4f})")
 
 
-def _run_discovery_training(args, student, teacher, known_loader, bundle, device, epochs: int):
-    if len(bundle.discovery_pool) == 0:
-        raise ValueError("discovery pool is empty")
-    discovery_loader = build_loader(bundle.discovery_pool, args.batch_size, True, args.num_workers)
-    eval_loader = build_loader(bundle.discovery_pool_eval, args.batch_size, False, args.num_workers)
-    optim = torch.optim.AdamW(student.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    cluster_k = _parse_discovery_cluster_k(args.discovery_cluster_k)
-    cluster_ids = None
-    centroids = None
-    log = []
-    for epoch in range(epochs):
-        if args.alpha_cluster > 0 and (epoch % max(args.discovery_cluster_every, 1) == 0):
-            features, _ = collect_discovery_features(student, eval_loader, device)
-            cluster_ids, _, centroids, meta = assign_discovery_pseudo_labels(
-                features,
-                num_clusters=cluster_k,
-                confidence_percentile=args.discovery_confidence_percentile,
-            )
-            print(f"[discovery-pseudo][{epoch+1}/{epochs}] {meta}")
-        stats = train_one_epoch_discovery(
-            student,
-            known_loader,
-            discovery_loader,
-            optim,
-            device,
-            teacher=teacher,
-            cluster_ids=cluster_ids,
-            cluster_centroids=centroids,
-            alpha_unc=args.alpha_unc,
-            alpha_kd=args.alpha_kd,
-            alpha_feat_kd=args.alpha_feat_kd,
-            alpha_supcon=args.alpha_supcon,
-            alpha_proto=args.alpha_proto,
-            alpha_consistency=args.alpha_consistency,
-            alpha_contrast=args.alpha_contrast,
-            alpha_cluster=args.alpha_cluster,
-            uncertainty_target_mode=args.uncertainty_target_mode,
-            temperature=args.temperature,
-            kd_mode=args.kd_mode,
-            kd_weight_clip_min=args.kd_weight_clip_min,
-            kd_weight_clip_max=args.kd_weight_clip_max,
-            normalize_kd_weights=not args.no_normalize_kd_weights,
-            contrast_temperature=args.contrast_temperature,
-        )
-        print(f"[discovery][{epoch+1}/{epochs}] {stats}")
-        log.append(stats)
-    return log
-
-
-def fit_discovery(args):
-    set_seed(args.seed)
-    args.include_discovery_pool = True
-    bundle = build_data_bundle(
-        args.dataset,
-        args.data_root,
-        args.num_known,
-        args.seed,
-        args.image_size,
-        **_data_kwargs(args, include_discovery_pool=True),
-    )
-    if bundle.discovery_pool is None:
-        raise ValueError("train_discovery requires an unlabeled discovery pool")
-    device = resolve_device(args.device)
-    print(f"device: {device}")
-    train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
-    val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
-    student = build_model(
-        len(bundle.known_classes),
-        backbone=args.student_backbone or args.backbone,
-        proj_dim=args.proj_dim,
-        dropout=args.dropout,
-        pretrained=args.pretrained,
-    ).to(device)
-    student_ckpt = resolve_input_checkpoint(args.student_ckpt, args.work_dir, "student.pt")
-    load_checkpoint(student, student_ckpt, device)
-    teacher = None
-    if args.teacher_ckpt:
-        teacher = build_model(
-            len(bundle.known_classes),
-            backbone=args.teacher_backbone or args.backbone,
-            proj_dim=args.proj_dim,
-            dropout=args.dropout,
-            pretrained=args.pretrained,
-        ).to(device)
-        teacher_ckpt = resolve_input_checkpoint(args.teacher_ckpt, args.work_dir, "teacher.pt")
-        load_checkpoint(teacher, teacher_ckpt, device)
-    discovery_log = _run_discovery_training(args, student, teacher, train_loader, bundle, device, epochs=args.epochs)
-    val_stats = evaluate_classification(student, val_loader, device)
-    print(f"[discovery][final] {val_stats}")
-    run_dir = ensure_dir(args.work_dir)
-    save_json(run_dir / "config.json", {**vars(args), "discovery_log": discovery_log, **val_stats})
-    proto_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
-    prototypes = collect_prototypes(student, proto_loader, device, len(bundle.known_classes)).cpu()
-    gaussian_stats = collect_diagonal_gaussian_stats(
-        student, proto_loader, device, len(bundle.known_classes)
-    )
-    gaussian_stats = {key: torch.as_tensor(value, dtype=torch.float32) for key, value in gaussian_stats.items()}
-    output_ckpt = resolve_output_checkpoint(args.output_ckpt, args.work_dir, "student_discovery.pt")
-    save_checkpoint(
-        student,
-        output_ckpt,
-        extra={
-            "known_classes": list(bundle.known_classes),
-            "prototypes": prototypes,
-            "gaussian_stats": gaussian_stats,
-        },
-    )
-    print(f"saved to {output_ckpt}")
-
-
 def discover(args):
     set_seed(args.seed)
     bundle = build_data_bundle(
@@ -588,7 +463,14 @@ def discover(args):
         args.num_known,
         args.seed,
         args.image_size,
-        **_data_kwargs(args, include_discovery_pool=False),
+        download=args.download,
+        split_path=args.split_path,
+        limit_train=args.limit_train or None,
+        limit_val=args.limit_val or None,
+        limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
+        open_val_ratio=args.open_val_ratio,
     )
     device = resolve_device(args.device)
     print(f"device: {device}")
@@ -621,17 +503,12 @@ def discover(args):
             for key, value in gaussian_stats.items()
         }
     selected_score_mode = args.score_mode
-    temperature = 1.0
-    temperature_report = None
-    if args.temperature_scaling:
-        temperature = fit_temperature_scaling(outputs_val["logits"], outputs_val["labels"])
-        outputs_val = apply_temperature_to_outputs(outputs_val, temperature)
-        outputs_test = apply_temperature_to_outputs(outputs_test, temperature)
-        if outputs_open_val is not None:
-            outputs_open_val = apply_temperature_to_outputs(outputs_open_val, temperature)
-        temperature_report = {"temperature": float(temperature)}
-        print(f"temperature scaling T={temperature:.4f}")
-    score_normalization = fit_score_normalization(outputs_val, proto, gaussian_stats)
+    needs_normalization = selected_score_mode.startswith("normalized_")
+    score_normalization = (
+        fit_score_normalization(outputs_val, proto, gaussian_stats)
+        if needs_normalization or args.score_mode == "auto" or args.auto_calibrate_score
+        else {}
+    )
     calibration_report = None
     threshold = None
     if (args.score_mode == "auto" or args.auto_calibrate_score) and outputs_open_val is not None:
@@ -651,7 +528,6 @@ def discover(args):
             score_mode=selected_score_mode,
             normalization=score_normalization,
             gaussian_stats=gaussian_stats,
-            temperature=temperature,
         )
         threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
         calibration_report = {
@@ -674,76 +550,39 @@ def discover(args):
             score_mode=selected_score_mode,
             normalization=score_normalization,
             gaussian_stats=gaussian_stats,
-            temperature=temperature,
         )
         threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
 
-    cluster_modes = ["oracle", "auto"] if args.cluster_k == "both" else [args.cluster_k]
-    reports = {}
-    result = None
-    scores_test = None
-    pred_known = None
-    detail = None
-    for mode in cluster_modes:
-        result, scores_test, pred_known, detail = run_discovery(
-            outputs_test,
-            threshold,
-            args.num_novel,
-            prototypes=proto,
-            score_mode=selected_score_mode,
-            normalization=score_normalization,
-            gaussian_stats=gaussian_stats,
-            cluster_k=mode,
-            temperature=temperature,
-            cluster_confidence_percentile=args.cluster_confidence_percentile,
-            k_criterion=args.k_criterion,
-        )
-        reports[mode] = result
-    if args.cluster_k == "both":
-        result = {
-            "oracle": reports["oracle"],
-            "auto": reports["auto"],
-            "auroc": reports["auto"]["auroc"],
-            "aupr": reports["auto"]["aupr"],
-            "fpr95": reports["auto"]["fpr95"],
-            "oscr": reports["auto"]["oscr"],
-            "known_class_accuracy_all_known": reports["auto"]["known_class_accuracy_all_known"],
-            "known_accept_rate": reports["auto"]["known_accept_rate"],
-            "unknown_reject_rate": reports["auto"]["unknown_reject_rate"],
-            "cluster_acc": reports["auto"].get("cluster_acc"),
-            "cluster_nmi": reports["auto"].get("cluster_nmi"),
-            "cluster_ari": reports["auto"].get("cluster_ari"),
-            "estimated_k": reports["auto"].get("estimated_k"),
-            "true_k": reports["auto"].get("true_k"),
-            "k_abs_error": reports["auto"].get("k_abs_error"),
-            "oracle_cluster_acc": reports["oracle"].get("cluster_acc"),
-            "oracle_cluster_nmi": reports["oracle"].get("cluster_nmi"),
-            "oracle_cluster_ari": reports["oracle"].get("cluster_ari"),
-        }
+    result, scores_test, pred_known, detail = run_discovery(
+        outputs_test,
+        threshold,
+        args.num_novel,
+        prototypes=proto,
+        score_mode=selected_score_mode,
+        normalization=score_normalization,
+        gaussian_stats=gaussian_stats,
+        cluster_k=args.cluster_k,
+        cluster_method=args.cluster_method,
+        cluster_feature=args.cluster_feature,
+        cluster_selection=args.cluster_selection,
+        cluster_pca_dim=args.cluster_pca_dim,
+        cluster_normalize=args.cluster_normalize,
+        cluster_whiten=not args.cluster_no_whiten,
+        cluster_n_init=args.cluster_n_init,
+        cluster_stability_repeats=args.cluster_stability_repeats,
+    )
     run_dir = ensure_dir(args.work_dir)
     save_json(run_dir / "config.json", vars(args))
-    if args.report_efficiency:
-        result["n_parameters"] = count_parameters(model)
-        result["inference"] = measure_inference_time(model, val_loader, device)
+    torch.save(
+        {
+            "known_classes": list(bundle.known_classes),
+            "novel_classes": list(bundle.novel_classes),
+        },
+        run_dir / "split.pt",
+    )
     save_json(run_dir / "discovery_report.json", result)
-    if args.cluster_k == "both":
-        save_json(run_dir / "discovery_report_oracle.json", reports["oracle"])
-        save_json(run_dir / "discovery_report_auto.json", reports["auto"])
     if calibration_report is not None:
         save_json(run_dir / "calibration_report.json", calibration_report)
-    if temperature_report is not None:
-        save_json(run_dir / "temperature_report.json", temperature_report)
-    if args.compare_scores:
-        score_table = compare_score_modes(
-            outputs_val,
-            outputs_test,
-            proto,
-            gaussian_stats,
-            score_normalization,
-            temperature=temperature,
-        )
-        save_json(run_dir / "score_compare.json", score_table)
-        print("score comparison:", score_table[:5])
     save_json(run_dir / "discovery_detail.json", {
         "score_mode": detail["score_mode"],
         "score": detail["score"].tolist(),
@@ -761,8 +600,10 @@ def discover(args):
         "raw_labels": detail["raw_labels"].tolist(),
         "pred_cluster": None if detail["pred_cluster"] is None else detail["pred_cluster"].tolist(),
         "cluster_k": detail.get("cluster_k"),
-        "cluster_k_search": detail.get("cluster_k_search"),
-        "temperature": float(temperature),
+        "cluster_method": detail.get("cluster_method"),
+        "cluster_feature": detail.get("cluster_feature"),
+        "cluster_selection": detail.get("cluster_selection"),
+        "cluster_diagnostics": detail.get("cluster_diagnostics", []),
     })
     np.save(run_dir / "open_scores.npy", scores_test)
     print(result)
@@ -789,7 +630,13 @@ def inspect_data(args):
         args.num_known,
         args.seed,
         args.image_size,
-        **_data_kwargs(args),
+        download=args.download,
+        split_path=args.split_path,
+        limit_train=args.limit_train or None,
+        limit_val=args.limit_val or None,
+        limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
     )
     print("dataset:", args.dataset)
     print("known classes:", len(bundle.known_classes))
@@ -797,7 +644,7 @@ def inspect_data(args):
     print("train size:", len(bundle.train))
     print("val size:", len(bundle.val))
     print("test size:", len(bundle.test))
-    print("discovery pool size:", 0 if bundle.discovery_pool is None else len(bundle.discovery_pool))
+    print("discovery pool size:", len(bundle.discovery_pool) if bundle.discovery_pool is not None else 0)
     print("first known classes:", list(bundle.known_classes)[: min(args.sample_count, len(bundle.known_classes))])
     print("first novel classes:", list(bundle.novel_classes)[: min(args.sample_count, len(bundle.novel_classes))])
 
@@ -808,8 +655,6 @@ def main():
         fit_teacher(args)
     elif args.command == "train_student":
         fit_student(args)
-    elif args.command == "train_discovery":
-        fit_discovery(args)
     elif args.command == "discover":
         discover(args)
     elif args.command == "inspect_data":

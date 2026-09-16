@@ -23,22 +23,10 @@ def ensure_dir(path: str | Path) -> Path:
     return path
 
 
-def _json_default(obj: Any):
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, Path):
-        return str(obj)
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-
-
 def save_json(path: str | Path, obj: Any) -> None:
     path = Path(path)
     with path.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2, default=_json_default)
+        json.dump(obj, f, ensure_ascii=False, indent=2)
 
 
 def load_json(path: str | Path) -> Any:

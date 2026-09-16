@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
 
@@ -30,7 +29,7 @@ def load_class_names(config: dict):
     try:
         root = config.get("data_root", "./data")
         return list(datasets.CIFAR100(root=root, train=True, download=False).classes)
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return None
 
 
@@ -55,7 +54,28 @@ def percentile(values, p):
     return float(np.percentile(values, p))
 
 
+def fmt_float(value, digits: int = 4) -> str:
+    if value is None:
+        return "-"
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not np.isfinite(value):
+        return "-"
+    return f"{value:.{digits}f}"
+
+
 def analyze_run(run_dir: Path):
+    if not run_dir.exists():
+        raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
+    required = [run_dir / "discovery_report.json", run_dir / "discovery_detail.json"]
+    missing = [path for path in required if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"Run {run_dir} is missing required files: "
+            + ", ".join(str(path.name) for path in missing)
+        )
     report = load_json(run_dir / "discovery_report.json")
     detail = load_json(run_dir / "discovery_detail.json")
     config_path = run_dir / "config.json"
@@ -78,22 +98,12 @@ def analyze_run(run_dir: Path):
 
     known_score = score[true_known]
     unknown_score = score[~true_known]
-    known_accept = pred_known[true_known]
-    unknown_reject = ~pred_known[~true_known]
-
     known_total = int(true_known.sum())
     unknown_total = int((~true_known).sum())
-    known_rejected = int((true_known & ~pred_known).sum())
-    unknown_false_accept = int((~true_known & pred_known).sum())
-
-    known_raw = raw_labels[true_known]
-    unknown_raw = raw_labels[~true_known]
 
     known_class_correct = 0
-    known_class_total = 0
     known_by_class = defaultdict(lambda: {"total": 0, "correct": 0, "rejected": 0})
     for rl, pk, pc in zip(raw_labels[true_known], pred_known[true_known], pred_class[true_known]):
-        known_class_total += 1
         item = known_by_class[int(rl)]
         item["total"] += 1
         if pk:
@@ -172,11 +182,26 @@ def analyze_run(run_dir: Path):
         "class_summary": {
             "known_total": known_total,
             "unknown_total": unknown_total,
-            "known_rejected": known_rejected,
-            "unknown_false_accept": unknown_false_accept,
+            "known_rejected": int((true_known & ~pred_known).sum()),
+            "unknown_false_accept": int((~true_known & pred_known).sum()),
             "known_class_correct": known_class_correct,
             "known_class_accuracy_after_accept": report.get("known_class_accuracy_after_accept"),
             "known_class_accuracy_all_known": report.get("known_class_accuracy_all_known"),
+        },
+        "candidate_pool": {
+            "count": report.get("cluster_candidate_count", 0),
+            "true_unknown_count": report.get("cluster_true_unknown_count", 0),
+            "false_reject_count": report.get("cluster_false_reject_count", 0),
+            "purity": report.get("cluster_candidate_purity", float("nan")),
+            "true_k": report.get("cluster_true_k"),
+            "estimated_k": report.get("cluster_k"),
+            "k_abs_error": report.get("cluster_k_abs_error"),
+        },
+        "cluster_config": {
+            "method": report.get("cluster_method"),
+            "feature": report.get("cluster_feature"),
+            "selection": report.get("cluster_selection"),
+            "normalized": report.get("cluster_normalized"),
         },
         "top_known_reject_classes": top_known_reject,
         "top_novel_false_accept_classes": top_novel_false_accept,
@@ -204,29 +229,24 @@ def format_run_md(item):
     lines.append(f"### {title}")
     lines.append("")
     lines.append(f"- AUROC: {m['auroc']:.4f}")
-    if m.get("aupr") is not None:
-        lines.append(f"- AUPR: {m['aupr']:.4f}")
+    lines.append(f"- AUPR: {m.get('aupr', float('nan')):.4f}")
     lines.append(f"- FPR95: {m['fpr95']:.4f}")
-    if m.get("oscr") is not None:
-        lines.append(f"- OSCR: {m['oscr']:.4f}")
+    lines.append(f"- OSCR: {m.get('oscr', float('nan')):.4f}")
     lines.append(f"- known accept rate: {m['known_accept_rate']:.4f}")
     lines.append(f"- unknown reject rate: {m['unknown_reject_rate']:.4f}")
     lines.append(f"- known class acc after accept: {m['known_class_accuracy_after_accept']:.4f}")
     lines.append(f"- known class acc all known: {m['known_class_accuracy_all_known']:.4f}")
-    if m.get("cluster_acc") is not None:
-        lines.append(f"- cluster ACC: {m['cluster_acc']:.4f}")
-    if m.get("cluster_nmi") is not None:
-        lines.append(f"- cluster NMI: {m['cluster_nmi']:.4f}")
-    if m.get("cluster_ari") is not None:
-        lines.append(f"- cluster ARI: {m['cluster_ari']:.4f}")
-    if m.get("estimated_k") is not None:
-        lines.append(
-            f"- K: estimated={m.get('estimated_k')}, true={m.get('true_k')}, abs_error={m.get('k_abs_error')}, mode={m.get('cluster_k_mode')}"
-        )
-    if m.get("unknown_detection_miss_rate") is not None:
-        lines.append(
-            f"- detection miss / cluster error: {m['unknown_detection_miss_rate']:.4f} / {m.get('cluster_error_on_filtered')}"
-        )
+    lines.append(f"- cluster NMI: {m.get('cluster_nmi', float('nan')):.4f}")
+    lines.append(f"- cluster ARI: {m.get('cluster_ari', float('nan')):.4f}")
+    pool = item["candidate_pool"]
+    lines.append(
+        f"- candidate pool: {pool['count']} samples, true unknown {pool['true_unknown_count']}, "
+        f"false rejects {pool['false_reject_count']}, purity {fmt_float(pool['purity'])}"
+    )
+    lines.append(
+        f"- cluster K: estimated {pool['estimated_k']}, true {pool['true_k']}, "
+        f"absolute error {pool['k_abs_error']}"
+    )
     lines.append("")
     lines.append("- Score distribution:")
     lines.append(
@@ -275,15 +295,23 @@ def main():
     md_lines = ["# Open-set Error Analysis", ""]
     md_lines.append("## Cross-run comparison")
     md_lines.append("")
-    md_lines.append("| run | AUROC | AUPR | FPR95 | OSCR | known acc | unknown reject | cluster ACC | estimated K |")
+    md_lines.append(
+        "| run | AUROC | AUPR | FPR95 | OSCR | known acc all known | "
+        "unknown reject rate | candidate purity | estimated K |"
+    )
     md_lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for item in items:
         m = item["metrics"]
         run_name = Path(item["run_dir"]).name
         if item.get("score_mode"):
             run_name += f" [{item['score_mode']}]"
+        pool = item["candidate_pool"]
         md_lines.append(
-            f"| {run_name} | {m['auroc']:.4f} | {m.get('aupr', float('nan')):.4f} | {m['fpr95']:.4f} | {m.get('oscr', float('nan')):.4f} | {m['known_class_accuracy_all_known']:.4f} | {m['unknown_reject_rate']:.4f} | {m.get('cluster_acc', float('nan')):.4f} | {m.get('estimated_k', 'n/a')} |"
+            f"| {run_name} | {fmt_float(m.get('auroc'))} | {fmt_float(m.get('aupr'))} | "
+            f"{fmt_float(m.get('fpr95'))} | {fmt_float(m.get('oscr'))} | "
+            f"{fmt_float(m.get('known_class_accuracy_all_known'))} | "
+            f"{fmt_float(m.get('unknown_reject_rate'))} | "
+            f"{fmt_float(pool['purity'])} | {pool['estimated_k'] or '-'} |"
         )
     md_lines.append("")
     for item in items:

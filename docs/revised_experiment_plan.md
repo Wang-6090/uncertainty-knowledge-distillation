@@ -19,18 +19,11 @@
 | C | CE + uncertainty-weighted KL | Effect of the proposed weighting |
 | D | C + feature KD | Effect of representation transfer |
 | E | D + uncertainty head + SupCon + prototype | Full representation model |
-| F | E + unlabeled discovery-pool consistency | End-to-end novel-class discovery |
 
-Run the A/B/C multi-seed protocol with:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_protocol_ablation.ps1
-```
-
-Run the discovery-pool stage after a student checkpoint exists:
+Run the table with:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_discovery_pool.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run_revised_ablation.ps1
 ```
 
 The output should be summarized with mean and standard deviation over at least
@@ -38,10 +31,10 @@ three seeds before making a final claim.
 
 ## Required reports
 
-For every row report known accuracy, AUROC, AUPR, FPR95, OSCR, known
-acceptance rate, unknown rejection rate, cluster ACC, NMI, ARI, estimated K
-and its absolute error. Also report parameter count and inference time.
-Oracle K and auto K must be stored as separate reports.
+For every row report known accuracy, AUROC, FPR95, known acceptance rate,
+unknown rejection rate, cluster ACC, NMI, and ARI. Also report parameter
+count, FLOPs or an equivalent model-size measure, and inference time for the
+ResNet-18/MobileNetV3-Small compression comparison.
 
 ## Interpretation rule
 

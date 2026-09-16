@@ -24,16 +24,10 @@ L = L_CE + a_kd L_KD + a_feat L_featKD
 ```
 
 The standard KD term is temperature-scaled KL divergence. The uncertainty KD
-term multiplies each sample's KL loss by a clipped, mean-normalized
-`exp(-u_teacher)` weight so the average distillation strength stays comparable
-to standard KD while unreliable teacher predictions are down-weighted. Feature
-KD aligns normalized teacher and student projections with cosine distance and
-remains valid for different encoder sizes.
-
-An optional discovery stage adds an unlabeled discovery pool. Each unlabeled
-image is turned into two augmented views. The student is updated with cosine
-consistency and NT-Xent on those views, and optionally with periodic K-Means
-pseudo labels kept only for high-confidence assignments.
+term multiplies each sample's KL loss by `exp(-u_teacher)`, so reliable teacher
+predictions are transferred more strongly. Feature KD aligns normalized
+teacher and student projections with cosine distance and remains valid for
+different encoder sizes.
 
 ## Uncertainty
 
@@ -59,13 +53,10 @@ choose a score or threshold.
 ## Discovery
 
 Unknown samples are filtered by the calibrated score and clustered in the
-normalized projection space. `--cluster-k oracle` uses the true novel-class
-count and must be labelled as an upper-bound experiment. `--cluster-k auto`
-estimates K from silhouette, Calinski-Harabasz and Davies-Bouldin scores over a
-sample-size range that does not use the true novel-class count. `--cluster-k
-both` writes the two reports separately. Optional `--cluster-confidence-percentile`
-keeps only high-score unknown candidates for clustering.
+normalized projection space. `--cluster-k oracle` is the known-class-count
+baseline and must be labelled as such. `--cluster-k auto` estimates the number
+of clusters using silhouette score without unknown labels; it is reported as a
+separate experiment.
 
-The two-stage detector-plus-clustering pipeline remains the default baseline.
-The discovery-pool stage is the first end-to-end NCD option and is enabled
-explicitly with `train_discovery` or `--discovery-epochs`.
+This version is still a two-stage discovery pipeline. A later NCD/GCD phase
+will add an unlabeled discovery pool and multi-view pseudo-label consistency.

@@ -40,12 +40,10 @@
 
 ## 下一步怎么做
 
-代码侧已经补上第四大点对应的模块：无标签 discovery pool、双视图一致性、裁剪归一化的不确定性 KD、温度缩放、AUPR/OSCR、以及不依赖真实未知类数的 auto K。下一步实验是：
-
-1. 用 `scripts/run_protocol_ablation.ps1` 补 3 个 seed 的 A/B/C。
-2. 看 `teacher_uncertainty_diagnostics.json`，确认不确定性是否跟踪教师错误。
-3. 若 C 稳定优于 B，再开 Feature KD / SupCon / Prototype。
-4. 用 `scripts/run_discovery_pool.ps1` 做发现池一致性训练，并分开报告 oracle K 与 auto K。
+1. 补 3 个 seed，确认结果是否稳定。
+2. 决定主线版本，保留最稳的蒸馏和检测组合。
+3. 增加真正的新类发现训练：无标签发现池 + 双视图一致性 + 自动估计 K。
+4. 再做轻量学生实验，补参数量、推理速度和压缩收益。
 
 ## 组员怎么跟进
 

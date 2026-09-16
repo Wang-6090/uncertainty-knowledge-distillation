@@ -4,10 +4,12 @@ from typing import Dict
 
 import numpy as np
 import torch
-from sklearn.cluster import KMeans
+from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
+from sklearn.decomposition import PCA
 from sklearn.metrics import (
     calinski_harabasz_score,
     davies_bouldin_score,
+    normalized_mutual_info_score,
     silhouette_score,
 )
 from torch.utils.data import DataLoader
@@ -15,16 +17,14 @@ from tqdm import tqdm
 
 from .losses import (
     classification_loss,
-    cluster_prototype_consistency_loss,
+    discovery_unknown_loss,
+    discovery_view_loss,
     distillation_loss,
     feature_distillation_loss,
-    nt_xent_loss,
-    pseudo_label_consistency_loss,
     pseudo_unknown_loss,
     prototype_alignment_loss,
     supervised_contrastive_loss,
     uncertainty_alignment_loss,
-    view_consistency_loss,
 )
 from .metrics import (
     clustering_report,
@@ -32,22 +32,13 @@ from .metrics import (
     compute_auroc,
     compute_fpr95,
     compute_oscr,
-    detection_cluster_split,
-    expected_calibration_error,
     open_set_confusion,
 )
 from .utils import AverageMeter
 
 
 def build_loader(dataset, batch_size: int, shuffle: bool, num_workers: int = 4):
-    pin_memory = torch.cuda.is_available()
-    return DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
 
 
 def make_pseudo_unknown(
@@ -162,9 +153,12 @@ def train_one_epoch_student(
     uncertainty_target_mode: str = "confidence",
     temperature: float = 2.0,
     kd_mode: str = "uncertainty",
-    kd_weight_clip_min: float = 0.05,
-    kd_weight_clip_max: float = 1.0,
-    normalize_kd_weights: bool = True,
+    uncertainty_weight_mode: str = "raw",
+    discovery_loader=None,
+    alpha_discovery: float = 0.0,
+    alpha_discovery_unknown: float = 0.0,
+    discovery_loss_mode: str = "nt_xent",
+    discovery_temperature: float = 0.2,
 ):
     student.train()
     teacher.eval()
@@ -175,6 +169,9 @@ def train_one_epoch_student(
     sc_meter = AverageMeter()
     proto_meter = AverageMeter()
     pseudo_meter = AverageMeter()
+    discovery_meter = AverageMeter()
+    discovery_unknown_meter = AverageMeter()
+    discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     for batch in tqdm(loader, desc="student-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
         images = images.to(device)
@@ -192,17 +189,14 @@ def train_one_epoch_student(
             teacher_uncertainty=t_out["uncertainty"],
             temperature=temperature,
             uncertainty_weighted=(kd_mode == "uncertainty"),
-            weight_clip_min=kd_weight_clip_min,
-            weight_clip_max=kd_weight_clip_max,
-            normalize_weights=normalize_kd_weights,
+            uncertainty_weight_mode=uncertainty_weight_mode,
         )
+        feature_teacher_uncertainty = t_out["uncertainty"] if kd_mode == "uncertainty" else None
         loss_feat_kd = feature_distillation_loss(
             s_out["proj"],
             t_out["proj"],
-            teacher_uncertainty=t_out["uncertainty"] if kd_mode == "uncertainty" else None,
-            weight_clip_min=kd_weight_clip_min,
-            weight_clip_max=kd_weight_clip_max,
-            normalize_weights=normalize_kd_weights,
+            teacher_uncertainty=feature_teacher_uncertainty,
+            uncertainty_weight_mode=uncertainty_weight_mode,
         )
         loss_supcon = supervised_contrastive_loss(s_out["proj"], labels)
         loss_proto = prototype_alignment_loss(s_out["features"], labels, student.classifier.weight)
@@ -211,6 +205,28 @@ def train_one_epoch_student(
         pseudo_features = pseudo_out["features"] + pseudo_feature_noise * torch.randn_like(pseudo_out["features"])
         pseudo_logits, pseudo_uncertainty = pseudo_forward_from_features(student, pseudo_features)
         loss_pseudo = pseudo_unknown_loss(pseudo_logits, pseudo_uncertainty)
+        loss_discovery = s_out["logits"].new_tensor(0.0)
+        loss_discovery_unknown = s_out["logits"].new_tensor(0.0)
+        if discovery_iter is not None and (alpha_discovery > 0.0 or alpha_discovery_unknown > 0.0):
+            try:
+                discovery_images = next(discovery_iter)
+            except StopIteration:
+                discovery_iter = iter(discovery_loader)
+                discovery_images = next(discovery_iter)
+            first_view, second_view = discovery_images
+            first_out = student(first_view.to(device))
+            second_out = student(second_view.to(device))
+            loss_discovery = discovery_view_loss(
+                first_out["proj"],
+                second_out["proj"],
+                mode=discovery_loss_mode,
+                temperature=discovery_temperature,
+            )
+            if alpha_discovery_unknown > 0.0:
+                loss_discovery_unknown = 0.5 * (
+                    discovery_unknown_loss(first_out["logits"], first_out["uncertainty"])
+                    + discovery_unknown_loss(second_out["logits"], second_out["uncertainty"])
+                )
         loss = (
             loss_ce
             + alpha_unc * loss_unc
@@ -219,6 +235,8 @@ def train_one_epoch_student(
             + alpha_supcon * loss_supcon
             + alpha_proto * loss_proto
             + alpha_pseudo * loss_pseudo
+            + alpha_discovery * loss_discovery
+            + alpha_discovery_unknown * loss_discovery_unknown
         )
         optimizer.zero_grad()
         loss.backward()
@@ -230,6 +248,8 @@ def train_one_epoch_student(
         sc_meter.update(loss_supcon.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
+        discovery_meter.update(loss_discovery.item(), images.size(0))
+        discovery_unknown_meter.update(loss_discovery_unknown.item(), images.size(0))
     return {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
@@ -238,199 +258,9 @@ def train_one_epoch_student(
         "supcon": sc_meter.avg,
         "proto": proto_meter.avg,
         "pseudo": pseudo_meter.avg,
+        "discovery": discovery_meter.avg,
+        "discovery_unknown": discovery_unknown_meter.avg,
     }
-
-
-def _l2_normalize(features: np.ndarray) -> np.ndarray:
-    features = np.asarray(features, dtype=np.float64)
-    norms = np.linalg.norm(features, axis=1, keepdims=True)
-    return features / np.clip(norms, 1e-8, None)
-
-
-def assign_discovery_pseudo_labels(
-    features: np.ndarray,
-    num_clusters: int | str,
-    max_clusters: int | None = None,
-    confidence_percentile: float = 50.0,
-    criterion: str = "combined",
-):
-    """Cluster unlabeled discovery-pool features and keep only stable assignments."""
-    features = _l2_normalize(features)
-    n = len(features)
-    if n == 0:
-        empty = np.zeros((0,), dtype=np.int64)
-        return empty, empty, np.zeros((0, 0), dtype=np.float32), {
-            "selected_k": 0,
-            "n_confident": 0,
-        }
-    if isinstance(num_clusters, str) and num_clusters == "auto":
-        selected_k, criterion_scores = estimate_num_clusters(
-            features,
-            max_clusters=max_clusters,
-            criterion=criterion,
-        )
-    else:
-        selected_k = int(max(1, min(int(num_clusters), n)))
-        criterion_scores = {}
-    km = KMeans(n_clusters=max(1, selected_k), n_init=10, random_state=42)
-    fitted = km.fit(features)
-    labels = fitted.labels_.astype(np.int64)
-    centroids = fitted.cluster_centers_.astype(np.float32)
-    distances = np.linalg.norm(features - centroids[labels], axis=1)
-    threshold = float(np.percentile(distances, confidence_percentile)) if n > 1 else float(distances[0])
-    confident = distances <= threshold
-    cluster_ids = np.full(n, -1, dtype=np.int64)
-    cluster_ids[confident] = labels[confident]
-    return cluster_ids, labels, centroids, {
-        "selected_k": int(selected_k),
-        "n_confident": int(confident.sum()),
-        "confidence_percentile": float(confidence_percentile),
-        "distance_threshold": float(threshold),
-        "criterion_scores": criterion_scores,
-    }
-
-
-@torch.no_grad()
-def collect_discovery_features(model, loader, device):
-    model.eval()
-    n = len(loader.dataset)
-    projections = None
-    for batch in tqdm(loader, desc="discovery-features", leave=False):
-        images, labels, raw_labels, is_known, sample_ids = batch
-        images = images.to(device)
-        sample_ids = np.asarray(sample_ids, dtype=np.int64)
-        out = model(images)
-        proj = out["proj"].cpu().numpy()
-        if projections is None:
-            projections = np.zeros((n, proj.shape[1]), dtype=np.float32)
-        projections[sample_ids] = proj
-    if projections is None:
-        return np.zeros((0, 0), dtype=np.float32), np.zeros((0,), dtype=np.int64)
-    return projections, np.arange(n, dtype=np.int64)
-
-
-def train_one_epoch_discovery(
-    student,
-    known_loader,
-    discovery_loader,
-    optimizer,
-    device,
-    teacher=None,
-    cluster_ids: np.ndarray | None = None,
-    cluster_centroids: np.ndarray | None = None,
-    alpha_unc: float = 0.1,
-    alpha_kd: float = 1.0,
-    alpha_feat_kd: float = 0.0,
-    alpha_supcon: float = 0.1,
-    alpha_proto: float = 0.0,
-    alpha_consistency: float = 0.5,
-    alpha_contrast: float = 0.1,
-    alpha_cluster: float = 0.0,
-    uncertainty_target_mode: str = "confidence",
-    temperature: float = 2.0,
-    kd_mode: str = "uncertainty",
-    kd_weight_clip_min: float = 0.05,
-    kd_weight_clip_max: float = 1.0,
-    normalize_kd_weights: bool = True,
-    contrast_temperature: float = 0.2,
-):
-    """Joint known-class training and unlabeled discovery-pool consistency."""
-    student.train()
-    if teacher is not None:
-        teacher.eval()
-    meters = {name: AverageMeter() for name in ["ce", "kd", "feat_kd", "unc", "supcon", "proto", "consistency", "contrast", "cluster"]}
-    known_iter = iter(known_loader)
-    cluster_ids_t = None
-    centroids_t = None
-    if cluster_ids is not None:
-        cluster_ids_t = torch.as_tensor(cluster_ids, dtype=torch.long, device=device)
-    if cluster_centroids is not None and len(cluster_centroids) > 0:
-        centroids_t = torch.as_tensor(cluster_centroids, dtype=torch.float32, device=device)
-
-    for batch in tqdm(discovery_loader, desc="discovery-train", leave=False):
-        view1, view2, _mapped, _raw, _known, real_index = batch
-        view1 = view1.to(device)
-        view2 = view2.to(device)
-        try:
-            known_batch = next(known_iter)
-        except StopIteration:
-            known_iter = iter(known_loader)
-            known_batch = next(known_iter)
-        images, labels, *_ = known_batch
-        images = images.to(device)
-        labels = labels.to(device)
-
-        s_out = student(images)
-        loss_ce = classification_loss(s_out["logits"], labels)
-        loss_unc = uncertainty_alignment_loss(
-            s_out["uncertainty"], s_out["logits"], labels, target_mode=uncertainty_target_mode
-        )
-        loss_supcon = supervised_contrastive_loss(s_out["proj"], labels)
-        loss_proto = prototype_alignment_loss(s_out["features"], labels, student.classifier.weight)
-        loss_kd = s_out["logits"].new_tensor(0.0)
-        loss_feat_kd = s_out["logits"].new_tensor(0.0)
-        if teacher is not None:
-            with torch.no_grad():
-                t_out = teacher(images)
-            loss_kd = distillation_loss(
-                s_out["logits"],
-                t_out["logits"],
-                teacher_uncertainty=t_out["uncertainty"],
-                temperature=temperature,
-                uncertainty_weighted=(kd_mode == "uncertainty"),
-                weight_clip_min=kd_weight_clip_min,
-                weight_clip_max=kd_weight_clip_max,
-                normalize_weights=normalize_kd_weights,
-            )
-            loss_feat_kd = feature_distillation_loss(
-                s_out["proj"],
-                t_out["proj"],
-                teacher_uncertainty=t_out["uncertainty"] if kd_mode == "uncertainty" else None,
-                weight_clip_min=kd_weight_clip_min,
-                weight_clip_max=kd_weight_clip_max,
-                normalize_weights=normalize_kd_weights,
-            )
-
-        out_a = student(view1)
-        out_b = student(view2)
-        loss_consistency = view_consistency_loss(out_a["proj"], out_b["proj"])
-        loss_contrast = nt_xent_loss(out_a["proj"], out_b["proj"], temperature=contrast_temperature)
-        loss_cluster = s_out["logits"].new_tensor(0.0)
-        if cluster_ids_t is not None and centroids_t is not None and centroids_t.numel() > 0:
-            batch_ids = cluster_ids_t[real_index.to(device)]
-            proto = torch.nn.functional.normalize(centroids_t, dim=-1)
-            logits_a = torch.matmul(torch.nn.functional.normalize(out_a["proj"], dim=-1), proto.T)
-            logits_b = torch.matmul(torch.nn.functional.normalize(out_b["proj"], dim=-1), proto.T)
-            loss_cluster = pseudo_label_consistency_loss(logits_a, logits_b, batch_ids)
-            loss_cluster = loss_cluster + cluster_prototype_consistency_loss(
-                out_a["proj"], out_b["proj"], batch_ids, centroids_t
-            )
-
-        loss = (
-            loss_ce
-            + alpha_unc * loss_unc
-            + alpha_kd * loss_kd
-            + alpha_feat_kd * loss_feat_kd
-            + alpha_supcon * loss_supcon
-            + alpha_proto * loss_proto
-            + alpha_consistency * loss_consistency
-            + alpha_contrast * loss_contrast
-            + alpha_cluster * loss_cluster
-        )
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        n = images.size(0)
-        meters["ce"].update(loss_ce.item(), n)
-        meters["kd"].update(loss_kd.item(), n)
-        meters["feat_kd"].update(loss_feat_kd.item(), n)
-        meters["unc"].update(loss_unc.item(), n)
-        meters["supcon"].update(loss_supcon.item(), n)
-        meters["proto"].update(loss_proto.item(), n)
-        meters["consistency"].update(loss_consistency.item(), view1.size(0))
-        meters["contrast"].update(loss_contrast.item(), view1.size(0))
-        meters["cluster"].update(loss_cluster.item(), view1.size(0))
-    return {key: meter.avg for key, meter in meters.items()}
 
 
 @torch.no_grad()
@@ -449,26 +279,6 @@ def evaluate_classification(model, loader, device):
             correct += (pred[mask] == labels[mask]).sum().item()
             total += mask.sum().item()
     return {"known_acc": correct / max(total, 1)}
-
-
-@torch.no_grad()
-def collect_simple_outputs(model, loader, device):
-    """One-pass logits and uncertainty without MC Dropout."""
-    model.eval()
-    logits = []
-    uncertainty = []
-    labels = []
-    for batch in tqdm(loader, desc="simple-extract", leave=False):
-        images, y, *_ = batch
-        out = model(images.to(device))
-        logits.append(out["logits"].cpu())
-        uncertainty.append(out["uncertainty"].cpu())
-        labels.append(y if torch.is_tensor(y) else torch.as_tensor(y))
-    return {
-        "logits": torch.cat(logits).numpy(),
-        "uncertainty": torch.cat(uncertainty).numpy(),
-        "labels": torch.cat(labels).numpy(),
-    }
 
 
 @torch.no_grad()
@@ -586,10 +396,6 @@ def compute_mahalanobis_distance(features: np.ndarray, gaussian_stats: Dict[str,
     return distances.min(axis=1)
 
 
-def _zscore(values: np.ndarray, stats: Dict[str, float]) -> np.ndarray:
-    return (np.asarray(values, dtype=float) - stats["mean"]) / stats["std"]
-
-
 def compute_open_score(
     outputs: Dict[str, np.ndarray],
     prototypes: np.ndarray | None = None,
@@ -597,7 +403,6 @@ def compute_open_score(
     score_mode: str = "full",
     normalization: Dict[str, Dict[str, float]] | None = None,
     gaussian_stats: Dict[str, np.ndarray] | None = None,
-    temperature: float = 1.0,
 ):
     entropy = outputs["entropy"]
     epistemic = outputs["epistemic"]
@@ -608,7 +413,6 @@ def compute_open_score(
     mahalanobis = None
     if gaussian_stats is not None:
         mahalanobis = compute_mahalanobis_distance(outputs["features"], gaussian_stats)
-    temperature = max(float(temperature), 1e-3)
 
     if score_mode == "full":
         score = weights[0] * entropy + weights[1] * epistemic + weights[2] * aleatoric
@@ -617,7 +421,8 @@ def compute_open_score(
     elif score_mode == "max_softmax":
         score = 1.0 - outputs["probs"].max(axis=1)
     elif score_mode == "energy":
-        logits = np.asarray(outputs["logits"], dtype=float)
+        logits = outputs["logits"]
+        temperature = 1.0
         score = -temperature * np.logaddexp.reduce(logits / temperature, axis=1)
     elif score_mode == "entropy_only":
         score = entropy
@@ -663,15 +468,6 @@ def compute_open_score(
             + (mahalanobis - normalization["mahalanobis"]["mean"])
             / normalization["mahalanobis"]["std"]
         )
-    elif score_mode == "zscore_fusion":
-        if normalization is None:
-            raise ValueError("zscore_fusion requires known-validation normalization")
-        parts = [_zscore(entropy, normalization["entropy"])]
-        if proto_dist is not None and "proto_dist" in normalization:
-            parts.append(_zscore(proto_dist, normalization["proto_dist"]))
-        if mahalanobis is not None and "mahalanobis" in normalization:
-            parts.append(_zscore(mahalanobis, normalization["mahalanobis"]))
-        score = np.mean(np.stack(parts, axis=0), axis=0)
     else:
         raise ValueError(f"Unsupported score_mode: {score_mode}")
 
@@ -684,21 +480,21 @@ def fit_score_normalization(
     gaussian_stats: Dict[str, np.ndarray] | None = None,
 ) -> Dict[str, Dict[str, float]]:
     """Fit score statistics using known validation samples only."""
-    if prototypes is None:
-        raise ValueError("Score normalization requires prototypes")
-    _, proto_dist = compute_open_score(
-        outputs_known,
-        prototypes=prototypes,
-        score_mode="proto_only",
-    )
     entropy = np.asarray(outputs_known["entropy"], dtype=float)
-    proto_dist = np.asarray(proto_dist, dtype=float)
 
     def stats(values):
+        values = np.asarray(values, dtype=float)
         std = float(np.std(values))
         return {"mean": float(np.mean(values)), "std": max(std, 1e-6)}
 
-    result = {"entropy": stats(entropy), "proto_dist": stats(proto_dist)}
+    result = {"entropy": stats(entropy)}
+    if prototypes is not None:
+        _, proto_dist = compute_open_score(
+            outputs_known,
+            prototypes=prototypes,
+            score_mode="proto_only",
+        )
+        result["proto_dist"] = stats(proto_dist)
     if gaussian_stats is not None:
         result["mahalanobis"] = stats(
             compute_mahalanobis_distance(outputs_known["features"], gaussian_stats)
@@ -710,261 +506,153 @@ def calibrate_threshold(scores_known: np.ndarray, percentile: float = 95.0) -> f
     return float(np.percentile(scores_known, percentile))
 
 
-def estimate_num_clusters(
+def prepare_cluster_features(
     features: np.ndarray,
-    max_clusters: int | None = None,
-    min_clusters: int = 2,
-    criterion: str = "combined",
-):
-    """Estimate K from internal cluster validity scores only.
+    use_pca: bool = False,
+    pca_dim: int = 32,
+    whiten: bool = True,
+) -> np.ndarray:
+    """Prepare features for clustering without using unknown labels."""
+    values = np.asarray(features, dtype=np.float32)
+    if values.ndim != 2 or len(values) == 0:
+        return values
+    values = values / np.maximum(np.linalg.norm(values, axis=1, keepdims=True), 1e-12)
+    if use_pca and len(values) > 2 and values.shape[1] > 1:
+        n_components = min(int(pca_dim), values.shape[1], len(values) - 1)
+        if n_components >= 2:
+            values = PCA(n_components=n_components, whiten=whiten, random_state=42).fit_transform(values)
+            values = values / np.maximum(np.linalg.norm(values, axis=1, keepdims=True), 1e-12)
+    return values
 
-    The search range never uses the true unknown class count. ``max_clusters``
-    is an optional upper bound from sample size or a user-provided search
-    window, not the oracle novel-class count.
-    """
+
+def cluster_unknown_samples(
+    features: np.ndarray,
+    num_clusters: int,
+    method: str = "kmeans",
+    n_init: int = 10,
+    random_state: int = 42,
+):
+    """Cluster candidate unknown samples with a selectable label-free method."""
+    values = np.asarray(features, dtype=np.float32)
+    num_clusters = int(max(1, min(num_clusters, len(values))))
+    if num_clusters == 1 or len(values) <= 1:
+        return np.zeros(len(values), dtype=np.int64)
+    if method == "kmeans":
+        return KMeans(
+            n_clusters=num_clusters,
+            n_init=max(1, int(n_init)),
+            random_state=random_state,
+        ).fit_predict(values)
+    if method == "agglomerative":
+        return AgglomerativeClustering(n_clusters=num_clusters, linkage="ward").fit_predict(values)
+    if method == "spectral":
+        neighbors = max(1, min(10, len(values) - 1))
+        return SpectralClustering(
+            n_clusters=num_clusters,
+            affinity="nearest_neighbors",
+            n_neighbors=neighbors,
+            assign_labels="kmeans",
+            n_init=max(1, int(n_init)),
+            random_state=random_state,
+        ).fit_predict(values)
+    raise ValueError(f"Unsupported cluster method: {method}")
+
+
+def _scale_metric(values: list[float], higher_is_better: bool) -> np.ndarray:
+    array = np.asarray(values, dtype=float)
+    if not higher_is_better:
+        array = -array
+    if np.ptp(array) < 1e-12:
+        return np.ones_like(array)
+    return (array - array.min()) / (array.max() - array.min())
+
+
+def evaluate_cluster_candidates(
+    features: np.ndarray,
+    max_clusters: int,
+    method: str = "kmeans",
+    selection: str = "silhouette",
+    n_init: int = 10,
+    stability_repeats: int = 5,
+    random_state: int = 42,
+) -> tuple[int, list[dict]]:
+    """Select K using only candidate-pool geometry and report diagnostics."""
     n = len(features)
     if n < 4:
-        selected = max(1, n)
-        return selected, {"selected_k": selected, "reason": "too_few_samples"}
-    default_upper = max(min_clusters, int(np.sqrt(n)))
-    if max_clusters is None:
-        upper = min(n - 1, max(default_upper, 8), 30)
-    else:
-        upper = min(int(max_clusters), n - 1, 30)
-    if upper < min_clusters:
-        return 1, {"selected_k": 1, "reason": "upper_lt_min"}
-    values = _l2_normalize(np.asarray(features))
+        return max(1, n), []
+    upper = min(int(max_clusters), n - 1, 20)
+    if upper < 2:
+        return 1, []
+    values = np.asarray(features, dtype=np.float32)
+    eval_values = values
+    eval_indices = np.arange(n)
     if n > 2000:
-        rng = np.random.default_rng(42)
-        values = values[rng.choice(n, 2000, replace=False)]
-    records = []
-    for k in range(min_clusters, upper + 1):
-        try:
-            labels = KMeans(n_clusters=k, n_init=5, random_state=42).fit_predict(values)
-            if len(np.unique(labels)) < 2:
-                continue
-            sil = float(silhouette_score(values, labels))
-            ch = float(calinski_harabasz_score(values, labels))
-            db = float(davies_bouldin_score(values, labels))
-        except ValueError:
+        rng = np.random.default_rng(random_state)
+        eval_indices = rng.choice(n, 2000, replace=False)
+        eval_values = values[eval_indices]
+
+    rows: list[dict] = []
+    for k in range(2, upper + 1):
+        labels = cluster_unknown_samples(values, k, method, n_init, random_state)
+        eval_labels = labels[eval_indices]
+        if len(np.unique(eval_labels)) < 2:
             continue
-        records.append({"k": int(k), "silhouette": sil, "calinski_harabasz": ch, "davies_bouldin": db})
-    if not records:
-        return min_clusters, {"selected_k": min_clusters, "reason": "no_valid_k"}
+        row = {
+            "k": int(k),
+            "silhouette": float(silhouette_score(eval_values, eval_labels)),
+            "calinski_harabasz": float(calinski_harabasz_score(eval_values, eval_labels)),
+            "davies_bouldin": float(davies_bouldin_score(eval_values, eval_labels)),
+        }
+        repeat_labels = []
+        for repeat in range(max(1, int(stability_repeats))):
+            repeat_labels.append(
+                cluster_unknown_samples(
+                    values, k, method, n_init, random_state + repeat + 1
+                )[eval_indices]
+            )
+        stability_values = [
+            normalized_mutual_info_score(repeat_labels[i], repeat_labels[j])
+            for i in range(len(repeat_labels))
+            for j in range(i + 1, len(repeat_labels))
+        ]
+        row["stability_nmi"] = float(np.mean(stability_values)) if stability_values else 1.0
+        rows.append(row)
 
-    def _z(key, invert=False):
-        arr = np.asarray([row[key] for row in records], dtype=float)
-        std = float(arr.std()) if arr.size > 1 else 1.0
-        std = max(std, 1e-6)
-        values_z = (arr - float(arr.mean())) / std
-        return -values_z if invert else values_z
-
-    if criterion == "silhouette":
-        scores = _z("silhouette")
-    elif criterion == "calinski_harabasz":
-        scores = _z("calinski_harabasz")
-    elif criterion == "davies_bouldin":
-        scores = _z("davies_bouldin", invert=True)
+    if not rows:
+        return 1, []
+    silhouette = _scale_metric([row["silhouette"] for row in rows], True)
+    ch = _scale_metric([row["calinski_harabasz"] for row in rows], True)
+    db = _scale_metric([row["davies_bouldin"] for row in rows], False)
+    stability = np.asarray([row["stability_nmi"] for row in rows], dtype=float)
+    internal = 0.5 * silhouette + 0.25 * ch + 0.25 * db
+    if selection == "silhouette":
+        combined = silhouette
+    elif selection == "stability":
+        combined = 0.5 * internal + 0.5 * stability
+    elif selection == "composite":
+        combined = internal
     else:
-        scores = _z("silhouette") + _z("calinski_harabasz") + _z("davies_bouldin", invert=True)
-    best_idx = int(np.argmax(scores))
-    selected = int(records[best_idx]["k"])
-    return selected, {
-        "selected_k": selected,
-        "criterion": criterion,
-        "candidates": records,
-        "combined_scores": [float(x) for x in scores],
-    }
+        raise ValueError(f"Unsupported cluster selection: {selection}")
+    for row, internal_value, value in zip(rows, internal, combined):
+        row["internal_score"] = float(internal_value)
+        row["selection_score"] = float(value)
+    best_index = int(np.argmax(combined))
+    return int(rows[best_index]["k"]), rows
 
 
-def fit_temperature_scaling(logits: np.ndarray, labels: np.ndarray, max_iter: int = 50) -> float:
-    """Fit a scalar temperature on known validation logits."""
-    known = np.asarray(labels) >= 0
-    if known.sum() == 0:
-        return 1.0
-    logit_t = torch.as_tensor(logits[known], dtype=torch.float32)
-    label_t = torch.as_tensor(labels[known], dtype=torch.long)
-    log_t = torch.nn.Parameter(torch.zeros(()))
-    optim = torch.optim.LBFGS([log_t], lr=0.25, max_iter=max_iter)
-
-    def closure():
-        optim.zero_grad()
-        temperature = log_t.exp().clamp(min=0.05, max=20.0)
-        loss = torch.nn.functional.cross_entropy(logit_t / temperature, label_t)
-        loss.backward()
-        return loss
-
-    try:
-        optim.step(closure)
-    except RuntimeError:
-        return 1.0
-    return float(log_t.exp().clamp(min=0.05, max=20.0).item())
-
-
-def apply_temperature(logits: np.ndarray, temperature: float) -> np.ndarray:
-    logits = np.asarray(logits, dtype=np.float64)
-    temperature = max(float(temperature), 1e-3)
-    shifted = logits / temperature
-    shifted = shifted - shifted.max(axis=1, keepdims=True)
-    exp = np.exp(shifted)
-    return exp / np.clip(exp.sum(axis=1, keepdims=True), 1e-8, None)
-
-
-def teacher_uncertainty_diagnostics(
-    teacher_uncertainty: np.ndarray,
-    teacher_logits: np.ndarray,
-    labels: np.ndarray,
-) -> Dict[str, float]:
-    """Check whether teacher uncertainty tracks classification error."""
-    labels = np.asarray(labels)
-    known = labels >= 0
-    if known.sum() == 0:
-        return {"n": 0}
-    uncertainty = np.asarray(teacher_uncertainty, dtype=float)[known]
-    logits = np.asarray(teacher_logits)[known]
-    pred = logits.argmax(axis=1)
-    error = (pred != labels[known]).astype(float)
-    confidence = apply_temperature(logits, 1.0).max(axis=1)
-    if uncertainty.std() < 1e-8 or error.std() < 1e-8:
-        corr_error = float("nan")
-    else:
-        corr_error = float(np.corrcoef(uncertainty, error)[0, 1])
-    if uncertainty.std() < 1e-8 or confidence.std() < 1e-8:
-        corr_conf = float("nan")
-    else:
-        corr_conf = float(np.corrcoef(uncertainty, confidence)[0, 1])
-    return {
-        "n": int(known.sum()),
-        "uncertainty_mean": float(uncertainty.mean()),
-        "uncertainty_std": float(uncertainty.std()),
-        "error_rate": float(error.mean()),
-        "corr_with_error": corr_error,
-        "corr_with_confidence": corr_conf,
-        "ece": expected_calibration_error(confidence, 1.0 - error),
-    }
-
-
-def cluster_unknown_samples(features: np.ndarray, num_clusters: int):
-    features = _l2_normalize(features)
-    num_clusters = int(max(1, min(num_clusters, len(features))))
-    if num_clusters == 1:
-        return np.zeros(len(features), dtype=np.int64)
-    km = KMeans(n_clusters=num_clusters, n_init=10, random_state=42)
-    return km.fit_predict(features)
-
-
-def count_parameters(model) -> int:
-    return int(sum(p.numel() for p in model.parameters()))
-
-
-def measure_inference_time(model, loader, device, max_batches: int = 10) -> Dict[str, float]:
-    model.eval()
-    times = []
-    n_images = 0
-    with torch.no_grad():
-        for i, batch in enumerate(loader):
-            if i >= max_batches:
-                break
-            images = batch[0].to(device)
-            if device.type == "cuda":
-                torch.cuda.synchronize()
-            start = torch.cuda.Event(enable_timing=True) if device.type == "cuda" else None
-            if start is not None:
-                end = torch.cuda.Event(enable_timing=True)
-                start.record()
-                model(images)
-                end.record()
-                torch.cuda.synchronize()
-                times.append(start.elapsed_time(end) / 1000.0)
-            else:
-                import time
-
-                t0 = time.perf_counter()
-                model(images)
-                times.append(time.perf_counter() - t0)
-            n_images += images.size(0)
-    total = float(sum(times)) if times else float("nan")
-    return {
-        "batches": len(times),
-        "images": int(n_images),
-        "seconds": total,
-        "ms_per_image": float(1000.0 * total / max(n_images, 1)) if times else float("nan"),
-    }
-
-
-def apply_temperature_to_outputs(outputs: Dict[str, np.ndarray], temperature: float) -> Dict[str, np.ndarray]:
-    calibrated = dict(outputs)
-    probs = apply_temperature(outputs["logits"], temperature)
-    calibrated["probs"] = probs
-    calibrated["entropy"] = -(probs * np.log(np.clip(probs, 1e-8, None))).sum(axis=1)
-    calibrated["temperature"] = np.asarray(temperature)
-    return calibrated
-
-
-SCORE_COMPARE_MODES = [
-    "max_softmax",
-    "energy",
-    "entropy_only",
-    "proto_only",
-    "mahalanobis",
-    "entropy_proto",
-    "entropy_mahalanobis",
-    "normalized_entropy_proto",
-    "normalized_entropy_mahalanobis",
-    "zscore_fusion",
-]
-
-
-def compare_score_modes(
-    outputs_val,
-    outputs_test,
-    prototypes,
-    gaussian_stats,
-    normalization,
-    temperature: float = 1.0,
+def estimate_num_clusters(
+    features: np.ndarray,
+    max_clusters: int,
+    method: str = "kmeans",
+    selection: str = "silhouette",
+    n_init: int = 10,
+    stability_repeats: int = 5,
 ):
-    """Evaluate each score on the test set after known-val thresholding.
-
-    This uses test labels only for reporting, never for selecting a threshold.
-    """
-    rows = []
-    for score_mode in SCORE_COMPARE_MODES:
-        try:
-            scores_val, _ = compute_open_score(
-                outputs_val,
-                prototypes=prototypes,
-                score_mode=score_mode,
-                normalization=normalization,
-                gaussian_stats=gaussian_stats,
-                temperature=temperature,
-            )
-            scores_test, _ = compute_open_score(
-                outputs_test,
-                prototypes=prototypes,
-                score_mode=score_mode,
-                normalization=normalization,
-                gaussian_stats=gaussian_stats,
-                temperature=temperature,
-            )
-        except ValueError:
-            continue
-        threshold = calibrate_threshold(scores_val, percentile=95.0)
-        known_mask = np.asarray(outputs_test["is_known"]).astype(bool)
-        open_labels = (~known_mask).astype(int)
-        pred_known = scores_test <= threshold
-        pred_class = outputs_test["logits"].argmax(axis=1)
-        rows.append(
-            {
-                "score_mode": score_mode,
-                "auroc": float(compute_auroc(open_labels, scores_test)),
-                "aupr": float(compute_aupr(open_labels, scores_test)),
-                "fpr95": float(compute_fpr95(open_labels, scores_test)),
-                "oscr": float(compute_oscr(known_mask, scores_test, pred_class, outputs_test["labels"])),
-                "unknown_reject_rate": float(((~known_mask) & (~pred_known)).sum() / max(int((~known_mask).sum()), 1)),
-            }
-        )
-    rows.sort(key=lambda x: (x["auroc"] if x["auroc"] == x["auroc"] else -1.0), reverse=True)
-    return rows
+    """Backward-compatible K estimator; diagnostics are available separately."""
+    selected, _ = evaluate_cluster_candidates(
+        features, max_clusters, method, selection, n_init, stability_repeats
+    )
+    return selected
 
 
 def run_discovery(
@@ -976,9 +664,14 @@ def run_discovery(
     normalization: Dict[str, Dict[str, float]] | None = None,
     gaussian_stats: Dict[str, np.ndarray] | None = None,
     cluster_k: int | str = "oracle",
-    temperature: float = 1.0,
-    cluster_confidence_percentile: float = 0.0,
-    k_criterion: str = "combined",
+    cluster_method: str = "kmeans",
+    cluster_feature: str = "projection",
+    cluster_selection: str = "silhouette",
+    cluster_pca_dim: int = 32,
+    cluster_normalize: bool = False,
+    cluster_whiten: bool = True,
+    cluster_n_init: int = 10,
+    cluster_stability_repeats: int = 5,
 ):
     entropy = outputs["entropy"]
     epistemic = outputs["epistemic"]
@@ -989,7 +682,6 @@ def run_discovery(
         score_mode=score_mode,
         normalization=normalization,
         gaussian_stats=gaussian_stats,
-        temperature=temperature,
     )
     proto_dist = np.zeros_like(score) if proto_dist is None else proto_dist
     mahalanobis = (
@@ -1000,64 +692,107 @@ def run_discovery(
     pred_known = score <= threshold
     known_mask = outputs["is_known"].astype(bool)
     open_labels = (~known_mask).astype(int)
-    auroc = float(compute_auroc(open_labels, score))
-    aupr = float(compute_aupr(open_labels, score))
-    fpr95 = float(compute_fpr95(open_labels, score))
+    auroc = compute_auroc(open_labels, score)
+    aupr = compute_aupr(open_labels, score)
+    fpr95 = compute_fpr95(open_labels, score)
     open_confusion = open_set_confusion(known_mask, pred_known)
     pred_class = outputs["logits"].argmax(axis=1)
     true_labels = outputs["labels"]
-    oscr = compute_oscr(known_mask, score, pred_class, true_labels)
+    class_correct = pred_class == true_labels
+    oscr = compute_oscr(known_mask, pred_known, class_correct, score)
     known_class_correct = int(np.sum(known_mask & pred_known & (pred_class == true_labels)))
     known_class_wrong = int(np.sum(known_mask & pred_known & (pred_class != true_labels)))
     known_total = int(known_mask.sum())
-    known_conf = np.asarray(outputs["probs"]).max(axis=1)[known_mask]
-    known_correctness = (pred_class[known_mask] == true_labels[known_mask]).astype(float)
     result = {
         "auroc": auroc,
         "aupr": aupr,
         "fpr95": fpr95,
         "oscr": oscr,
-        "known_ece": expected_calibration_error(known_conf, known_correctness),
         "known_ratio": float(pred_known.mean()),
         "known_class_correct": known_class_correct,
         "known_class_wrong": known_class_wrong,
         "known_class_accuracy_after_accept": float(known_class_correct / max(known_class_correct + known_class_wrong, 1)),
         "known_class_accuracy_all_known": float(known_class_correct / max(known_total, 1)),
-        "true_num_novel": int(num_novel),
     }
     result.update(open_confusion)
     novel_mask = ~pred_known
-    if cluster_confidence_percentile > 0 and novel_mask.any():
-        rejected_scores = score[novel_mask]
-        keep_thr = float(np.percentile(rejected_scores, cluster_confidence_percentile))
-        novel_mask = novel_mask & (score >= keep_thr)
     selected_cluster_k = None
-    k_search = None
-    novel_pred = None
-    novel_true = None
-    cluster_features = _l2_normalize(np.asarray(outputs.get("projections", outputs["features"])))
-    if novel_mask.sum() > 1:
-        novel_features = cluster_features[novel_mask]
-        novel_true = outputs["raw_labels"][novel_mask]
-        if cluster_k == "oracle":
-            selected_cluster_k = min(max(int(num_novel), 1), len(novel_features))
-            k_search = {"mode": "oracle", "true_num_novel": int(num_novel)}
+    cluster_diagnostics = []
+    true_unknown_k = int(np.unique(outputs["raw_labels"][~known_mask]).size)
+    if novel_mask.sum() > 1 and num_novel > 0:
+        if cluster_feature in {"projection", "projection_pca"}:
+            raw_cluster_features = outputs.get("projections", outputs["features"])
+        elif cluster_feature in {"feature", "feature_pca"}:
+            raw_cluster_features = outputs["features"]
         else:
-            selected_cluster_k, k_search = estimate_num_clusters(
-                novel_features,
-                max_clusters=None,
-                criterion=k_criterion,
+            raise ValueError(f"Unsupported cluster feature: {cluster_feature}")
+        use_pca = cluster_feature.endswith("_pca")
+        raw_novel_features = np.asarray(raw_cluster_features[novel_mask], dtype=np.float32)
+        novel_features = (
+            prepare_cluster_features(
+                raw_novel_features,
+                use_pca=use_pca,
+                pca_dim=cluster_pca_dim,
+                whiten=cluster_whiten,
             )
-            k_search["mode"] = "auto"
-            k_search["true_num_novel"] = int(num_novel)
-        novel_pred = cluster_unknown_samples(novel_features, num_clusters=selected_cluster_k)
+            if cluster_normalize or use_pca
+            else raw_novel_features
+        )
+        novel_true = outputs["raw_labels"][novel_mask]
+        selected_cluster_k = (
+            min(num_novel, len(novel_features))
+            if cluster_k == "oracle"
+            else None
+        )
+        if cluster_k != "oracle":
+            selected_cluster_k, cluster_diagnostics = evaluate_cluster_candidates(
+                novel_features,
+                max_clusters=num_novel,
+                method=cluster_method,
+                selection=cluster_selection,
+                n_init=cluster_n_init,
+                stability_repeats=cluster_stability_repeats,
+            )
+        novel_pred = cluster_unknown_samples(
+            novel_features,
+            num_clusters=selected_cluster_k,
+            method=cluster_method,
+            n_init=cluster_n_init,
+        )
         if len(np.unique(novel_pred)) > 0:
             result.update({f"cluster_{k}": v for k, v in clustering_report(novel_true, novel_pred).items()})
-        result["estimated_k"] = int(selected_cluster_k)
-        result["true_k"] = int(num_novel)
-        result["k_abs_error"] = abs(int(selected_cluster_k) - int(num_novel)) if cluster_k != "oracle" else 0
-        result["cluster_k_mode"] = "oracle" if cluster_k == "oracle" else "auto"
-    result.update(detection_cluster_split(known_mask, pred_known, novel_true, novel_pred))
+            true_unknown_candidates = (~known_mask)[novel_mask]
+            if true_unknown_candidates.sum() > 1:
+                result.update(
+                    {
+                        f"cluster_unknown_only_{k}": v
+                        for k, v in clustering_report(
+                            novel_true[true_unknown_candidates],
+                            novel_pred[true_unknown_candidates],
+                        ).items()
+                    }
+                )
+            result["cluster_candidate_count"] = int(len(novel_true))
+            result["cluster_true_unknown_count"] = int(true_unknown_candidates.sum())
+            result["cluster_false_reject_count"] = int((~true_unknown_candidates).sum())
+            result["cluster_candidate_purity"] = float(
+                true_unknown_candidates.sum() / max(len(novel_true), 1)
+            )
+            result["cluster_true_k"] = true_unknown_k
+            result["cluster_k_abs_error"] = abs(int(selected_cluster_k) - true_unknown_k)
+    result.update(
+        {
+            "cluster_k": None if selected_cluster_k is None else int(selected_cluster_k),
+            "cluster_method": cluster_method,
+            "cluster_feature": cluster_feature,
+            "cluster_selection": cluster_selection if cluster_k != "oracle" else "oracle",
+            "cluster_pca_dim": int(cluster_pca_dim),
+            "cluster_normalized": bool(cluster_normalize or cluster_feature.endswith("_pca")),
+            "cluster_n_init": int(cluster_n_init),
+            "cluster_stability_repeats": int(cluster_stability_repeats),
+            "cluster_diagnostics": cluster_diagnostics,
+        }
+    )
     detail = {
         "score": score,
         "score_mode": score_mode,
@@ -1075,10 +810,34 @@ def run_discovery(
         "raw_labels": outputs["raw_labels"],
         "pred_cluster": None,
         "cluster_k": selected_cluster_k,
-        "cluster_k_search": k_search,
+        "cluster_method": cluster_method,
+        "cluster_feature": cluster_feature,
+        "cluster_selection": cluster_selection,
+        "cluster_diagnostics": cluster_diagnostics,
     }
-    if novel_pred is not None:
+    if novel_mask.sum() > 1 and num_novel > 0:
         pred_cluster = np.full(len(score), -1, dtype=np.int64)
-        pred_cluster[novel_mask] = novel_pred
+        raw_cluster_features = (
+            outputs.get("projections", outputs["features"])
+            if cluster_feature.startswith("projection")
+            else outputs["features"]
+        )
+        raw_cluster_features = np.asarray(raw_cluster_features[novel_mask], dtype=np.float32)
+        cluster_features = (
+            prepare_cluster_features(
+                raw_cluster_features,
+                use_pca=cluster_feature.endswith("_pca"),
+                pca_dim=cluster_pca_dim,
+                whiten=cluster_whiten,
+            )
+            if cluster_normalize or cluster_feature.endswith("_pca")
+            else raw_cluster_features
+        )
+        pred_cluster[novel_mask] = cluster_unknown_samples(
+            cluster_features,
+            num_clusters=selected_cluster_k,
+            method=cluster_method,
+            n_init=cluster_n_init,
+        )
         detail["pred_cluster"] = pred_cluster
     return result, score, pred_known, detail
