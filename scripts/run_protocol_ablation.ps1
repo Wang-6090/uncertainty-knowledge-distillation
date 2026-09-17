@@ -30,7 +30,7 @@ foreach ($seed in $Seeds) {
 
         $detectRunName = "protocol_$($exp.Name)_s$seed`_detect"
         $detectRun = ".\runs\$detectRunName"
-        python train.py discover --dataset cifar100 --data-root $DataRoot --download --num-known 60 --seed $seed --split-path $SplitPath --image-size 64 --batch-size 64 --num-workers 0 --backbone resnet18 --num-novel 40 --mc-samples 4 --score-mode entropy_mahalanobis --cluster-k both --temperature-scaling --compare-scores --report-efficiency --work-dir $detectRun --student-ckpt $student --device auto
+        python train.py discover --dataset cifar100 --data-root $DataRoot --download --num-known 60 --seed $seed --split-path $SplitPath --image-size 64 --batch-size 64 --num-workers 0 --backbone resnet18 --num-novel 40 --mc-samples 4 --score-mode entropy_mahalanobis --cluster-k auto --temperature-calibration --work-dir $detectRun --student-ckpt $student --device auto
         $detectRuns += $detectRunName
     }
 }

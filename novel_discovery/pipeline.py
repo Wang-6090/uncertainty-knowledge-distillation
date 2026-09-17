@@ -777,29 +777,50 @@ def run_discovery(
         "known_class_accuracy_after_accept": float(known_class_correct / max(known_class_correct + known_class_wrong, 1)),
         "known_class_accuracy_all_known": float(known_class_correct / max(known_total, 1)),
     }
+    result.update(open_confusion)
     novel_mask = ~pred_known
     selected_cluster_k = None
     cluster_diagnostics = []
     true_unknown_k = int(np.unique(outputs["raw_labels"][~known_mask]).size)
-    if novel_mask.sum() > 1 and num_novel > 0:
-        if cluster_feature in {"projection", "projection_pca"}:
-            raw_cluster_features = outputs.get("projections", outputs["features"])
-        elif cluster_feature in {"feature", "feature_pca"}:
-            raw_cluster_features = outputs["features"]
-        else:
-            raise ValueError(f"Unsupported cluster feature: {cluster_feature}")
-        use_pca = cluster_feature.endswith("_pca")
-        raw_novel_features = np.asarray(raw_cluster_features[novel_mask], dtype=np.float32)
-        novel_features = (
-            prepare_cluster_features(
-                raw_novel_features,
-                use_pca=use_pca,
+    if cluster_feature in {"projection", "projection_pca"}:
+        raw_cluster_features = outputs.get("projections", outputs["features"])
+    elif cluster_feature in {"feature", "feature_pca"}:
+        raw_cluster_features = outputs["features"]
+    else:
+        raise ValueError(f"Unsupported cluster feature: {cluster_feature}")
+
+    def prepare_subset(mask):
+        values = np.asarray(raw_cluster_features[mask], dtype=np.float32)
+        if cluster_normalize or cluster_feature.endswith("_pca"):
+            return prepare_cluster_features(
+                values,
+                use_pca=cluster_feature.endswith("_pca"),
                 pca_dim=cluster_pca_dim,
                 whiten=cluster_whiten,
             )
-            if cluster_normalize or use_pca
-            else raw_novel_features
+        return values
+
+    def add_oracle_report(prefix, mask):
+        labels = np.asarray(outputs["raw_labels"])[mask]
+        if len(labels) < 2:
+            return
+        oracle_k = int(np.unique(labels).size)
+        if oracle_k < 1:
+            return
+        predictions = cluster_unknown_samples(
+            prepare_subset(mask),
+            num_clusters=min(oracle_k, len(labels)),
+            method=cluster_method,
+            n_init=cluster_n_init,
         )
+        result.update(
+            {f"{prefix}_{key}": value for key, value in clustering_report(labels, predictions).items()}
+        )
+
+    add_oracle_report("cluster_all_unknown_oracle", ~known_mask)
+    add_oracle_report("cluster_candidate_unknown_oracle", novel_mask & ~known_mask)
+    if novel_mask.sum() > 1 and num_novel > 0:
+        novel_features = prepare_subset(novel_mask)
         novel_true = outputs["raw_labels"][novel_mask]
         selected_cluster_k = (
             min(num_novel, len(novel_features))
@@ -842,6 +863,16 @@ def run_discovery(
             )
             result["cluster_true_k"] = true_unknown_k
             result["cluster_k_abs_error"] = abs(int(selected_cluster_k) - true_unknown_k)
+    result.update(
+        {
+            "cluster_k": selected_cluster_k,
+            "cluster_method": cluster_method,
+            "cluster_feature": cluster_feature,
+            "cluster_selection": cluster_selection,
+            "cluster_normalized": bool(cluster_normalize),
+            "cluster_diagnostics": cluster_diagnostics,
+        }
+    )
     detail = {
         "score": score, "score_mode": score_mode, "entropy": entropy,
         "epistemic": epistemic, "aleatoric": aleatoric,
@@ -851,6 +882,9 @@ def run_discovery(
         "pred_known": pred_known, "true_known": known_mask,
         "pred_class": pred_class, "true_label": true_labels,
         "raw_labels": outputs["raw_labels"], "pred_cluster": None,
+        "cluster_k": selected_cluster_k, "cluster_method": cluster_method,
+        "cluster_feature": cluster_feature, "cluster_selection": cluster_selection,
+        "cluster_diagnostics": cluster_diagnostics,
     }
     if novel_mask.sum() > 1 and num_novel > 0:
         pred_cluster = np.full(len(score), -1, dtype=np.int64)

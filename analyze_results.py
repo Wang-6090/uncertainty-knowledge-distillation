@@ -18,17 +18,20 @@ def load_json(path: Path):
 
 def load_split(path: Path):
     data = torch.load(path, map_location="cpu")
-    known = [int(x) for x in data["known_classes"]]
-    novel = [int(x) for x in data["novel_classes"]]
-    return known, novel
+    return list(data["known_classes"]), list(data["novel_classes"])
 
 
 def load_class_names(config: dict):
-    if str(config.get("dataset", "")).lower() != "cifar100":
-        return None
+    dataset = str(config.get("dataset", "")).lower()
     try:
         root = config.get("data_root", "./data")
-        return list(datasets.CIFAR100(root=root, train=True, download=False).classes)
+        if dataset == "cifar100":
+            return list(datasets.CIFAR100(root=root, train=True, download=False).classes)
+        if dataset == "imagefolder":
+            root = Path(root)
+            train_root = root / "train" if (root / "train").is_dir() else root
+            return list(datasets.ImageFolder(root=str(train_root)).classes)
+        return None
     except (OSError, RuntimeError, ValueError):
         return None
 
@@ -94,7 +97,15 @@ def analyze_run(run_dir: Path):
     pred_cluster = detail.get("pred_cluster")
     pred_cluster = None if pred_cluster is None else np.asarray(pred_cluster, dtype=int)
 
-    known_to_idx = {cls: idx for idx, cls in enumerate(known_classes)}
+    if str(config.get("dataset", "")).lower() == "imagefolder" and class_names:
+        raw_class_indices = {name: index for index, name in enumerate(class_names)}
+        known_to_idx = {
+            raw_class_indices[name]: index
+            for index, name in enumerate(known_classes)
+            if name in raw_class_indices
+        }
+    else:
+        known_to_idx = {int(cls): idx for idx, cls in enumerate(known_classes)}
 
     known_score = score[true_known]
     unknown_score = score[~true_known]
@@ -208,7 +219,7 @@ def analyze_run(run_dir: Path):
         "calibration": {
             "temperature": calibration.get("temperature"),
             "ece": calibration.get("reliability", {}).get("ece"),
-            "uncertainty_error_correlation": calibration.get("uncertainty_error", {}).get("head_uncertainty_error_correlation"),
+            "uncertainty_error_correlation": calibration.get("uncertainty_error", {}).get("correlation"),
         },
         "top_known_reject_classes": top_known_reject,
         "top_novel_false_accept_classes": top_novel_false_accept,

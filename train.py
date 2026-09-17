@@ -25,6 +25,7 @@ from novel_discovery.pipeline import (
     compute_open_score,
     calibration_diagnostics,
     fit_temperature,
+    apply_temperature,
     uncertainty_error_diagnostics,
     run_discovery,
     train_one_epoch_student,
@@ -33,7 +34,7 @@ from novel_discovery.pipeline import (
 from novel_discovery.utils import ensure_dir, save_json, set_seed
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -140,6 +141,10 @@ def parse_args():
     p.add_argument("--cluster-stability-repeats", type=int, default=5)
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument("--mc-samples", type=int, default=8)
+    p.add_argument("--open-val-ratio", type=float, default=0.0)
+    p.add_argument("--temperature-calibration", action="store_true")
+    p.add_argument("--calibration-bins", type=int, default=15)
+    p.add_argument("--auto-calibrate-score", action="store_true")
     p.add_argument(
         "--score-mode",
         default="entropy_proto",
@@ -165,7 +170,7 @@ def parse_args():
     p = sub.add_parser("inspect_data")
     add_common(p)
     p.add_argument("--sample-count", type=int, default=5)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def load_checkpoint(model, path, device):
@@ -480,10 +485,10 @@ def discover(args):
     outputs_open_val = extract_outputs(model, open_val_loader, device, mc_samples=args.mc_samples) if open_val_loader is not None else None
     temperature = fit_temperature(outputs_val) if args.temperature_calibration else 1.0
     if args.temperature_calibration:
-        outputs_test = apply_logit_temperature(outputs_test, temperature)
-        outputs_val = apply_logit_temperature(outputs_val, temperature)
+        outputs_test = apply_temperature(outputs_test, temperature)
+        outputs_val = apply_temperature(outputs_val, temperature)
         if outputs_open_val is not None:
-            outputs_open_val = apply_logit_temperature(outputs_open_val, temperature)
+            outputs_open_val = apply_temperature(outputs_open_val, temperature)
     proto = ckpt.get("prototypes")
     if torch.is_tensor(proto):
         proto = proto.detach().cpu().numpy()
