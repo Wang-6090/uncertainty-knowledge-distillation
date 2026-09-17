@@ -12,7 +12,27 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from novel_discovery.losses import energy_margin_loss, supervised_contrastive_loss
-from novel_discovery.pipeline import fit_score_normalization, run_discovery
+from novel_discovery.pipeline import calibration_diagnostics, fit_score_normalization, run_discovery
+from train import parse_args
+
+
+class CommandLineTest(unittest.TestCase):
+    def test_discover_arguments_stay_in_sync_with_runtime(self):
+        args = parse_args(
+            [
+                "discover",
+                "--open-val-ratio", "0.2",
+                "--temperature-calibration",
+                "--calibration-bins", "10",
+                "--auto-calibrate-score",
+            ]
+        )
+
+        self.assertEqual(args.command, "discover")
+        self.assertEqual(args.open_val_ratio, 0.2)
+        self.assertTrue(args.temperature_calibration)
+        self.assertEqual(args.calibration_bins, 10)
+        self.assertTrue(args.auto_calibrate_score)
 
 
 class LossBehaviorTest(unittest.TestCase):
@@ -62,6 +82,18 @@ class ScoreBehaviorTest(unittest.TestCase):
 
         self.assertIn("entropy", stats)
         self.assertNotIn("proto_dist", stats)
+
+
+class CalibrationTest(unittest.TestCase):
+    def test_calibration_diagnostics_reports_ece(self):
+        result = calibration_diagnostics(
+            np.array([[0.9, 0.1], [0.6, 0.4], [0.2, 0.8]]),
+            np.array([0, 1, 1]),
+            num_bins=5,
+        )
+
+        self.assertGreaterEqual(result["ece"], 0.0)
+        self.assertEqual(sum(item["count"] for item in result["bins"]), 3)
 
 
 class DiscoveryReportTest(unittest.TestCase):
@@ -133,6 +165,10 @@ class DiscoveryReportTest(unittest.TestCase):
         self.assertEqual(report["cluster_true_unknown_count"], 3)
         self.assertEqual(report["cluster_false_reject_count"], 0)
         self.assertTrue(math.isclose(report["cluster_candidate_purity"], 1.0))
+        self.assertIn("cluster_all_unknown_oracle_nmi", report)
+        self.assertIn("cluster_candidate_unknown_oracle_nmi", report)
+        self.assertEqual(report["cluster_k"], 2)
+        self.assertIn("unknown_reject_rate", report)
 
 
 if __name__ == "__main__":

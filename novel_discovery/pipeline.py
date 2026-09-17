@@ -407,6 +407,93 @@ def extract_outputs(model, loader, device, mc_samples: int = 8):
     }
 
 
+def calibration_diagnostics(probabilities: np.ndarray, labels: np.ndarray, num_bins: int = 15) -> dict:
+    """Compute ECE-style reliability bins on labeled known-validation samples."""
+    probabilities = np.asarray(probabilities, dtype=float)
+    labels = np.asarray(labels, dtype=int)
+    valid = labels >= 0
+    probabilities = probabilities[valid]
+    labels = labels[valid]
+    if len(labels) == 0:
+        return {"ece": float("nan"), "accuracy": float("nan"), "bins": []}
+
+    confidence = probabilities.max(axis=1)
+    correct = probabilities.argmax(axis=1) == labels
+    edges = np.linspace(0.0, 1.0, num_bins + 1)
+    bins = []
+    ece = 0.0
+    for index in range(num_bins):
+        upper_inclusive = index == num_bins - 1
+        mask = (confidence >= edges[index]) & (
+            (confidence <= edges[index + 1]) if upper_inclusive else (confidence < edges[index + 1])
+        )
+        count = int(mask.sum())
+        mean_confidence = float(confidence[mask].mean()) if count else None
+        accuracy = float(correct[mask].mean()) if count else None
+        if count:
+            ece += count / len(labels) * abs(mean_confidence - accuracy)
+        bins.append(
+            {
+                "lower": float(edges[index]),
+                "upper": float(edges[index + 1]),
+                "count": count,
+                "confidence": mean_confidence,
+                "accuracy": accuracy,
+            }
+        )
+    return {"ece": float(ece), "accuracy": float(correct.mean()), "bins": bins}
+
+
+def uncertainty_error_diagnostics(outputs: Dict[str, np.ndarray]) -> dict:
+    """Measure whether the auxiliary uncertainty head tracks known-class errors."""
+    labels = np.asarray(outputs["labels"], dtype=int)
+    valid = labels >= 0
+    if int(valid.sum()) < 2:
+        return {"error_rate": float("nan"), "correlation": float("nan")}
+    errors = (np.asarray(outputs["logits"])[valid].argmax(axis=1) != labels[valid]).astype(float)
+    uncertainty = np.asarray(outputs["head_uncertainty"], dtype=float)[valid]
+    if np.std(errors) == 0 or np.std(uncertainty) == 0:
+        correlation = float("nan")
+    else:
+        correlation = float(np.corrcoef(errors, uncertainty)[0, 1])
+    return {"error_rate": float(errors.mean()), "correlation": correlation}
+
+
+def fit_temperature(outputs: Dict[str, np.ndarray]) -> float:
+    """Fit a scalar temperature on known-validation logits."""
+    labels = torch.as_tensor(outputs["labels"], dtype=torch.long)
+    logits = torch.as_tensor(outputs["logits"], dtype=torch.float32)
+    valid = labels >= 0
+    if int(valid.sum()) < 2:
+        return 1.0
+
+    log_temperature = torch.zeros(1, requires_grad=True)
+    optimizer = torch.optim.LBFGS([log_temperature], lr=0.1, max_iter=50)
+
+    def closure():
+        optimizer.zero_grad()
+        temperature = log_temperature.exp().clamp(0.05, 20.0)
+        loss = torch.nn.functional.cross_entropy(logits[valid] / temperature, labels[valid])
+        loss.backward()
+        return loss
+
+    optimizer.step(closure)
+    return float(log_temperature.exp().detach().clamp(0.05, 20.0).item())
+
+
+def apply_temperature(outputs: Dict[str, np.ndarray], temperature: float) -> Dict[str, np.ndarray]:
+    """Return calibrated logits/probabilities without shifting logits used by Energy."""
+    calibrated = dict(outputs)
+    scaled_logits = np.asarray(outputs["logits"], dtype=float) / max(float(temperature), 1e-6)
+    stable_logits = scaled_logits - scaled_logits.max(axis=1, keepdims=True)
+    probs = np.exp(stable_logits)
+    probs /= probs.sum(axis=1, keepdims=True)
+    calibrated["logits"] = scaled_logits
+    calibrated["probs"] = probs
+    calibrated["entropy"] = -(probs * np.log(np.clip(probs, 1e-8, None))).sum(axis=1)
+    return calibrated
+
+
 def compute_prototype_distance(features: np.ndarray, prototypes: np.ndarray) -> np.ndarray:
     feat = features / np.clip(np.linalg.norm(features, axis=1, keepdims=True), 1e-8, None)
     proto = prototypes / np.clip(np.linalg.norm(prototypes, axis=1, keepdims=True), 1e-8, None)
@@ -775,14 +862,48 @@ def run_discovery(
     selected_cluster_k = None
     cluster_diagnostics = []
     true_unknown_k = int(np.unique(outputs["raw_labels"][~known_mask]).size)
+    if cluster_feature in {"projection", "projection_pca"}:
+        raw_cluster_features = outputs.get("projections", outputs["features"])
+    elif cluster_feature in {"feature", "feature_pca"}:
+        raw_cluster_features = outputs["features"]
+    else:
+        raise ValueError(f"Unsupported cluster feature: {cluster_feature}")
+    use_pca = cluster_feature.endswith("_pca")
+
+    def prepare_subset(mask):
+        values = np.asarray(raw_cluster_features[mask], dtype=np.float32)
+        if len(values) == 0:
+            return values
+        if cluster_normalize or use_pca:
+            return prepare_cluster_features(
+                values,
+                use_pca=use_pca,
+                pca_dim=cluster_pca_dim,
+                whiten=cluster_whiten,
+            )
+        return values
+
+    def add_oracle_report(prefix, mask):
+        labels = np.asarray(outputs["raw_labels"])[mask]
+        if len(labels) < 2:
+            return
+        oracle_k = int(np.unique(labels).size)
+        if oracle_k < 1:
+            return
+        features = prepare_subset(mask)
+        predictions = cluster_unknown_samples(
+            features,
+            num_clusters=min(oracle_k, len(labels)),
+            method=cluster_method,
+            n_init=cluster_n_init,
+        )
+        result.update(
+            {f"{prefix}_{key}": value for key, value in clustering_report(labels, predictions).items()}
+        )
+
+    add_oracle_report("cluster_all_unknown_oracle", ~known_mask)
+    add_oracle_report("cluster_candidate_unknown_oracle", novel_mask & ~known_mask)
     if novel_mask.sum() > 1 and num_novel > 0:
-        if cluster_feature in {"projection", "projection_pca"}:
-            raw_cluster_features = outputs.get("projections", outputs["features"])
-        elif cluster_feature in {"feature", "feature_pca"}:
-            raw_cluster_features = outputs["features"]
-        else:
-            raise ValueError(f"Unsupported cluster feature: {cluster_feature}")
-        use_pca = cluster_feature.endswith("_pca")
         raw_novel_features = np.asarray(raw_cluster_features[novel_mask], dtype=np.float32)
         novel_features = (
             prepare_cluster_features(

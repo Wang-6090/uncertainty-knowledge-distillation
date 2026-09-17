@@ -18,17 +18,20 @@ def load_json(path: Path):
 
 def load_split(path: Path):
     data = torch.load(path, map_location="cpu")
-    known = [int(x) for x in data["known_classes"]]
-    novel = [int(x) for x in data["novel_classes"]]
-    return known, novel
+    return list(data["known_classes"]), list(data["novel_classes"])
 
 
 def load_class_names(config: dict):
-    if str(config.get("dataset", "")).lower() != "cifar100":
-        return None
+    dataset = str(config.get("dataset", "")).lower()
     try:
         root = config.get("data_root", "./data")
-        return list(datasets.CIFAR100(root=root, train=True, download=False).classes)
+        if dataset == "cifar100":
+            return list(datasets.CIFAR100(root=root, train=True, download=False).classes)
+        if dataset == "imagefolder":
+            root_path = Path(root)
+            train_root = root_path / "train" if (root_path / "train").is_dir() else root_path
+            return list(datasets.ImageFolder(root=str(train_root)).classes)
+        return None
     except (OSError, RuntimeError, ValueError):
         return None
 
@@ -80,6 +83,8 @@ def analyze_run(run_dir: Path):
     detail = load_json(run_dir / "discovery_detail.json")
     config_path = run_dir / "config.json"
     config = load_json(config_path) if config_path.exists() else {}
+    calibration_path = run_dir / "calibration_report.json"
+    calibration = load_json(calibration_path) if calibration_path.exists() else {}
     class_names = load_class_names(config)
     split_path = run_dir / "split.pt"
     known_classes, novel_classes = ([], [])
@@ -94,7 +99,15 @@ def analyze_run(run_dir: Path):
     pred_cluster = detail.get("pred_cluster")
     pred_cluster = None if pred_cluster is None else np.asarray(pred_cluster, dtype=int)
 
-    known_to_idx = {cls: idx for idx, cls in enumerate(known_classes)}
+    if str(config.get("dataset", "")).lower() == "imagefolder" and class_names:
+        raw_class_indices = {name: index for index, name in enumerate(class_names)}
+        known_to_idx = {
+            raw_class_indices[name]: index
+            for index, name in enumerate(known_classes)
+            if name in raw_class_indices
+        }
+    else:
+        known_to_idx = {int(cls): idx for idx, cls in enumerate(known_classes)}
 
     known_score = score[true_known]
     unknown_score = score[~true_known]
@@ -196,12 +209,20 @@ def analyze_run(run_dir: Path):
             "true_k": report.get("cluster_true_k"),
             "estimated_k": report.get("cluster_k"),
             "k_abs_error": report.get("cluster_k_abs_error"),
+            "all_unknown_oracle_nmi": report.get("cluster_all_unknown_oracle_nmi"),
+            "candidate_unknown_oracle_nmi": report.get("cluster_candidate_unknown_oracle_nmi"),
         },
         "cluster_config": {
             "method": report.get("cluster_method"),
             "feature": report.get("cluster_feature"),
             "selection": report.get("cluster_selection"),
             "normalized": report.get("cluster_normalized"),
+        },
+        "calibration": {
+            "temperature": calibration.get("temperature"),
+            "temperature_enabled": calibration.get("temperature_enabled"),
+            "ece": calibration.get("reliability", {}).get("ece"),
+            "uncertainty_error_correlation": calibration.get("uncertainty_error", {}).get("correlation"),
         },
         "top_known_reject_classes": top_known_reject,
         "top_novel_false_accept_classes": top_novel_false_accept,
@@ -236,6 +257,12 @@ def format_run_md(item):
     lines.append(f"- unknown reject rate: {m['unknown_reject_rate']:.4f}")
     lines.append(f"- known class acc after accept: {m['known_class_accuracy_after_accept']:.4f}")
     lines.append(f"- known class acc all known: {m['known_class_accuracy_all_known']:.4f}")
+    calibration = item.get("calibration", {})
+    lines.append(f"- ECE: {fmt_float(calibration.get('ece'))}")
+    lines.append(f"- temperature: {fmt_float(calibration.get('temperature'))}")
+    lines.append(f"- uncertainty/error correlation: {fmt_float(calibration.get('uncertainty_error_correlation'))}")
+    lines.append(f"- all-unknown oracle NMI: {fmt_float(m.get('cluster_all_unknown_oracle_nmi'))}")
+    lines.append(f"- candidate-unknown oracle NMI: {fmt_float(m.get('cluster_candidate_unknown_oracle_nmi'))}")
     lines.append(f"- cluster NMI: {m.get('cluster_nmi', float('nan')):.4f}")
     lines.append(f"- cluster ARI: {m.get('cluster_ari', float('nan')):.4f}")
     pool = item["candidate_pool"]

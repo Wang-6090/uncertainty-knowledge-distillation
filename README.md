@@ -30,6 +30,7 @@
 ### 数据与环境
 
 - 支持 `CIFAR-100`、`ImageFolder`、`toy` 和 `fake` 数据集。
+- `ImageFolder` 既支持单目录数据，也支持 `root/train`、`root/test` 双目录数据；双目录模式会自动使用训练目录划分 train/val/discovery pool，测试目录作为开放测试集。
 - 支持固定已知类 / 未知类划分，例如 `splits_cifar100_60_40.json`。
 - 支持训练集、验证集、开放测试集和 discovery pool。
 - 支持数据增强、归一化、样本数量限制和 `--device auto` 自动选择 CUDA 或 CPU。
@@ -72,10 +73,12 @@
 - 开放集分数支持 MSP、Energy、predictive entropy、epistemic uncertainty、prototype distance、diagonal Mahalanobis distance 及组合分数。
 - MC Dropout 用于估计预测熵、数据不确定性代理和认知不确定性。
 - 阈值默认只根据已知验证集分位数确定，不使用测试集未知标签。
+- `discover --temperature-calibration` 支持在已知验证集上拟合温度，并输出 ECE、可靠性分箱、辅助不确定性与分类错误相关性到 `calibration_report.json`。
 - 聚类支持 KMeans、Agglomerative 和 Spectral。
 - 支持 projection / feature 特征、PCA、whitening 和 L2 归一化。
 - auto-K 支持 silhouette、内部指标组合和稳定性分析。
 - 结果中记录候选池纯度、误拒已知样本数量、真实 K、估计 K 以及 K 误差。
+- 结果额外记录 `cluster_all_unknown_oracle_*` 和 `cluster_candidate_unknown_oracle_*`，用于区分“检测没筛出未知”和“真实未知特征本身不可聚类”。
 
 ## 当前阶段性结论
 
@@ -89,6 +92,7 @@
 - 5 epoch 快速对比中，纯未知 discovery pool + Energy 约束使 AUROC 从 `0.5259` 升至 `0.5800`，FPR95 从 `0.9125` 降至 `0.8897`，known accuracy 从 `0.2719` 升至 `0.3746`，unknown reject rate 从 `0.0456` 升至 `0.0714`，候选池纯度从 `0.3426` 升至 `0.5000`。这说明“真实无标签未知样本参与训练”比伪未知样本更值得继续验证。
 - 候选池纯度大约为 `0.43–0.50`，说明候选池中混入了较多被误拒的已知样本。
 - auto-K 在当前特征空间中可能估计为 `2`，而真实未知类别数为 `40`，说明自动类别数估计仍不可靠。
+- 已吸收 `lky` 分支中较有价值的诊断功能：ImageFolder 双目录支持、温度校准 / ECE、uncertainty-error correlation、真实未知 oracle 聚类诊断和多 run 均值方差汇总；未合并其中会删除 Energy / discovery-energy 的回退改动。
 
 这些结果只能作为阶段性实验记录，不能作为最终论文结论。正式结论应在固定协议下至少运行 3 个随机种子，并报告均值和标准差。
 
@@ -151,6 +155,24 @@ pip install -r requirements.txt
 ```powershell
 python train.py inspect_data --dataset cifar100 --data-root .\data --download `
   --num-known 60 --seed 42 --split-path .\splits_cifar100_60_40.json
+```
+
+如果使用本地 ImageFolder 版 CIFAR-100，可采用如下结构：
+
+```text
+CIFAR-100-dataset-main/
+  train/
+  test/
+```
+
+检查 ImageFolder 双目录划分：
+
+```powershell
+python train.py inspect_data --dataset imagefolder `
+  --data-root .\CIFAR-100-dataset-main `
+  --num-known 60 --seed 42 `
+  --split-path .\splits_cifar100_60_40.json `
+  --image-size 64 --num-workers 0
 ```
 
 训练教师模型：
@@ -228,6 +250,7 @@ python train.py discover --dataset cifar100 --data-root .\data `
   --student-ckpt .\runs\student\student.pt `
   --work-dir .\runs\discover_auto `
   --score-mode normalized_entropy_mahalanobis `
+  --temperature-calibration `
   --cluster-k auto --cluster-method kmeans `
   --cluster-feature projection_pca --cluster-selection composite `
   --cluster-pca-dim 32 --cluster-normalize `
@@ -260,6 +283,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_energy_compare.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run_discovery_energy_compare.ps1
 ```
 
+汇总多个 run 的均值和标准差：
+
+```powershell
+python aggregate_multiseed.py --root .\runs `
+  --runs run_seed42_detect run_seed43_detect run_seed44_detect `
+  --out .\analysis\multiseed_summary.json
+```
+
 ## 文件说明
 
 - `train.py`：训练、未知检测和聚类入口。
@@ -269,6 +300,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_discovery_energy_compare.
 - `novel_discovery/pipeline.py`：训练流程、开放集打分、阈值和聚类。
 - `novel_discovery/metrics.py`：AUROC、AUPR、FPR95、OSCR 和聚类指标。
 - `analyze_results.py`：多组实验结果和误差分析。
+- `aggregate_multiseed.py`：把多个 `discovery_report.json` 汇总为 mean/std。
 - `tests/`：核心行为测试。
 - `scripts/`：消融、对比和多配置实验脚本。
 - `analysis/`：阶段性实验结果和分析文档。

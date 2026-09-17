@@ -23,14 +23,18 @@ from novel_discovery.pipeline import (
     evaluate_classification,
     extract_outputs,
     compute_open_score,
+    apply_temperature,
+    calibration_diagnostics,
+    fit_temperature,
     run_discovery,
     train_one_epoch_student,
     train_one_epoch_teacher,
+    uncertainty_error_diagnostics,
 )
 from novel_discovery.utils import ensure_dir, save_json, set_seed
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -149,6 +153,8 @@ def parse_args():
     p.add_argument("--cluster-stability-repeats", type=int, default=5)
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument("--mc-samples", type=int, default=8)
+    p.add_argument("--temperature-calibration", action="store_true")
+    p.add_argument("--calibration-bins", type=int, default=15)
     p.add_argument(
         "--score-mode",
         default="entropy_proto",
@@ -176,7 +182,7 @@ def parse_args():
     p = sub.add_parser("inspect_data")
     add_common(p)
     p.add_argument("--sample-count", type=int, default=5)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def load_checkpoint(model, path, device):
@@ -241,16 +247,31 @@ def resolve_input_checkpoint(path_arg: str, work_dir: str, default_name: str) ->
     )
 
 
-def _select_score_mode(outputs_known, outputs_open, prototypes, score_modes):
+def _select_score_mode(
+    outputs_known,
+    outputs_open,
+    prototypes,
+    score_modes,
+    normalization=None,
+    gaussian_stats=None,
+):
     unknown_mask = np.asarray(outputs_open["is_known"], dtype=bool) == 0
     results = []
     for score_mode in score_modes:
         try:
             known_scores, _ = compute_open_score(
-                outputs_known, prototypes=prototypes, score_mode=score_mode
+                outputs_known,
+                prototypes=prototypes,
+                score_mode=score_mode,
+                normalization=normalization,
+                gaussian_stats=gaussian_stats,
             )
             open_scores, _ = compute_open_score(
-                outputs_open, prototypes=prototypes, score_mode=score_mode
+                outputs_open,
+                prototypes=prototypes,
+                score_mode=score_mode,
+                normalization=normalization,
+                gaussian_stats=gaussian_stats,
             )
         except ValueError as exc:
             results.append(
@@ -514,6 +535,12 @@ def discover(args):
         if open_val_loader is not None
         else None
     )
+    temperature = fit_temperature(outputs_val) if args.temperature_calibration else 1.0
+    if args.temperature_calibration:
+        outputs_test = apply_temperature(outputs_test, temperature)
+        outputs_val = apply_temperature(outputs_val, temperature)
+        if outputs_open_val is not None:
+            outputs_open_val = apply_temperature(outputs_open_val, temperature)
     proto = ckpt.get("prototypes")
     if proto is not None and torch.is_tensor(proto):
         proto = proto.detach().cpu().numpy()
@@ -530,7 +557,15 @@ def discover(args):
         if needs_normalization or args.score_mode == "auto" or args.auto_calibrate_score
         else {}
     )
-    calibration_report = None
+    calibration_report = {
+        "temperature": float(temperature),
+        "temperature_enabled": bool(args.temperature_calibration),
+        "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
+        "reliability": calibration_diagnostics(
+            outputs_val["probs"], outputs_val["labels"], args.calibration_bins
+        ),
+        "uncertainty_error": uncertainty_error_diagnostics(outputs_val),
+    }
     threshold = None
     if (args.score_mode == "auto" or args.auto_calibrate_score) and outputs_open_val is not None:
         candidate_modes = [
@@ -540,8 +575,18 @@ def discover(args):
             "proto_only",
             "max_softmax",
             "energy",
+            "mahalanobis",
+            "entropy_mahalanobis",
+            "normalized_entropy_mahalanobis",
         ]
-        selected, all_candidates = _select_score_mode(outputs_val, outputs_open_val, proto, candidate_modes)
+        selected, all_candidates = _select_score_mode(
+            outputs_val,
+            outputs_open_val,
+            proto,
+            candidate_modes,
+            normalization=score_normalization,
+            gaussian_stats=gaussian_stats,
+        )
         selected_score_mode = selected["score_mode"]
         scores_val, _ = compute_open_score(
             outputs_val,
@@ -551,17 +596,19 @@ def discover(args):
             gaussian_stats=gaussian_stats,
         )
         threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
-        calibration_report = {
-            "selected": selected,
-            "candidates": all_candidates,
-            "open_val_size": int(len(outputs_open_val["labels"])),
-            "open_val_unknown_size": int(np.sum(np.asarray(outputs_open_val["is_known"], dtype=bool) == 0)),
-            "threshold_policy": {
-                "type": "known_val_percentile",
-                "percentile": args.threshold_percentile,
-            },
-            "known_val_threshold": float(threshold),
-        }
+        calibration_report.update(
+            {
+                "selected": selected,
+                "candidates": all_candidates,
+                "open_val_size": int(len(outputs_open_val["labels"])),
+                "open_val_unknown_size": int(np.sum(np.asarray(outputs_open_val["is_known"], dtype=bool) == 0)),
+                "threshold_policy": {
+                    "type": "known_val_percentile",
+                    "percentile": args.threshold_percentile,
+                },
+                "known_val_threshold": float(threshold),
+            }
+        )
     else:
         if selected_score_mode == "auto":
             selected_score_mode = "full"
@@ -573,6 +620,15 @@ def discover(args):
             gaussian_stats=gaussian_stats,
         )
         threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
+        calibration_report.update(
+            {
+                "threshold_policy": {
+                    "type": "known_val_percentile",
+                    "percentile": args.threshold_percentile,
+                },
+                "known_val_threshold": float(threshold),
+            }
+        )
 
     result, scores_test, pred_known, detail = run_discovery(
         outputs_test,
@@ -602,8 +658,7 @@ def discover(args):
         run_dir / "split.pt",
     )
     save_json(run_dir / "discovery_report.json", result)
-    if calibration_report is not None:
-        save_json(run_dir / "calibration_report.json", calibration_report)
+    save_json(run_dir / "calibration_report.json", calibration_report)
     save_json(run_dir / "discovery_detail.json", {
         "score_mode": detail["score_mode"],
         "score": detail["score"].tolist(),
@@ -628,7 +683,7 @@ def discover(args):
     })
     np.save(run_dir / "open_scores.npy", scores_test)
     print(result)
-    if calibration_report is not None:
+    if "selected" in calibration_report:
         selected = calibration_report["selected"]
         print(
             "calibration:",
@@ -640,7 +695,7 @@ def discover(args):
             },
         )
     save_json(run_dir / "score_normalization.json", score_normalization)
-    print(f"threshold={threshold:.6f}")
+    print(f"threshold={threshold:.6f}, temperature={temperature:.4f}")
 
 
 def inspect_data(args):

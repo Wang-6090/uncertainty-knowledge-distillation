@@ -285,14 +285,21 @@ def build_data_bundle(
         )
 
     if dataset_name.lower() == "imagefolder":
-        base = datasets.ImageFolder(root=root)
-        known_classes, novel_classes = make_class_split(base.classes, num_known, seed, split_path)
+        root_path = Path(root)
+        train_root = root_path / "train" if (root_path / "train").is_dir() else root_path
+        test_root = root_path / "test" if (root_path / "test").is_dir() else root_path
+        base = datasets.ImageFolder(root=str(train_root))
+        imagefolder_split = None
+        if split_path:
+            split_file = Path(split_path)
+            imagefolder_split = str(split_file.with_name(split_file.stem + "_imagefolder.json"))
+        known_classes, novel_classes = make_class_split(base.classes, num_known, seed, imagefolder_split)
         train_tf = build_transforms(image_size, train=True)
         test_tf = build_transforms(image_size, train=False)
-        train_full = OpenSetImageFolder(root, known_classes, transform=train_tf, include_unknown=False)
-        val_full = OpenSetImageFolder(root, known_classes, transform=test_tf, include_unknown=False)
-        pool_full = OpenSetImageFolder(root, known_classes, transform=train_tf, include_unknown=True)
-        test_open = OpenSetImageFolder(root, known_classes, transform=test_tf, include_unknown=True)
+        train_full = OpenSetImageFolder(str(train_root), known_classes, transform=train_tf, include_unknown=False)
+        val_full = OpenSetImageFolder(str(train_root), known_classes, transform=test_tf, include_unknown=False)
+        pool_full = OpenSetImageFolder(str(train_root), known_classes, transform=train_tf, include_unknown=True)
+        test_open = OpenSetImageFolder(str(test_root), known_classes, transform=test_tf, include_unknown=True)
         train_indices, val_indices = split_known_indices(len(train_full), val_ratio=0.1, seed=seed)
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
