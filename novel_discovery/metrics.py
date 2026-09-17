@@ -44,11 +44,13 @@ def compute_fpr95(y_true: np.ndarray, scores: np.ndarray) -> float:
 
 def compute_oscr(
     y_true_known: np.ndarray,
+    pred_known: np.ndarray,
     pred_class_correct: np.ndarray,
     scores: np.ndarray,
 ) -> float:
-    """Open Set Classification Rate; lower scores mean more likely known."""
+    """Compute OSCR while treating lower scores as known samples."""
     y_true_known = np.asarray(y_true_known).astype(bool)
+    pred_known = np.asarray(pred_known).astype(bool)
     pred_class_correct = np.asarray(pred_class_correct).astype(bool)
     scores = np.asarray(scores, dtype=float)
     known_count = int(y_true_known.sum())
@@ -64,7 +66,8 @@ def compute_oscr(
     fpr = np.cumsum(accepted_unknown) / unknown_count
     fpr = np.concatenate(([0.0], fpr))
     ccr = np.concatenate(([0.0], ccr))
-    return float(np.trapz(ccr, fpr))
+    integrate = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+    return float(integrate(ccr, fpr))
 
 
 def clustering_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:

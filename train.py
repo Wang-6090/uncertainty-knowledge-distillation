@@ -66,6 +66,9 @@ def parse_args():
     p.add_argument("--alpha-unc", type=float, default=0.1)
     p.add_argument("--alpha-proto", type=float, default=0.0)
     p.add_argument("--alpha-pseudo", type=float, default=0.0)
+    p.add_argument("--alpha-energy", type=float, default=0.0)
+    p.add_argument("--energy-margin", type=float, default=1.0)
+    p.add_argument("--energy-temperature", type=float, default=1.0)
     # Keep the validated baseline as the default; ``strong`` remains an
     # explicit experimental option and is documented by its own run.
     p.add_argument("--pseudo-mode", choices=["legacy", "strong"], default="legacy")
@@ -85,6 +88,9 @@ def parse_args():
     p.add_argument("--alpha-supcon", type=float, default=0.1)
     p.add_argument("--alpha-proto", type=float, default=0.0)
     p.add_argument("--alpha-pseudo", type=float, default=0.0)
+    p.add_argument("--alpha-energy", type=float, default=0.0)
+    p.add_argument("--energy-margin", type=float, default=1.0)
+    p.add_argument("--energy-temperature", type=float, default=1.0)
     p.add_argument("--pseudo-mode", choices=["legacy", "strong"], default="legacy")
     p.add_argument("--pseudo-feature-noise", type=float, default=0.05)
     p.add_argument("--uncertainty-target-mode", choices=["confidence", "classification_error", "margin"], default="confidence")
@@ -95,10 +101,16 @@ def parse_args():
     p.add_argument(
         "--discovery-pool",
         action="store_true",
-        help="Use unlabeled discovery images for two-view representation learning.",
+        help="Use unlabeled novel-class training images for two-view consistency learning.",
     )
     p.add_argument("--alpha-discovery", type=float, default=0.0)
     p.add_argument("--alpha-discovery-unknown", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-discovery-energy",
+        type=float,
+        default=0.0,
+        help="Apply energy-margin separation between known samples and a pure unknown discovery pool.",
+    )
     p.add_argument("--discovery-batch-size", type=int, default=0)
     p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
     p.add_argument("--discovery-temperature", type=float, default=0.2)
@@ -107,7 +119,7 @@ def parse_args():
     add_common(p)
     p.add_argument("--student-ckpt", default="./runs/student.pt")
     p.add_argument("--num-novel", type=int, default=40)
-    p.add_argument("--cluster-k", choices=["oracle", "auto"], default="oracle")
+    p.add_argument("--cluster-k", choices=["oracle", "auto"], default="auto")
     p.add_argument(
         "--cluster-method",
         choices=["kmeans", "agglomerative", "spectral"],
@@ -139,7 +151,7 @@ def parse_args():
     p.add_argument("--mc-samples", type=int, default=8)
     p.add_argument(
         "--score-mode",
-        default="full",
+        default="entropy_proto",
         choices=[
             "auto",
             "full",
@@ -233,8 +245,23 @@ def _select_score_mode(outputs_known, outputs_open, prototypes, score_modes):
     unknown_mask = np.asarray(outputs_open["is_known"], dtype=bool) == 0
     results = []
     for score_mode in score_modes:
-        known_scores, _ = compute_open_score(outputs_known, prototypes=prototypes, score_mode=score_mode)
-        open_scores, _ = compute_open_score(outputs_open, prototypes=prototypes, score_mode=score_mode)
+        try:
+            known_scores, _ = compute_open_score(
+                outputs_known, prototypes=prototypes, score_mode=score_mode
+            )
+            open_scores, _ = compute_open_score(
+                outputs_open, prototypes=prototypes, score_mode=score_mode
+            )
+        except ValueError as exc:
+            results.append(
+                {
+                    "score_mode": score_mode,
+                    "auroc": float("nan"),
+                    "status": "skipped",
+                    "reason": str(exc),
+                }
+            )
+            continue
         unknown_scores = open_scores[unknown_mask]
         labels = np.concatenate([np.zeros_like(known_scores), np.ones_like(unknown_scores)])
         scores = np.concatenate([known_scores, unknown_scores])
@@ -243,11 +270,15 @@ def _select_score_mode(outputs_known, outputs_open, prototypes, score_modes):
             {
                 "score_mode": score_mode,
                 "auroc": auroc,
+                "status": "ok",
             }
         )
 
-    results.sort(key=lambda x: x["auroc"], reverse=True)
-    return results[0], results
+    valid = [item for item in results if item["status"] == "ok" and np.isfinite(item["auroc"])]
+    if not valid:
+        raise ValueError("No usable score mode was available for automatic calibration.")
+    valid.sort(key=lambda x: x["auroc"], reverse=True)
+    return valid[0], results
 
 
 def fit_teacher(args):
@@ -291,9 +322,12 @@ def fit_teacher(args):
             alpha_unc=args.alpha_unc,
             alpha_proto=args.alpha_proto,
             alpha_pseudo=args.alpha_pseudo,
+            alpha_energy=args.alpha_energy,
             pseudo_mode=args.pseudo_mode,
             pseudo_feature_noise=args.pseudo_feature_noise,
             uncertainty_target_mode=args.uncertainty_target_mode,
+            energy_margin=args.energy_margin,
+            energy_temperature=args.energy_temperature,
         )
         val_stats = evaluate_classification(model, val_loader, device)
         print(f"[teacher][{epoch+1}/{args.epochs}] {stats} {val_stats}")
@@ -347,9 +381,15 @@ def fit_student(args):
     train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
     discovery_loader = None
+    if (args.alpha_discovery_unknown > 0.0 or args.alpha_discovery_energy > 0.0) and not args.discovery_pool:
+        raise ValueError("alpha-discovery-unknown/energy requires --discovery-pool.")
     if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
-        if args.discovery_pool_mode == "mixed" and args.alpha_discovery_unknown > 0.0:
-            raise ValueError("alpha-discovery-unknown requires --discovery-pool-mode unknown.")
+        if args.discovery_pool_mode == "mixed" and (
+            args.alpha_discovery_unknown > 0.0 or args.alpha_discovery_energy > 0.0
+        ):
+            raise ValueError(
+                "alpha-discovery-unknown/energy requires --discovery-pool-mode unknown."
+            )
         discovery_loader = build_loader(
             TwoViewDataset(bundle.discovery_pool),
             args.discovery_batch_size or args.batch_size,
@@ -391,6 +431,7 @@ def fit_student(args):
             alpha_supcon=args.alpha_supcon,
             alpha_proto=args.alpha_proto,
             alpha_pseudo=args.alpha_pseudo,
+            alpha_energy=args.alpha_energy,
             pseudo_mode=args.pseudo_mode,
             pseudo_feature_noise=args.pseudo_feature_noise,
             uncertainty_target_mode=args.uncertainty_target_mode,
@@ -400,8 +441,11 @@ def fit_student(args):
             discovery_loader=discovery_loader,
             alpha_discovery=args.alpha_discovery,
             alpha_discovery_unknown=args.alpha_discovery_unknown,
+            alpha_discovery_energy=args.alpha_discovery_energy,
             discovery_loss_mode=args.discovery_loss,
             discovery_temperature=args.discovery_temperature,
+            energy_margin=args.energy_margin,
+            energy_temperature=args.energy_temperature,
         )
         val_stats = evaluate_classification(student, val_loader, device)
         print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
@@ -480,7 +524,12 @@ def discover(args):
             for key, value in gaussian_stats.items()
         }
     selected_score_mode = args.score_mode
-    score_normalization = fit_score_normalization(outputs_val, proto, gaussian_stats)
+    needs_normalization = selected_score_mode.startswith("normalized_")
+    score_normalization = (
+        fit_score_normalization(outputs_val, proto, gaussian_stats)
+        if needs_normalization or args.score_mode == "auto" or args.auto_calibrate_score
+        else {}
+    )
     calibration_report = None
     threshold = None
     if (args.score_mode == "auto" or args.auto_calibrate_score) and outputs_open_val is not None:

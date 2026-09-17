@@ -185,7 +185,7 @@ class DataBundle:
 
 
 class TwoViewDataset(Dataset):
-    """Return two independently augmented views from one sample."""
+    """Return two independently augmented views from one base sample."""
 
     def __init__(self, dataset: Dataset) -> None:
         self.dataset = dataset
@@ -200,7 +200,7 @@ class TwoViewDataset(Dataset):
 
 
 def unknown_subset(dataset: Dataset) -> Dataset:
-    """Build an unlabeled subset containing only samples outside known classes."""
+    """Build an unlabeled view of the samples outside the known classes."""
     if hasattr(dataset, "allowed_indices") and hasattr(dataset, "base"):
         allowed_indices = list(dataset.allowed_indices)
         if hasattr(dataset.base, "targets"):

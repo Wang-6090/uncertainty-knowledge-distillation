@@ -8,12 +8,11 @@ def uncertainty_weights(
     uncertainty: torch.Tensor,
     mode: str = "raw",
 ) -> torch.Tensor:
-    """Convert uncertainty to per-sample transfer weights.
+    """Convert teacher uncertainty to per-sample distillation weights.
 
-    ``raw`` preserves the original implementation. ``mean_normalized`` keeps
-    the batch-average KD strength close to one, so an ablation measures the
-    effect of reallocating transfer strength across samples rather than also
-    changing the total KD coefficient.
+    ``raw`` preserves the original behavior. ``mean_normalized`` keeps the
+    batch-average KD strength close to one, so ablations compare where the KD
+    signal is allocated instead of also changing the total KD strength.
     """
     weights = torch.exp(-uncertainty.detach())
     if mode == "raw":
@@ -76,6 +75,28 @@ def distillation_loss(
     return per_sample.mean()
 
 
+def energy_score(logits: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
+    """Compute the energy score; lower values indicate more familiar inputs."""
+    return -temperature * torch.logsumexp(logits / temperature, dim=-1)
+
+
+def energy_margin_loss(
+    known_logits: torch.Tensor,
+    outlier_logits: torch.Tensor,
+    margin: float = 1.0,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Separate known and pseudo-outlier energies without absolute thresholds."""
+    if known_logits.numel() == 0 or outlier_logits.numel() == 0:
+        return known_logits.new_tensor(0.0)
+    known_energy = energy_score(known_logits, temperature=temperature)
+    outlier_energy = energy_score(outlier_logits, temperature=temperature)
+    pair_count = min(known_energy.size(0), outlier_energy.size(0))
+    known_energy = known_energy[:pair_count]
+    outlier_energy = outlier_energy[:pair_count]
+    return F.relu(known_energy - outlier_energy + margin).mean()
+
+
 def feature_distillation_loss(
     student_projection: torch.Tensor,
     teacher_projection: torch.Tensor,
@@ -112,8 +133,11 @@ def supervised_contrastive_loss(features: torch.Tensor, labels: torch.Tensor, te
     logits_mask = 1.0 - eye
     exp_logits = torch.exp(logits) * logits_mask
     log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True).clamp_min(1e-8))
-    pos_counts = mask.sum(dim=1).clamp_min(1.0)
-    mean_log_prob_pos = (mask * log_prob).sum(dim=1) / pos_counts
+    pos_counts = mask.sum(dim=1)
+    valid = valid & (pos_counts > 0)
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    mean_log_prob_pos = (mask * log_prob).sum(dim=1) / pos_counts.clamp_min(1.0)
     loss = -mean_log_prob_pos[valid].mean()
     return loss
 
@@ -146,9 +170,8 @@ def discovery_unknown_loss(
 ) -> torch.Tensor:
     """Encourage unlabeled discovery samples to leave the known classifier.
 
-    This loss uses no class labels. It is intended for a discovery pool known
-    by the data protocol to contain novel samples; do not apply it to a mixed
-    pool containing known samples.
+    This is only appropriate when the discovery pool is known by protocol to
+    contain novel samples. For mixed pools, use view consistency/contrast only.
     """
     if logits.numel() == 0:
         return logits.new_tensor(0.0)

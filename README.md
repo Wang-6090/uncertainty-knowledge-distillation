@@ -1,190 +1,284 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
-本仓库是大创项目“基于不确定性知识蒸馏的新类发现方法”的实验代码、实验脚本和阶段性记录。
+本项目面向开放场景下的图像识别问题，研究如何同时完成已知类别分类、未知样本检测和未知样本的新类聚类。
 
-项目面向开放场景的三个任务：已知类别分类、已知/未知样本检测，以及对未知候选样本进行无监督新类聚类。
+当前仓库已经实现了一套可运行的实验框架，但还不能直接宣称已经得到最终有效的新类发现方法。现阶段重点是建立公平、可复现的基线，验证不确定性知识蒸馏和 discovery pool 学习是否真正改善开放集检测与新类聚类。
 
-## 当前阶段
-
-目前已经完成一套可运行、可复现、可进行消融比较的两阶段流程：
+## 当前流程
 
 ```text
-已知类别数据
-    ├─ 教师模型：CE + 不确定性相关损失
-    └─ 学生模型：CE + 知识蒸馏 + 不确定性对齐
-                 + 可选特征蒸馏、监督对比学习、原型约束
-                 + 可选 discovery pool 双视图对比学习
-    └─ 测试阶段：开放分数 → 已知/未知检测 → 未知候选聚类
+已知类别图像
+    |
+    +--> 教师模型：CE + 不确定性辅助损失
+    |
+    +--> 学生模型：CE + KL知识蒸馏
+                 + 可选不确定性加权蒸馏
+                 + 可选特征蒸馏、SupCon、原型约束
+                 + 可选 discovery pool 双视图学习
+    |
+    +--> 开放集打分：熵、MSP、Energy、原型距离、Mahalanobis 等
+    |
+    +--> 阈值判断：已知样本 / 未知候选样本
+    |
+    +--> 未知候选样本聚类：KMeans、层次聚类或谱聚类
 ```
 
-当前程序还不是已经充分验证的最终论文方法，更准确的定位是：已知类别监督分类、开放集检测和未知候选聚类实验框架，并包含不确定性感知知识蒸馏与 discovery pool 表征学习的可选实现。
+目前的测试阶段仍然是“先未知检测，再对候选样本聚类”的两阶段流程，不是完整的端到端新类发现模型。
 
-最大问题仍是未知检测能力不足，FPR95 偏高；聚类也会受到错误候选样本和聚类数量估计误差影响。现有结果用于说明流程和比较改进方向，不能直接宣称最终方法已经优于现有方法。
+## 已实现功能
 
-## 已实现内容
+### 数据与环境
 
-### 数据和环境
+- 支持 `CIFAR-100`、`ImageFolder`、`toy` 和 `fake` 数据集。
+- 支持固定已知类 / 未知类划分，例如 `splits_cifar100_60_40.json`。
+- 支持训练集、验证集、开放测试集和 discovery pool。
+- 支持数据增强、归一化、样本数量限制和 `--device auto` 自动选择 CUDA 或 CPU。
+- 默认将 torchvision 预训练权重缓存到项目下的 `.torch_cache`。
 
-- 支持 `toy`、`fake`、CIFAR-100 和一般 `imagefolder` 数据集。
-- CIFAR-100 主要采用固定的 60 个已知类别、40 个未知类别划分：`splits_cifar100_60_40.json`。
-- 支持训练/验证/测试集、discovery pool、缩放、标准化、增强和样本数量限制。
-- 使用 PyTorch、torchvision、NumPy、SciPy 和 scikit-learn。
-- `--device auto` 会在 CUDA 可用时使用 GPU，也可指定 `cpu` 或 `cuda`。
+### 模型与损失
 
-### 模型和损失
+- 教师模型和学生模型支持 ResNet-18、ResNet-34、MobileNetV3-Small。
+- 模型同时输出分类 logits、特征、投影向量和辅助不确定性。
+- 支持标准温度 KL 蒸馏：
 
-教师模型在已知类别上监督训练，学生模型在教师模型基础上训练。当前可选组件包括：CE、标准温度缩放 KL 蒸馏、不确定性感知蒸馏、特征蒸馏、不确定性对齐、监督对比学习、类别原型约束、伪未知损失、discovery pool 双视图一致性/NT-Xent，以及 discovery unknown loss。
+  ```text
+  L_KD = KL(teacher || student) * temperature^2
+  ```
 
-不确定性感知蒸馏的基本形式为：
+- 支持不确定性加权蒸馏：
 
-```text
-L_unc-KD = weight(u_teacher) × KL(p_teacher || p_student)
-```
+  ```text
+  weight = exp(-teacher_uncertainty)
+  ```
 
-教师越不确定，蒸馏权重越小；教师越可靠，蒸馏权重越大。但该设计是否稳定有效仍需固定协议、多随机种子和统计检验确认。
+  教师越确定，蒸馏信号越强；教师越不确定，蒸馏信号越弱。
 
-### 开放集检测
+- 支持 `raw` 和 `mean_normalized` 两种蒸馏权重模式。
+- 支持特征蒸馏、监督对比学习、原型约束和伪未知样本损失。
+- 支持可选 Energy 分离损失：约束已知样本和伪未知样本的 Energy 分数拉开间隔；通过 `--alpha-energy` 开启。
+- SupCon 只对 batch 内确实存在同类正样本的 anchor 计算损失，避免单样本类别干扰训练。
 
-测试阶段用模型输出计算开放分数，并使用已知验证集分位数确定阈值。支持 MSP、Energy、熵、预测熵、偶然/认知不确定性、原型距离、Mahalanobis 距离及其组合分数，也支持已知验证集归一化组合。
+### Discovery pool 学习
 
-手动指定 `score-mode` 时，测试集未知标签不参与阈值或分数选择。`--score-mode auto` 或 `--auto-calibrate-score` 配合 `--open-val-ratio` 属于带未知验证数据的校准/分析实验，不能和完全无未知标签的最终设置混淆。
+- 支持双视图 cosine consistency。
+- 支持带负样本的 NT-Xent 对比损失。
+- `--discovery-pool-mode unknown` 使用纯未知池，适合上限或受控实验。
+- `--discovery-pool-mode mixed` 使用已知类和未知类混合池，更接近真实开放环境。
+- `discovery_unknown_loss` 只允许用于纯未知池，避免把“所有 discovery 样本都是未知”的假设错误用于混合数据。
+- 支持 `--alpha-discovery-energy`：在纯未知 discovery pool 上施加 Energy 间隔约束，用于验证 Outlier Exposure 风格训练是否能改善未知检测。
 
-### 未知样本聚类
+### 未知检测与聚类
 
-聚类只处理被检测为未知的候选样本。当前支持 `kmeans`、`agglomerative`、`spectral`，支持 `projection`、`feature`、`projection_pca`、`feature_pca`，并支持 L2 归一化、PCA 降维和白化。
+- 开放集分数支持 MSP、Energy、predictive entropy、epistemic uncertainty、prototype distance、diagonal Mahalanobis distance 及组合分数。
+- MC Dropout 用于估计预测熵、数据不确定性代理和认知不确定性。
+- 阈值默认只根据已知验证集分位数确定，不使用测试集未知标签。
+- 聚类支持 KMeans、Agglomerative 和 Spectral。
+- 支持 projection / feature 特征、PCA、whitening 和 L2 归一化。
+- auto-K 支持 silhouette、内部指标组合和稳定性分析。
+- 结果中记录候选池纯度、误拒已知样本数量、真实 K、估计 K 以及 K 误差。
 
-`oracle K` 使用真实未知类别数，作为聚类能力上限/对照；`auto K` 不使用未知标签，根据候选池内部结构估计聚类数。自动 K 会记录 Silhouette、Calinski-Harabasz、Davies-Bouldin、不同初始化之间的稳定性 NMI 和每个候选 K 的指标，写入 `discovery_report.json` 和 `discovery_detail.json`。
+## 当前阶段性结论
 
-## 已有进步与结果
+现有 CIFAR-100 60/40 实验表明：
 
-已经完成教师/学生训练、开放检测、未知候选聚类、消融、分数比较、误差分析和部分多随机种子实验。
+- 普通 KD 相比 CE 通常只有小幅变化。
+- 不确定性加权 KD 已经正确接入代码，但目前还没有通过多随机种子实验稳定证明它优于普通 KD。
+- 特征蒸馏和完整表示学习可能改善特征结构，但不一定改善未知检测。
+- 未知检测仍然是最大问题：AUROC 大约在 `0.59–0.61`，FPR95 大约在 `0.86–0.89`。
+- 最新 Energy 消融中，伪未知 Energy 训练使 AUROC 从 `0.5975` 小幅升至 `0.6036`，AUPR 从 `0.4595` 升至 `0.4677`，但 FPR95、unknown reject rate 和已知分类准确率没有改善；因此只能说明方向有信号，不能说明已经解决未知检测问题。
+- 5 epoch 快速对比中，纯未知 discovery pool + Energy 约束使 AUROC 从 `0.5259` 升至 `0.5800`，FPR95 从 `0.9125` 降至 `0.8897`，known accuracy 从 `0.2719` 升至 `0.3746`，unknown reject rate 从 `0.0456` 升至 `0.0714`，候选池纯度从 `0.3426` 升至 `0.5000`。这说明“真实无标签未知样本参与训练”比伪未知样本更值得继续验证。
+- 候选池纯度大约为 `0.43–0.50`，说明候选池中混入了较多被误拒的已知样本。
+- auto-K 在当前特征空间中可能估计为 `2`，而真实未知类别数为 `40`，说明自动类别数估计仍不可靠。
 
-在 CIFAR-100 60/40 设置下，最新一组 discovery pool 多种子汇总为：
+这些结果只能作为阶段性实验记录，不能作为最终论文结论。正式结论应在固定协议下至少运行 3 个随机种子，并报告均值和标准差。
 
-| 方法 | AUROC | FPR95 | OSCR | 已知准确率 | Cluster ACC |
-|---|---:|---:|---:|---:|---:|
-| E：原完整模型 | 0.5823 | 0.8829 | 0.3118 | 0.4068 | 0.1873 |
-| F：E + discovery pool NT-Xent | 0.6397 | 0.8413 | 0.4084 | 0.5221 | 0.2058 |
-
-阶段性结论：discovery pool 双视图对比学习对未知检测和已知分类有积极作用，但聚类提升较小；`auto K` 仍不可靠；不确定性感知 KD 尚未显示稳定优于标准 KD 的证据；单次或小样本实验不能支持最终论文结论。
-
-主要结果文件：
-
-- `analysis/revised_multiseed/multiseed_summary.md`
-- `analysis/revised_multiseed_2seed/multiseed_summary.md`
-- `analysis/discovery_pool_multiseed_comparison.md`
-- `analysis/uncertainty_weight_compare/`
-- `analysis/score_sweep_s123_E/`
-- `analysis/open_set_error_analysis.md`
-
-## 当前问题与解决方向
+## 主要问题与处理方向
 
 ### 1. 未知检测能力不足
 
-AUROC 约 0.6、FPR95 偏高，说明未知和已知样本的开放分数重叠严重。可能原因是模型只见过已知类别、已知分类准确率不足、不确定性未校准、分数尺度不一致以及阈值策略有限。
+原因可能包括已知分类准确率不足、已知与未知分数分布重叠、不确定性没有校准、特征空间类间分离不足以及阈值策略较简单。
 
-建议固定训练协议，系统比较 MSP、Energy、熵、原型距离和 Mahalanobis；使用已知验证集统计量进行 z-score 归一化后融合；检查温度校准、可靠性图和 ECE；同时报告 AUROC、AUPR、FPR95、OSCR、已知准确率和未知拒识率。确认基础模型后，再尝试 Outlier Exposure、Energy loss 或更明确的伪未知训练。可参考 Energy-based OOD Detection、Outlier Exposure 和 Open Set Recognition: A Good Closed-Set Classifier is All You Need?。
+建议先固定训练协议，系统比较 MSP、Energy、熵、原型距离和 Mahalanobis 分数，并检查温度校准、ECE、可靠性图和已知 / 未知分数分布。当前代码已经提供两类 Energy 训练：一类基于已知样本生成的伪未知样本，另一类基于纯未知 discovery pool 的 `discovery_energy`。前者已经验证只有小幅 AUROC/AUPR 提升，后者更接近 Outlier Exposure 和新类发现训练设定，需要继续跑对比实验确认是否真正提升未知拒绝率。
 
-### 2. 聚类候选池混入错误接受的已知样本
+可参考 Liu 等人的 Energy-based OOD Detection、Hendrycks 等人的 Outlier Exposure，以及 Vaze 等人的 Open-Set Recognition 工作。
 
-聚类对象是“被检测为未知”的样本，不是全部真实未知样本；因此聚类差不一定是聚类算法本身的问题。
+### 2. 候选池污染严重
 
-建议同时报告候选池整体结果和真实未知子集结果；用 `oracle K` 判断特征本身是否可聚类；用 `auto K` 时保存候选 K 指标；比较 projection、feature、PCA、L2 归一化特征以及三种聚类方法。oracle K 也差时优先改进表征；oracle K 好而 auto K 差时优先改进 K 估计。可参考 Deep Embedded Clustering、Supervised Contrastive Learning、Deep Transfer Clustering 和 Relational Knowledge Distillation。
+当前聚类对象是“被检测为未知的所有样本”，其中包括误拒的已知样本。因此聚类指标低不一定完全是聚类算法的问题。
 
-### 3. 不确定性感知蒸馏尚未证明有效
+代码已经记录 candidate purity，并同时报告整个候选池和真实未知子集的聚类结果。后续应先提升候选池纯度，再解释聚类指标；同时固定报告 oracle-K 和 auto-K，不能只报告 oracle-K。
 
-代码已经实现不确定性调节 KD 权重，但结果没有稳定证明其优于标准 KD。可能原因是教师模型不够准确、MC Dropout 未校准或权重尺度不合适。
+### 3. auto-K 估计不可靠
 
-建议在完全相同条件下比较 CE、Standard KD 和 Uncertainty KD；比较 `raw`/`mean_normalized` 权重及 confidence、classification_error、margin 目标；分析教师不确定性与分类错误的相关性，并用至少 3 个随机种子报告均值和标准差。可参考 Hinton 的 Knowledge Distillation、Kendall and Gal、Gal and Ghahramani 和 Deep Ensembles。
+当前 `novel_discovery/pipeline.py` 中候选 K 的搜索上限是 20，而 CIFAR-100 实验有 40 个未知类。因此当前 auto-K 不可能估计出 40。
 
-### 4. 尚不是严格的端到端新类发现
+后续需要把最大 K 改成可配置参数，并在不使用未知标签的前提下比较 silhouette、CH、DB、稳定性和密度聚类方法。oracle-K 只能作为聚类能力上限，不能作为最终无监督结果。
 
-当前 discovery pool 主要用于学生模型表征学习，测试时仍是“先检测、后聚类”的两阶段流程。建议先验证 discovery pool 的稳定收益，再加入高置信候选伪标签、周期更新和一致性约束；训练阶段不使用未知测试标签，并明确两阶段方法的适用边界。可参考 Deep Transfer Clustering、Deep Embedded Clustering 和对比学习中的伪标签更新思路。
+### 4. 不确定性蒸馏尚未被充分验证
 
-### 5. 实验统计可靠性不足
+目前训练时使用辅助不确定性头的输出对 KL 和特征蒸馏进行加权；测试时还使用 MC Dropout 的预测熵和认知不确定性。两者是不同的不确定性信号，不能简单当作同一个量。
 
-smoke test 和单随机种子只适合检查代码。正式实验应固定数据划分、backbone、预训练、训练轮数、学习率、batch size、阈值、score mode 和聚类配置，至少使用 3 个随机种子，并报告均值、标准差、参数量和推理成本。
+后续应在完全相同的设置下比较 CE、标准 KD、不确定性 KD，并比较 `raw` / `mean_normalized` 权重和 confidence / classification-error / margin 目标，至少运行 3 个随机种子。如果不确定性 KD 没有稳定提升，应如实记录为未验证，而不是强行宣称有效。
+
+可参考 Hinton 等人的 Knowledge Distillation、Gal and Ghahramani 的 MC Dropout，以及 Kendall and Gal 关于不确定性分解的工作。
+
+### 5. 还不是完整端到端新类发现
+
+目前 discovery pool 主要用于双视图表示学习，测试时仍然是检测后聚类。还没有把聚类伪标签、未知类分类头和周期性伪标签更新纳入统一训练。
+
+后续可以参考 Deep Embedded Clustering、Deep Transfer Clustering 和 UNO 等方法，逐步加入高置信伪标签、聚类一致性损失和周期性更新，但必须先验证 discovery pool 本身确实改善检测和聚类，避免一次加入过多模块。
+
+## 推荐实验协议
+
+1. 固定 CIFAR-100 60/40 划分、backbone、输入尺寸、epoch、batch size、优化器、阈值策略和评分方式。
+2. 使用同一个教师模型比较 CE、标准 KD、不确定性 KD、特征 KD 和完整模型。
+3. 先进行单模块消融，再测试 discovery pool；不要同时改变多个模块。
+4. 每个主要实验至少运行 3 个 seed，报告 mean ± std。
+5. 检测报告 AUROC、AUPR、FPR95、OSCR、known accuracy、known accept rate 和 unknown reject rate。
+6. 聚类同时报告候选池纯度、candidate pool 全体聚类结果、真实未知子集结果、oracle-K 和 auto-K。
+7. 记录模型参数量、推理时间；比较 ResNet-18 与 MobileNetV3-Small 时保持训练和检测协议一致。
 
 ## 运行方法
 
-### 检查数据
+安装依赖：
 
-```powershell
-python train.py inspect_data `
-  --dataset cifar100 --data-root .\data --download `
-  --num-known 60 --seed 42 `
-  --split-path .\splits_cifar100_60_40.json
+```bash
+pip install -r requirements.txt
 ```
 
-### 训练教师和学生
+检查数据划分：
 
 ```powershell
-python train.py train_teacher `
-  --dataset cifar100 --data-root .\data --num-known 60 `
-  --split-path .\splits_cifar100_60_40.json --image-size 64 `
-  --batch-size 128 --epochs 30 --device auto `
-  --work-dir .\runs\teacher
+python train.py inspect_data --dataset cifar100 --data-root .\data --download `
+  --num-known 60 --seed 42 --split-path .\splits_cifar100_60_40.json
+```
 
-python train.py train_student `
-  --dataset cifar100 --data-root .\data --num-known 60 `
-  --split-path .\splits_cifar100_60_40.json --image-size 64 `
-  --batch-size 128 --epochs 30 --device auto `
+训练教师模型：
+
+```powershell
+python train.py train_teacher --dataset cifar100 --data-root .\data `
+  --num-known 60 --seed 42 --split-path .\splits_cifar100_60_40.json `
+  --backbone resnet34 --pretrained --image-size 64 --batch-size 64 `
+  --epochs 15 --work-dir .\runs\teacher `
+  --teacher-ckpt .\runs\teacher\teacher.pt --device auto
+```
+
+训练学生模型：
+
+```powershell
+python train.py train_student --dataset cifar100 --data-root .\data `
+  --num-known 60 --seed 42 --split-path .\splits_cifar100_60_40.json `
+  --backbone resnet18 --teacher-backbone resnet34 --student-backbone resnet18 `
+  --pretrained --image-size 64 --batch-size 64 --epochs 15 `
   --teacher-ckpt .\runs\teacher\teacher.pt `
   --student-ckpt .\runs\student\student.pt `
-  --work-dir .\runs\student
+  --work-dir .\runs\student --device auto
 ```
 
-如需启用 discovery pool，可增加：`--discovery-pool --alpha-discovery 0.1 --discovery-loss nt_xent`。
-
-### 改进后的自动 K 聚类
+在已知数据生成的伪未知样本上启用 Energy 分离损失：
 
 ```powershell
-python train.py discover `
-  --dataset cifar100 --data-root .\data --num-known 60 --num-novel 40 `
-  --seed 42 --split-path .\splits_cifar100_60_40.json `
+python train.py train_student --dataset cifar100 --data-root .\data `
+  --num-known 60 --seed 42 --split-path .\splits_cifar100_60_40.json `
+  --backbone resnet18 --teacher-backbone resnet34 --student-backbone resnet18 `
+  --pretrained --alpha-energy 0.1 --energy-margin 1.0 `
+  --teacher-ckpt .\runs\teacher\teacher.pt `
+  --student-ckpt .\runs\student_energy\student.pt `
+  --work-dir .\runs\student_energy --device auto
+```
+
+`--alpha-energy 0` 时保持原有训练行为。该版本使用的是伪未知样本，后续还需要增加真正的辅助异常数据协议，才能严格复现 Outlier Exposure。
+
+启用 discovery pool 的 NT-Xent 表示学习：
+
+```powershell
+python train.py train_student --dataset cifar100 --data-root .\data `
+  --num-known 60 --seed 42 --split-path .\splits_cifar100_60_40.json `
+  --backbone resnet18 --teacher-backbone resnet34 --student-backbone resnet18 `
+  --pretrained --discovery-pool --discovery-pool-mode mixed `
+  --limit-discovery 5000 --alpha-discovery 0.1 --discovery-loss nt_xent `
+  --teacher-ckpt .\runs\teacher\teacher.pt `
+  --student-ckpt .\runs\student_discovery\student.pt `
+  --work-dir .\runs\student_discovery --device auto
+```
+
+注意：混合 discovery pool 只能使用双视图一致性或 NT-Xent，不能启用 `--alpha-discovery-unknown` 或 `--alpha-discovery-energy`。纯未知池可以用于受控上限实验，但不能直接代表完全真实的无标签场景。
+
+在纯未知 discovery pool 上启用 Energy 分离约束：
+
+```powershell
+python train.py train_student --dataset cifar100 --data-root .\data `
+  --num-known 60 --seed 42 --split-path .\splits_cifar100_60_40.json `
+  --backbone resnet18 --teacher-backbone resnet34 --student-backbone resnet18 `
+  --pretrained --discovery-pool --discovery-pool-mode unknown `
+  --limit-discovery 4000 --alpha-discovery 0.05 `
+  --alpha-discovery-energy 0.1 --discovery-loss nt_xent `
+  --teacher-ckpt .\runs\teacher\teacher.pt `
+  --student-ckpt .\runs\student_discovery_energy\student.pt `
+  --work-dir .\runs\student_discovery_energy --device auto
+```
+
+运行未知检测和 auto-K 聚类：
+
+```powershell
+python train.py discover --dataset cifar100 --data-root .\data `
+  --num-known 60 --num-novel 40 --seed 42 `
+  --split-path .\splits_cifar100_60_40.json `
+  --backbone resnet18 --student-backbone resnet18 --pretrained `
   --student-ckpt .\runs\student\student.pt `
+  --work-dir .\runs\discover_auto `
+  --score-mode normalized_entropy_mahalanobis `
   --cluster-k auto --cluster-method kmeans `
   --cluster-feature projection_pca --cluster-selection composite `
-  --cluster-pca-dim 32 --cluster-normalize --mc-samples 4 `
-  --device auto --work-dir .\runs\discover_auto_pca
+  --cluster-pca-dim 32 --cluster-normalize `
+  --mc-samples 8 --device auto
 ```
 
-新增聚类选项已经写入代码，但尚未正式实验验证，不能提前宣称一定提升指标。已有长实验脚本：
+运行核心测试：
+
+```bash
+python -m unittest discover -s tests
+```
+
+运行已有对比脚本：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_revised_multiseed.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\run_discovery_pool_multiseed.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\run_revised_ablation.ps1
 ```
 
-## 目录说明
+比较是否加入 Energy 分离损失：
 
-```text
-train.py                         训练、检测和聚类入口
-novel_discovery/data.py          数据加载、划分和 discovery pool
-novel_discovery/models.py        教师/学生模型
-novel_discovery/losses.py        CE、KD、不确定性、对比和原型损失
-novel_discovery/pipeline.py      训练、开放检测和聚类
-novel_discovery/metrics.py       检测与聚类指标
-scripts/                         对比、消融和多种子脚本
-analysis/                        阶段性结果和误差分析
-docs/                            方法说明、实验计划和组内记录
-splits_*.json                    固定类别划分
-data/                            本地数据，不上传仓库
-runs/                            权重和运行结果，不上传仓库
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_energy_compare.ps1
 ```
 
-## 指标说明
+该脚本只改变 `--alpha-energy`，并复用同一个教师模型。正式实验前应确认教师权重已经存在；首次测试可以把脚本中的 epoch 和数据量改小，正式结果再恢复完整设置。
 
-- `AUROC`：开放分数区分未知/已知的整体排序能力，越高越好。
-- `AUPR`：未知样本为正类时的平均精确率。
-- `FPR95`：未知召回率达到 95% 时的已知误接受率，越低越好。
-- `OSCR`：同时考虑已知分类正确率和未知拒识能力，越高越好。
-- `unknown_reject_rate`：真实未知样本被拒绝的比例，越高越好。
-- `cluster_acc/nmi/ari`：未知候选样本聚类指标，必须结合候选池大小和错误接受率分析。
+比较是否加入纯未知 discovery pool 的 Energy 约束：
 
-## 注意事项
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_discovery_energy_compare.ps1
+```
 
-- `oracle K` 使用真实未知类别数，只能作为分析对照。
-- 不能使用测试集未知标签选择阈值、score mode 或聚类方法后，把结果当作无监督最终结果。
-- `toy` 和带 `limit-*` 的实验只用于调试，不能替代 CIFAR-100 正式实验。
-- 本仓库不包含 CIFAR-100 数据、模型权重和大型运行结果，组员应按命令重新生成或使用外部共享路径。
+## 文件说明
+
+- `train.py`：训练、未知检测和聚类入口。
+- `novel_discovery/data.py`：数据集、类别划分和 discovery pool。
+- `novel_discovery/models.py`：教师 / 学生模型和 MC Dropout 推理。
+- `novel_discovery/losses.py`：分类、蒸馏、不确定性、对比和原型损失。
+- `novel_discovery/pipeline.py`：训练流程、开放集打分、阈值和聚类。
+- `novel_discovery/metrics.py`：AUROC、AUPR、FPR95、OSCR 和聚类指标。
+- `analyze_results.py`：多组实验结果和误差分析。
+- `tests/`：核心行为测试。
+- `scripts/`：消融、对比和多配置实验脚本。
+- `analysis/`：阶段性实验结果和分析文档。
+- `docs/`：方法说明、实验计划和组内进度。
+
+`data/`、`runs/`、`.torch_cache/` 和模型权重不提交到仓库。正式结果应保留对应的 `config.json`、模型配置、随机种子和报告文件。
+
+## 结果解释原则
+
+- toy 数据和带有 `limit-*` 参数的实验只用于检查代码是否可运行。
+- oracle-K 只用于聚类上限分析。
+- 使用测试集未知标签选择分数、阈值或聚类配置的结果不能作为严格无监督结果。
+- 目前结果属于阶段性结果，后续必须补充多随机种子实验和统一协议后，才能形成论文结论。

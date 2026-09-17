@@ -20,6 +20,7 @@ from .losses import (
     discovery_unknown_loss,
     discovery_view_loss,
     distillation_loss,
+    energy_margin_loss,
     feature_distillation_loss,
     pseudo_unknown_loss,
     prototype_alignment_loss,
@@ -101,15 +102,19 @@ def train_one_epoch_teacher(
     alpha_unc: float = 0.1,
     alpha_proto: float = 0.0,
     alpha_pseudo: float = 0.0,
+    alpha_energy: float = 0.0,
     pseudo_mode: str = "strong",
     pseudo_feature_noise: float = 0.05,
     uncertainty_target_mode: str = "confidence",
+    energy_margin: float = 1.0,
+    energy_temperature: float = 1.0,
 ):
     model.train()
     ce_meter = AverageMeter()
     unc_meter = AverageMeter()
     proto_meter = AverageMeter()
     pseudo_meter = AverageMeter()
+    energy_meter = AverageMeter()
     for batch in tqdm(loader, desc="teacher-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
         images = images.to(device)
@@ -125,7 +130,16 @@ def train_one_epoch_teacher(
         pseudo_features = pseudo_out["features"] + pseudo_feature_noise * torch.randn_like(pseudo_out["features"])
         pseudo_logits, pseudo_uncertainty = pseudo_forward_from_features(model, pseudo_features)
         loss_pseudo = pseudo_unknown_loss(pseudo_logits, pseudo_uncertainty)
-        loss = loss_ce + alpha_unc * loss_unc + alpha_proto * loss_proto + alpha_pseudo * loss_pseudo
+        loss_energy = energy_margin_loss(
+            out["logits"], pseudo_logits, margin=energy_margin, temperature=energy_temperature
+        )
+        loss = (
+            loss_ce
+            + alpha_unc * loss_unc
+            + alpha_proto * loss_proto
+            + alpha_pseudo * loss_pseudo
+            + alpha_energy * loss_energy
+        )
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -133,7 +147,14 @@ def train_one_epoch_teacher(
         unc_meter.update(loss_unc.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
-    return {"ce": ce_meter.avg, "unc": unc_meter.avg, "proto": proto_meter.avg, "pseudo": pseudo_meter.avg}
+        energy_meter.update(loss_energy.item(), images.size(0))
+    return {
+        "ce": ce_meter.avg,
+        "unc": unc_meter.avg,
+        "proto": proto_meter.avg,
+        "pseudo": pseudo_meter.avg,
+        "energy": energy_meter.avg,
+    }
 
 
 def train_one_epoch_student(
@@ -148,6 +169,7 @@ def train_one_epoch_student(
     alpha_supcon: float = 0.1,
     alpha_proto: float = 0.0,
     alpha_pseudo: float = 0.0,
+    alpha_energy: float = 0.0,
     pseudo_mode: str = "strong",
     pseudo_feature_noise: float = 0.05,
     uncertainty_target_mode: str = "confidence",
@@ -157,8 +179,11 @@ def train_one_epoch_student(
     discovery_loader=None,
     alpha_discovery: float = 0.0,
     alpha_discovery_unknown: float = 0.0,
+    alpha_discovery_energy: float = 0.0,
     discovery_loss_mode: str = "nt_xent",
     discovery_temperature: float = 0.2,
+    energy_margin: float = 1.0,
+    energy_temperature: float = 1.0,
 ):
     student.train()
     teacher.eval()
@@ -169,8 +194,10 @@ def train_one_epoch_student(
     sc_meter = AverageMeter()
     proto_meter = AverageMeter()
     pseudo_meter = AverageMeter()
+    energy_meter = AverageMeter()
     discovery_meter = AverageMeter()
     discovery_unknown_meter = AverageMeter()
+    discovery_energy_meter = AverageMeter()
     discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     for batch in tqdm(loader, desc="student-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
@@ -191,10 +218,11 @@ def train_one_epoch_student(
             uncertainty_weighted=(kd_mode == "uncertainty"),
             uncertainty_weight_mode=uncertainty_weight_mode,
         )
+        feature_teacher_uncertainty = t_out["uncertainty"] if kd_mode == "uncertainty" else None
         loss_feat_kd = feature_distillation_loss(
             s_out["proj"],
             t_out["proj"],
-            teacher_uncertainty=t_out["uncertainty"],
+            teacher_uncertainty=feature_teacher_uncertainty,
             uncertainty_weight_mode=uncertainty_weight_mode,
         )
         loss_supcon = supervised_contrastive_loss(s_out["proj"], labels)
@@ -204,9 +232,17 @@ def train_one_epoch_student(
         pseudo_features = pseudo_out["features"] + pseudo_feature_noise * torch.randn_like(pseudo_out["features"])
         pseudo_logits, pseudo_uncertainty = pseudo_forward_from_features(student, pseudo_features)
         loss_pseudo = pseudo_unknown_loss(pseudo_logits, pseudo_uncertainty)
+        loss_energy = energy_margin_loss(
+            s_out["logits"], pseudo_logits, margin=energy_margin, temperature=energy_temperature
+        )
         loss_discovery = s_out["logits"].new_tensor(0.0)
         loss_discovery_unknown = s_out["logits"].new_tensor(0.0)
-        if discovery_iter is not None and (alpha_discovery > 0.0 or alpha_discovery_unknown > 0.0):
+        loss_discovery_energy = s_out["logits"].new_tensor(0.0)
+        if discovery_iter is not None and (
+            alpha_discovery > 0.0
+            or alpha_discovery_unknown > 0.0
+            or alpha_discovery_energy > 0.0
+        ):
             try:
                 discovery_images = next(discovery_iter)
             except StopIteration:
@@ -226,6 +262,21 @@ def train_one_epoch_student(
                     discovery_unknown_loss(first_out["logits"], first_out["uncertainty"])
                     + discovery_unknown_loss(second_out["logits"], second_out["uncertainty"])
                 )
+            if alpha_discovery_energy > 0.0:
+                loss_discovery_energy = 0.5 * (
+                    energy_margin_loss(
+                        s_out["logits"],
+                        first_out["logits"],
+                        margin=energy_margin,
+                        temperature=energy_temperature,
+                    )
+                    + energy_margin_loss(
+                        s_out["logits"],
+                        second_out["logits"],
+                        margin=energy_margin,
+                        temperature=energy_temperature,
+                    )
+                )
         loss = (
             loss_ce
             + alpha_unc * loss_unc
@@ -234,8 +285,10 @@ def train_one_epoch_student(
             + alpha_supcon * loss_supcon
             + alpha_proto * loss_proto
             + alpha_pseudo * loss_pseudo
+            + alpha_energy * loss_energy
             + alpha_discovery * loss_discovery
             + alpha_discovery_unknown * loss_discovery_unknown
+            + alpha_discovery_energy * loss_discovery_energy
         )
         optimizer.zero_grad()
         loss.backward()
@@ -247,8 +300,10 @@ def train_one_epoch_student(
         sc_meter.update(loss_supcon.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
+        energy_meter.update(loss_energy.item(), images.size(0))
         discovery_meter.update(loss_discovery.item(), images.size(0))
         discovery_unknown_meter.update(loss_discovery_unknown.item(), images.size(0))
+        discovery_energy_meter.update(loss_discovery_energy.item(), images.size(0))
     return {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
@@ -257,8 +312,10 @@ def train_one_epoch_student(
         "supcon": sc_meter.avg,
         "proto": proto_meter.avg,
         "pseudo": pseudo_meter.avg,
+        "energy": energy_meter.avg,
         "discovery": discovery_meter.avg,
         "discovery_unknown": discovery_unknown_meter.avg,
+        "discovery_energy": discovery_energy_meter.avg,
     }
 
 
@@ -479,21 +536,21 @@ def fit_score_normalization(
     gaussian_stats: Dict[str, np.ndarray] | None = None,
 ) -> Dict[str, Dict[str, float]]:
     """Fit score statistics using known validation samples only."""
-    if prototypes is None:
-        raise ValueError("Score normalization requires prototypes")
-    _, proto_dist = compute_open_score(
-        outputs_known,
-        prototypes=prototypes,
-        score_mode="proto_only",
-    )
     entropy = np.asarray(outputs_known["entropy"], dtype=float)
-    proto_dist = np.asarray(proto_dist, dtype=float)
 
     def stats(values):
+        values = np.asarray(values, dtype=float)
         std = float(np.std(values))
         return {"mean": float(np.mean(values)), "std": max(std, 1e-6)}
 
-    result = {"entropy": stats(entropy), "proto_dist": stats(proto_dist)}
+    result = {"entropy": stats(entropy)}
+    if prototypes is not None:
+        _, proto_dist = compute_open_score(
+            outputs_known,
+            prototypes=prototypes,
+            score_mode="proto_only",
+        )
+        result["proto_dist"] = stats(proto_dist)
     if gaussian_stats is not None:
         result["mahalanobis"] = stats(
             compute_mahalanobis_distance(outputs_known["features"], gaussian_stats)
@@ -511,12 +568,7 @@ def prepare_cluster_features(
     pca_dim: int = 32,
     whiten: bool = True,
 ) -> np.ndarray:
-    """Prepare features for clustering without using unknown labels.
-
-    L2 normalization makes Euclidean KMeans behave like cosine clustering,
-    which is usually more suitable for neural representations.  PCA is
-    optional because it can remove noisy directions in a small discovery set.
-    """
+    """Prepare features for clustering without using unknown labels."""
     values = np.asarray(features, dtype=np.float32)
     if values.ndim != 2 or len(values) == 0:
         return values
@@ -580,7 +632,7 @@ def evaluate_cluster_candidates(
     stability_repeats: int = 5,
     random_state: int = 42,
 ) -> tuple[int, list[dict]]:
-    """Select K using only candidate-pool geometry and report all diagnostics."""
+    """Select K using only candidate-pool geometry and report diagnostics."""
     n = len(features)
     if n < 4:
         return max(1, n), []
@@ -703,7 +755,7 @@ def run_discovery(
     pred_class = outputs["logits"].argmax(axis=1)
     true_labels = outputs["labels"]
     class_correct = pred_class == true_labels
-    oscr = compute_oscr(known_mask, class_correct, score)
+    oscr = compute_oscr(known_mask, pred_known, class_correct, score)
     known_class_correct = int(np.sum(known_mask & pred_known & (pred_class == true_labels)))
     known_class_wrong = int(np.sum(known_mask & pred_known & (pred_class != true_labels)))
     known_total = int(known_mask.sum())
@@ -769,8 +821,8 @@ def run_discovery(
             if true_unknown_candidates.sum() > 1:
                 result.update(
                     {
-                        f"cluster_unknown_only_{key}": value
-                        for key, value in clustering_report(
+                        f"cluster_unknown_only_{k}": v
+                        for k, v in clustering_report(
                             novel_true[true_unknown_candidates],
                             novel_pred[true_unknown_candidates],
                         ).items()
@@ -779,10 +831,14 @@ def run_discovery(
             result["cluster_candidate_count"] = int(len(novel_true))
             result["cluster_true_unknown_count"] = int(true_unknown_candidates.sum())
             result["cluster_false_reject_count"] = int((~true_unknown_candidates).sum())
+            result["cluster_candidate_purity"] = float(
+                true_unknown_candidates.sum() / max(len(novel_true), 1)
+            )
             result["cluster_true_k"] = true_unknown_k
             result["cluster_k_abs_error"] = abs(int(selected_cluster_k) - true_unknown_k)
     result.update(
         {
+            "cluster_k": None if selected_cluster_k is None else int(selected_cluster_k),
             "cluster_method": cluster_method,
             "cluster_feature": cluster_feature,
             "cluster_selection": cluster_selection if cluster_k != "oracle" else "oracle",
@@ -834,7 +890,8 @@ def run_discovery(
             else raw_cluster_features
         )
         pred_cluster[novel_mask] = cluster_unknown_samples(
-            cluster_features, num_clusters=selected_cluster_k,
+            cluster_features,
+            num_clusters=selected_cluster_k,
             method=cluster_method,
             n_init=cluster_n_init,
         )
