@@ -13,6 +13,7 @@ from sklearn.metrics import (
     silhouette_score,
 )
 from torch.utils.data import DataLoader
+from torch.nn import functional as F
 from tqdm import tqdm
 
 from .losses import (
@@ -23,6 +24,7 @@ from .losses import (
     energy_margin_loss,
     feature_distillation_loss,
     pseudo_unknown_loss,
+    proxy_contrastive_loss,
     prototype_alignment_loss,
     supervised_contrastive_loss,
     uncertainty_alignment_loss,
@@ -94,6 +96,122 @@ def pseudo_forward_from_features(model, features: torch.Tensor, stochastic: bool
     return logits, uncertainty
 
 
+def _rank_normalize(score: torch.Tensor) -> torch.Tensor:
+    """Map a 1D score to [0, 1] ranks while preserving high-risk ordering."""
+    if score.numel() <= 1:
+        return torch.ones_like(score)
+    order = torch.argsort(score, descending=False)
+    ranks = torch.empty_like(score, dtype=torch.float32)
+    ranks[order] = torch.linspace(0.0, 1.0, steps=score.numel(), device=score.device)
+    return ranks
+
+
+def select_discovery_candidates(
+    logits: torch.Tensor,
+    uncertainty: torch.Tensor | None = None,
+    ratio: float = 0.25,
+    mode: str = "entropy",
+) -> torch.Tensor:
+    """Select high-risk unlabeled discovery samples without using labels."""
+    batch_size = logits.size(0)
+    if batch_size == 0 or ratio <= 0.0:
+        return torch.zeros(batch_size, dtype=torch.bool, device=logits.device)
+    with torch.no_grad():
+        probs = logits.softmax(dim=-1)
+        entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=-1)
+        max_softmax_risk = 1.0 - probs.max(dim=-1).values
+        energy_risk = -torch.logsumexp(logits, dim=-1)
+        if mode == "entropy":
+            score = entropy
+        elif mode == "max_softmax":
+            score = max_softmax_risk
+        elif mode == "energy":
+            score = energy_risk
+        elif mode == "entropy_uncertainty":
+            score = entropy if uncertainty is None else entropy + uncertainty
+        elif mode == "consensus":
+            count = max(1, min(batch_size, int(np.ceil(batch_size * ratio))))
+            scores = [entropy, max_softmax_risk, energy_risk]
+            if uncertainty is not None:
+                scores.append(uncertainty)
+            top_masks = []
+            for item in scores:
+                item_indices = torch.topk(item, k=count, largest=True).indices
+                item_mask = torch.zeros(batch_size, dtype=torch.bool, device=logits.device)
+                item_mask[item_indices] = True
+                top_masks.append(item_mask)
+            votes = torch.stack(top_masks, dim=0).sum(dim=0)
+            required_votes = len(scores) if len(scores) <= 3 else len(scores) - 1
+            mask = votes >= required_votes
+            max_selected = count
+            min_selected = max(1, min(batch_size, int(np.ceil(count * 0.25))))
+            composite = _rank_normalize(entropy) + _rank_normalize(max_softmax_risk) + _rank_normalize(energy_risk)
+            if uncertainty is not None:
+                composite = composite + _rank_normalize(uncertainty)
+            selected = int(mask.sum().item())
+            if selected > max_selected:
+                selected_indices = torch.topk(composite.masked_fill(~mask, float("-inf")), k=max_selected, largest=True).indices
+                mask = torch.zeros(batch_size, dtype=torch.bool, device=logits.device)
+                mask[selected_indices] = True
+            elif selected < min_selected:
+                fill_score = votes.float() * (len(scores) + 1.0) + _rank_normalize(composite)
+                fill_indices = torch.topk(fill_score, k=min_selected, largest=True).indices
+                mask = torch.zeros(batch_size, dtype=torch.bool, device=logits.device)
+                mask[fill_indices] = True
+            return mask
+        else:
+            raise ValueError(f"Unsupported discovery selection mode: {mode}")
+        count = max(1, min(batch_size, int(np.ceil(batch_size * ratio))))
+        indices = torch.topk(score, k=count, largest=True).indices
+        mask = torch.zeros(batch_size, dtype=torch.bool, device=logits.device)
+        mask[indices] = True
+    return mask
+
+
+def filter_discovery_candidates_by_neighbors(
+    mask: torch.Tensor,
+    features: torch.Tensor,
+    k: int = 5,
+    min_votes: int = 2,
+) -> tuple[torch.Tensor, float]:
+    """Keep selected discovery samples whose nearest neighbors are also selected.
+
+    The filter follows the SCAN/AutoNovel-style intuition that reliable novel
+    candidates should not only look risky by themselves, but should also live
+    near other risky samples in representation space.
+    """
+    batch_size = mask.numel()
+    if batch_size <= 1 or k <= 0:
+        return mask, 0.0
+    with torch.no_grad():
+        effective_k = min(int(k), batch_size - 1)
+        required_votes = min(max(int(min_votes), 1), effective_k)
+        normalized = F.normalize(features.detach().float(), dim=-1)
+        similarity = torch.matmul(normalized, normalized.T)
+        similarity.fill_diagonal_(float("-inf"))
+        neighbor_indices = torch.topk(similarity, k=effective_k, dim=1, largest=True).indices
+        neighbor_votes = mask[neighbor_indices].float().sum(dim=1)
+        agreement = neighbor_votes / float(effective_k)
+        filtered = mask & (neighbor_votes >= required_votes)
+        selected_agreement = agreement[mask].mean().item() if mask.any() else 0.0
+    return filtered, selected_agreement
+
+
+def update_ema_model(ema_model, model, decay: float = 0.99):
+    """Update a non-gradient EMA copy used for stable discovery selection."""
+    decay = min(max(float(decay), 0.0), 0.999999)
+    with torch.no_grad():
+        ema_params = dict(ema_model.named_parameters())
+        for name, parameter in model.named_parameters():
+            ema_params[name].mul_(decay).add_(parameter.detach(), alpha=1.0 - decay)
+        ema_buffers = dict(ema_model.named_buffers())
+        for name, buffer in model.named_buffers():
+            # BatchNorm statistics are copied from the current student instead of
+            # being exponentially averaged, matching common EMA implementations.
+            ema_buffers[name].copy_(buffer.detach())
+    ema_model.eval()
+
+
 def train_one_epoch_teacher(
     model,
     loader,
@@ -101,6 +219,7 @@ def train_one_epoch_teacher(
     device,
     alpha_unc: float = 0.1,
     alpha_proto: float = 0.0,
+    alpha_proxy: float = 0.0,
     alpha_pseudo: float = 0.0,
     alpha_energy: float = 0.0,
     pseudo_mode: str = "strong",
@@ -108,11 +227,13 @@ def train_one_epoch_teacher(
     uncertainty_target_mode: str = "confidence",
     energy_margin: float = 1.0,
     energy_temperature: float = 1.0,
+    proxy_temperature: float = 0.1,
 ):
     model.train()
     ce_meter = AverageMeter()
     unc_meter = AverageMeter()
     proto_meter = AverageMeter()
+    proxy_meter = AverageMeter()
     pseudo_meter = AverageMeter()
     energy_meter = AverageMeter()
     for batch in tqdm(loader, desc="teacher-train", leave=False):
@@ -125,6 +246,9 @@ def train_one_epoch_teacher(
             out["uncertainty"], out["logits"], labels, target_mode=uncertainty_target_mode
         )
         loss_proto = prototype_alignment_loss(out["features"], labels, model.classifier.weight)
+        loss_proxy = proxy_contrastive_loss(
+            out["features"], labels, model.classifier.weight, temperature=proxy_temperature
+        )
         pseudo_images = make_pseudo_unknown(images, mode=pseudo_mode)
         pseudo_out = model(pseudo_images)
         pseudo_features = pseudo_out["features"] + pseudo_feature_noise * torch.randn_like(pseudo_out["features"])
@@ -137,6 +261,7 @@ def train_one_epoch_teacher(
             loss_ce
             + alpha_unc * loss_unc
             + alpha_proto * loss_proto
+            + alpha_proxy * loss_proxy
             + alpha_pseudo * loss_pseudo
             + alpha_energy * loss_energy
         )
@@ -146,12 +271,14 @@ def train_one_epoch_teacher(
         ce_meter.update(loss_ce.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
+        proxy_meter.update(loss_proxy.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
         energy_meter.update(loss_energy.item(), images.size(0))
     return {
         "ce": ce_meter.avg,
         "unc": unc_meter.avg,
         "proto": proto_meter.avg,
+        "proxy": proxy_meter.avg,
         "pseudo": pseudo_meter.avg,
         "energy": energy_meter.avg,
     }
@@ -168,6 +295,7 @@ def train_one_epoch_student(
     alpha_feat_kd: float = 0.0,
     alpha_supcon: float = 0.1,
     alpha_proto: float = 0.0,
+    alpha_proxy: float = 0.0,
     alpha_pseudo: float = 0.0,
     alpha_energy: float = 0.0,
     pseudo_mode: str = "strong",
@@ -180,10 +308,20 @@ def train_one_epoch_student(
     alpha_discovery: float = 0.0,
     alpha_discovery_unknown: float = 0.0,
     alpha_discovery_energy: float = 0.0,
+    alpha_discovery_selective_unknown: float = 0.0,
+    alpha_discovery_selective_energy: float = 0.0,
+    discovery_select_ratio: float = 0.25,
+    discovery_select_mode: str = "entropy_uncertainty",
     discovery_loss_mode: str = "nt_xent",
     discovery_temperature: float = 0.2,
     energy_margin: float = 1.0,
     energy_temperature: float = 1.0,
+    proxy_temperature: float = 0.1,
+    discovery_selection_model=None,
+    discovery_ema_decay: float = 0.99,
+    discovery_neighbor_filter: bool = False,
+    discovery_neighbor_k: int = 5,
+    discovery_neighbor_min_votes: int = 2,
 ):
     student.train()
     teacher.eval()
@@ -193,11 +331,17 @@ def train_one_epoch_student(
     unc_meter = AverageMeter()
     sc_meter = AverageMeter()
     proto_meter = AverageMeter()
+    proxy_meter = AverageMeter()
     pseudo_meter = AverageMeter()
     energy_meter = AverageMeter()
     discovery_meter = AverageMeter()
     discovery_unknown_meter = AverageMeter()
     discovery_energy_meter = AverageMeter()
+    discovery_selective_unknown_meter = AverageMeter()
+    discovery_selective_energy_meter = AverageMeter()
+    discovery_selected_meter = AverageMeter()
+    discovery_raw_selected_meter = AverageMeter()
+    discovery_neighbor_agreement_meter = AverageMeter()
     discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     for batch in tqdm(loader, desc="student-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
@@ -227,6 +371,9 @@ def train_one_epoch_student(
         )
         loss_supcon = supervised_contrastive_loss(s_out["proj"], labels)
         loss_proto = prototype_alignment_loss(s_out["features"], labels, student.classifier.weight)
+        loss_proxy = proxy_contrastive_loss(
+            s_out["features"], labels, student.classifier.weight, temperature=proxy_temperature
+        )
         pseudo_images = make_pseudo_unknown(images, mode=pseudo_mode)
         pseudo_out = student(pseudo_images)
         pseudo_features = pseudo_out["features"] + pseudo_feature_noise * torch.randn_like(pseudo_out["features"])
@@ -238,10 +385,17 @@ def train_one_epoch_student(
         loss_discovery = s_out["logits"].new_tensor(0.0)
         loss_discovery_unknown = s_out["logits"].new_tensor(0.0)
         loss_discovery_energy = s_out["logits"].new_tensor(0.0)
+        loss_discovery_selective_unknown = s_out["logits"].new_tensor(0.0)
+        loss_discovery_selective_energy = s_out["logits"].new_tensor(0.0)
+        discovery_selected_ratio = 0.0
+        discovery_raw_selected_ratio = 0.0
+        discovery_neighbor_agreement = 0.0
         if discovery_iter is not None and (
             alpha_discovery > 0.0
             or alpha_discovery_unknown > 0.0
             or alpha_discovery_energy > 0.0
+            or alpha_discovery_selective_unknown > 0.0
+            or alpha_discovery_selective_energy > 0.0
         ):
             try:
                 discovery_images = next(discovery_iter)
@@ -249,8 +403,10 @@ def train_one_epoch_student(
                 discovery_iter = iter(discovery_loader)
                 discovery_images = next(discovery_iter)
             first_view, second_view = discovery_images
-            first_out = student(first_view.to(device))
-            second_out = student(second_view.to(device))
+            first_view = first_view.to(device)
+            second_view = second_view.to(device)
+            first_out = student(first_view)
+            second_out = student(second_view)
             loss_discovery = discovery_view_loss(
                 first_out["proj"],
                 second_out["proj"],
@@ -277,6 +433,66 @@ def train_one_epoch_student(
                         temperature=energy_temperature,
                     )
                 )
+            if alpha_discovery_selective_unknown > 0.0 or alpha_discovery_selective_energy > 0.0:
+                if discovery_selection_model is None:
+                    first_selection_out = first_out
+                    second_selection_out = second_out
+                else:
+                    with torch.no_grad():
+                        first_selection_out = discovery_selection_model(first_view)
+                        second_selection_out = discovery_selection_model(second_view)
+                first_mask = select_discovery_candidates(
+                    first_selection_out["logits"],
+                    first_selection_out["uncertainty"],
+                    ratio=discovery_select_ratio,
+                    mode=discovery_select_mode,
+                )
+                second_mask = select_discovery_candidates(
+                    second_selection_out["logits"],
+                    second_selection_out["uncertainty"],
+                    ratio=discovery_select_ratio,
+                    mode=discovery_select_mode,
+                )
+                discovery_raw_selected_ratio = 0.5 * (
+                    first_mask.float().mean().item() + second_mask.float().mean().item()
+                )
+                if discovery_neighbor_filter:
+                    first_mask, first_agreement = filter_discovery_candidates_by_neighbors(
+                        first_mask,
+                        first_selection_out["proj"],
+                        k=discovery_neighbor_k,
+                        min_votes=discovery_neighbor_min_votes,
+                    )
+                    second_mask, second_agreement = filter_discovery_candidates_by_neighbors(
+                        second_mask,
+                        second_selection_out["proj"],
+                        k=discovery_neighbor_k,
+                        min_votes=discovery_neighbor_min_votes,
+                    )
+                    discovery_neighbor_agreement = 0.5 * (first_agreement + second_agreement)
+                discovery_selected_ratio = 0.5 * (
+                    first_mask.float().mean().item() + second_mask.float().mean().item()
+                )
+                if alpha_discovery_selective_unknown > 0.0:
+                    loss_discovery_selective_unknown = 0.5 * (
+                        discovery_unknown_loss(first_out["logits"][first_mask], first_out["uncertainty"][first_mask])
+                        + discovery_unknown_loss(second_out["logits"][second_mask], second_out["uncertainty"][second_mask])
+                    )
+                if alpha_discovery_selective_energy > 0.0:
+                    loss_discovery_selective_energy = 0.5 * (
+                        energy_margin_loss(
+                            s_out["logits"],
+                            first_out["logits"][first_mask],
+                            margin=energy_margin,
+                            temperature=energy_temperature,
+                        )
+                        + energy_margin_loss(
+                            s_out["logits"],
+                            second_out["logits"][second_mask],
+                            margin=energy_margin,
+                            temperature=energy_temperature,
+                        )
+                    )
         loss = (
             loss_ce
             + alpha_unc * loss_unc
@@ -284,26 +500,37 @@ def train_one_epoch_student(
             + alpha_feat_kd * loss_feat_kd
             + alpha_supcon * loss_supcon
             + alpha_proto * loss_proto
+            + alpha_proxy * loss_proxy
             + alpha_pseudo * loss_pseudo
             + alpha_energy * loss_energy
             + alpha_discovery * loss_discovery
             + alpha_discovery_unknown * loss_discovery_unknown
             + alpha_discovery_energy * loss_discovery_energy
+            + alpha_discovery_selective_unknown * loss_discovery_selective_unknown
+            + alpha_discovery_selective_energy * loss_discovery_selective_energy
         )
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if discovery_selection_model is not None:
+            update_ema_model(discovery_selection_model, student, decay=discovery_ema_decay)
         ce_meter.update(loss_ce.item(), images.size(0))
         kd_meter.update(loss_kd.item(), images.size(0))
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         sc_meter.update(loss_supcon.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
+        proxy_meter.update(loss_proxy.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
         energy_meter.update(loss_energy.item(), images.size(0))
         discovery_meter.update(loss_discovery.item(), images.size(0))
         discovery_unknown_meter.update(loss_discovery_unknown.item(), images.size(0))
         discovery_energy_meter.update(loss_discovery_energy.item(), images.size(0))
+        discovery_selective_unknown_meter.update(loss_discovery_selective_unknown.item(), images.size(0))
+        discovery_selective_energy_meter.update(loss_discovery_selective_energy.item(), images.size(0))
+        discovery_selected_meter.update(discovery_selected_ratio, images.size(0))
+        discovery_raw_selected_meter.update(discovery_raw_selected_ratio, images.size(0))
+        discovery_neighbor_agreement_meter.update(discovery_neighbor_agreement, images.size(0))
     return {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
@@ -311,11 +538,17 @@ def train_one_epoch_student(
         "unc": unc_meter.avg,
         "supcon": sc_meter.avg,
         "proto": proto_meter.avg,
+        "proxy": proxy_meter.avg,
         "pseudo": pseudo_meter.avg,
         "energy": energy_meter.avg,
         "discovery": discovery_meter.avg,
         "discovery_unknown": discovery_unknown_meter.avg,
         "discovery_energy": discovery_energy_meter.avg,
+        "discovery_selective_unknown": discovery_selective_unknown_meter.avg,
+        "discovery_selective_energy": discovery_selective_energy_meter.avg,
+        "discovery_selected_ratio": discovery_selected_meter.avg,
+        "discovery_raw_selected_ratio": discovery_raw_selected_meter.avg,
+        "discovery_neighbor_agreement": discovery_neighbor_agreement_meter.avg,
     }
 
 
@@ -359,8 +592,35 @@ def collect_prototypes(model, loader, device, num_classes: int):
     return sums / counts
 
 
-@torch.no_grad()
-def extract_outputs(model, loader, device, mc_samples: int = 8):
+def _odin_batch_score(
+    model,
+    images: torch.Tensor,
+    epsilon: float = 0.0,
+    temperature: float = 1000.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """ODIN-style confidence score after temperature scaling and input perturbation."""
+    temperature = max(float(temperature), 1e-6)
+    images = images.detach().clone().requires_grad_(True)
+    logits = model(images, stochastic=False)["logits"] / temperature
+    pseudo_labels = logits.argmax(dim=-1)
+    loss = F.cross_entropy(logits, pseudo_labels)
+    grad = torch.autograd.grad(loss, images, retain_graph=False, create_graph=False)[0]
+    perturbed = images - float(epsilon) * grad.sign()
+    with torch.no_grad():
+        odin_logits = model(perturbed, stochastic=False)["logits"] / temperature
+        odin_probs = odin_logits.softmax(dim=-1)
+        odin_msp = 1.0 - odin_probs.max(dim=-1).values
+    return odin_msp.detach(), odin_logits.detach()
+
+
+def extract_outputs(
+    model,
+    loader,
+    device,
+    mc_samples: int = 8,
+    odin_epsilon: float = 0.0,
+    odin_temperature: float = 1000.0,
+):
     model.eval()
     all_logits = []
     all_probs = []
@@ -371,14 +631,17 @@ def extract_outputs(model, loader, device, mc_samples: int = 8):
     all_head_uncertainty = []
     all_features = []
     all_projections = []
+    all_odin_msp = []
+    all_odin_logits = []
     all_labels = []
     all_raw = []
     all_known = []
     for batch in tqdm(loader, desc="extract", leave=False):
         images, labels, raw_labels, is_known, _ = batch
         images = images.to(device)
-        mc = model.mc_predict(images, mc_samples=mc_samples)
-        out = model(images)
+        with torch.no_grad():
+            mc = model.mc_predict(images, mc_samples=mc_samples)
+            out = model(images)
         all_logits.append(mc["mean_logits"].cpu())
         all_probs.append(mc["mean_probs"].cpu())
         all_entropy.append(mc["predictive_entropy"].cpu())
@@ -388,10 +651,19 @@ def extract_outputs(model, loader, device, mc_samples: int = 8):
         all_head_uncertainty.append(mc["head_uncertainty"].cpu())
         all_features.append(out["features"].cpu())
         all_projections.append(out["proj"].cpu())
+        if odin_epsilon > 0.0:
+            odin_msp, odin_logits = _odin_batch_score(
+                model,
+                images,
+                epsilon=odin_epsilon,
+                temperature=odin_temperature,
+            )
+            all_odin_msp.append(odin_msp.cpu())
+            all_odin_logits.append(odin_logits.cpu())
         all_labels.append(labels)
         all_raw.append(raw_labels)
         all_known.append(is_known)
-    return {
+    outputs = {
         "logits": torch.cat(all_logits).numpy(),
         "probs": torch.cat(all_probs).numpy(),
         "entropy": torch.cat(all_entropy).numpy(),
@@ -405,6 +677,10 @@ def extract_outputs(model, loader, device, mc_samples: int = 8):
         "raw_labels": torch.cat(all_raw).numpy(),
         "is_known": torch.cat(all_known).numpy(),
     }
+    if all_odin_msp:
+        outputs["odin_msp"] = torch.cat(all_odin_msp).numpy()
+        outputs["odin_logits"] = torch.cat(all_odin_logits).numpy()
+    return outputs
 
 
 def calibration_diagnostics(probabilities: np.ndarray, labels: np.ndarray, num_bins: int = 15) -> dict:
@@ -502,7 +778,7 @@ def compute_prototype_distance(features: np.ndarray, prototypes: np.ndarray) -> 
 
 
 def collect_diagonal_gaussian_stats(model, loader, device, num_classes: int):
-    """Collect class means and diagonal covariance for stable Mahalanobis OOD scoring."""
+    """Collect class means plus diagonal and shared-covariance statistics."""
     model.eval()
     features_by_class = [[] for _ in range(num_classes)]
     with torch.no_grad():
@@ -528,14 +804,47 @@ def collect_diagonal_gaussian_stats(model, loader, device, num_classes: int):
         else:
             means.append(values.mean(axis=0))
             variances.append(np.var(values, axis=0) + 1e-2)
-    return {"means": np.asarray(means), "variances": np.asarray(variances)}
+    means = np.asarray(means, dtype=np.float32)
+    variances = np.asarray(variances, dtype=np.float32)
+
+    centered = []
+    for class_index, items in enumerate(features_by_class):
+        if items:
+            centered.append(np.asarray(items, dtype=np.float32) - means[class_index])
+    centered_features = np.concatenate(centered, axis=0) if centered else global_features - global_features.mean(axis=0)
+    feature_dim = centered_features.shape[1]
+    if len(centered_features) <= 1:
+        covariance = np.diag(global_var)
+    else:
+        covariance = (centered_features.T @ centered_features) / max(len(centered_features) - 1, 1)
+    # A small diagonal shrinkage keeps the shared covariance stable and much
+    # faster than iterative covariance estimators during repeated experiments.
+    shrinkage = 0.1
+    diagonal = np.diag(np.diag(covariance))
+    covariance = (1.0 - shrinkage) * covariance + shrinkage * diagonal
+    covariance = covariance + np.eye(feature_dim, dtype=np.float32) * 1e-3
+    precision = np.linalg.pinv(covariance).astype(np.float32)
+    return {"means": means, "variances": variances, "precision": precision}
 
 
-def compute_mahalanobis_distance(features: np.ndarray, gaussian_stats: Dict[str, np.ndarray]) -> np.ndarray:
+def compute_mahalanobis_distance(
+    features: np.ndarray,
+    gaussian_stats: Dict[str, np.ndarray],
+    covariance: str = "auto",
+) -> np.ndarray:
     feat = np.asarray(features)[:, None, :]
     means = np.asarray(gaussian_stats["means"])[None, :, :]
-    variances = np.asarray(gaussian_stats["variances"])[None, :, :]
-    distances = ((feat - means) ** 2 / np.clip(variances, 1e-6, None)).mean(axis=-1)
+    use_shared = covariance == "shared" or (covariance == "auto" and "precision" in gaussian_stats)
+    if use_shared:
+        if "precision" not in gaussian_stats:
+            raise ValueError("shared Mahalanobis score requires gaussian_stats['precision']")
+        precision = np.asarray(gaussian_stats["precision"], dtype=float)
+        diff = feat - means
+        distances = np.einsum("ncd,df,ncf->nc", diff, precision, diff) / max(diff.shape[-1], 1)
+        distances = np.maximum(distances, 0.0)
+    else:
+        variances = np.asarray(gaussian_stats["variances"])[None, :, :]
+        distances = ((feat - means) ** 2 / np.clip(variances, 1e-6, None)).mean(axis=-1)
     return distances.min(axis=1)
 
 
@@ -554,8 +863,15 @@ def compute_open_score(
     if prototypes is not None:
         proto_dist = compute_prototype_distance(outputs["features"], prototypes)
     mahalanobis = None
+    mahalanobis_mode = "auto"
+    if score_mode.endswith("_diag"):
+        mahalanobis_mode = "diag"
+    elif score_mode.endswith("_shared"):
+        mahalanobis_mode = "shared"
     if gaussian_stats is not None:
-        mahalanobis = compute_mahalanobis_distance(outputs["features"], gaussian_stats)
+        mahalanobis = compute_mahalanobis_distance(
+            outputs["features"], gaussian_stats, covariance=mahalanobis_mode
+        )
 
     if score_mode == "full":
         score = weights[0] * entropy + weights[1] * epistemic + weights[2] * aleatoric
@@ -563,6 +879,10 @@ def compute_open_score(
             score = score + proto_dist
     elif score_mode == "max_softmax":
         score = 1.0 - outputs["probs"].max(axis=1)
+    elif score_mode == "odin_msp":
+        if "odin_msp" not in outputs:
+            raise ValueError("odin_msp score requires --odin-epsilon greater than 0")
+        score = np.asarray(outputs["odin_msp"], dtype=float)
     elif score_mode == "energy":
         logits = outputs["logits"]
         temperature = 1.0
@@ -595,21 +915,30 @@ def compute_open_score(
         score = outputs.get("expected_entropy", aleatoric)
     elif score_mode == "epistemic":
         score = epistemic
-    elif score_mode == "mahalanobis":
+    elif score_mode in {"mahalanobis", "mahalanobis_diag", "mahalanobis_shared"}:
         if mahalanobis is None:
             raise ValueError("mahalanobis score requires gaussian statistics")
         score = mahalanobis
-    elif score_mode == "entropy_mahalanobis":
+    elif score_mode in {"entropy_mahalanobis", "entropy_mahalanobis_diag", "entropy_mahalanobis_shared"}:
         if mahalanobis is None:
             raise ValueError("entropy_mahalanobis score requires gaussian statistics")
         score = entropy + mahalanobis
-    elif score_mode == "normalized_entropy_mahalanobis":
+    elif score_mode in {
+        "normalized_entropy_mahalanobis",
+        "normalized_entropy_mahalanobis_diag",
+        "normalized_entropy_mahalanobis_shared",
+    }:
         if mahalanobis is None or normalization is None:
             raise ValueError("normalized_entropy_mahalanobis requires statistics")
+        stat_key = "mahalanobis"
+        if score_mode.endswith("_diag"):
+            stat_key = "mahalanobis_diag"
+        elif score_mode.endswith("_shared"):
+            stat_key = "mahalanobis_shared"
         score = (
             (entropy - normalization["entropy"]["mean"]) / normalization["entropy"]["std"]
-            + (mahalanobis - normalization["mahalanobis"]["mean"])
-            / normalization["mahalanobis"]["std"]
+            + (mahalanobis - normalization[stat_key]["mean"])
+            / normalization[stat_key]["std"]
         )
     else:
         raise ValueError(f"Unsupported score_mode: {score_mode}")
@@ -639,9 +968,14 @@ def fit_score_normalization(
         )
         result["proto_dist"] = stats(proto_dist)
     if gaussian_stats is not None:
-        result["mahalanobis"] = stats(
-            compute_mahalanobis_distance(outputs_known["features"], gaussian_stats)
+        result["mahalanobis"] = stats(compute_mahalanobis_distance(outputs_known["features"], gaussian_stats))
+        result["mahalanobis_diag"] = stats(
+            compute_mahalanobis_distance(outputs_known["features"], gaussian_stats, covariance="diag")
         )
+        if "precision" in gaussian_stats:
+            result["mahalanobis_shared"] = stats(
+                compute_mahalanobis_distance(outputs_known["features"], gaussian_stats, covariance="shared")
+            )
     return result
 
 
@@ -980,6 +1314,7 @@ def run_discovery(
         "head_uncertainty": outputs.get("head_uncertainty", aleatoric),
         "proto_dist": proto_dist,
         "mahalanobis": mahalanobis,
+        "odin_msp": np.asarray(outputs.get("odin_msp", np.zeros_like(score)), dtype=float),
         "pred_known": pred_known,
         "true_known": known_mask,
         "pred_class": pred_class,

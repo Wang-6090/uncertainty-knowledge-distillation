@@ -11,9 +11,18 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from novel_discovery.losses import energy_margin_loss, supervised_contrastive_loss
-from novel_discovery.pipeline import calibration_diagnostics, fit_score_normalization, run_discovery
-from train import parse_args
+from novel_discovery.losses import energy_margin_loss, proxy_contrastive_loss, supervised_contrastive_loss
+from novel_discovery.pipeline import (
+    calibration_diagnostics,
+    compute_mahalanobis_distance,
+    compute_open_score,
+    filter_discovery_candidates_by_neighbors,
+    fit_score_normalization,
+    run_discovery,
+    select_discovery_candidates,
+    update_ema_model,
+)
+from train import parse_args, scheduled_weight
 
 
 class CommandLineTest(unittest.TestCase):
@@ -25,6 +34,9 @@ class CommandLineTest(unittest.TestCase):
                 "--temperature-calibration",
                 "--calibration-bins", "10",
                 "--auto-calibrate-score",
+                "--score-mode", "odin_msp",
+                "--odin-epsilon", "0.001",
+                "--odin-temperature", "1000",
             ]
         )
 
@@ -33,6 +45,51 @@ class CommandLineTest(unittest.TestCase):
         self.assertTrue(args.temperature_calibration)
         self.assertEqual(args.calibration_bins, 10)
         self.assertTrue(args.auto_calibrate_score)
+        self.assertEqual(args.score_mode, "odin_msp")
+        self.assertAlmostEqual(args.odin_epsilon, 0.001)
+        self.assertAlmostEqual(args.odin_temperature, 1000.0)
+
+    def test_train_student_proxy_arguments_are_available(self):
+        args = parse_args(
+            [
+                "train_student",
+                "--alpha-proxy", "0.2",
+                "--proxy-temperature", "0.07",
+                "--discovery-pool",
+                "--discovery-pool-mode", "mixed",
+                "--alpha-discovery-selective-energy", "0.1",
+                "--discovery-select-ratio", "0.25",
+                "--discovery-select-mode", "consensus",
+                "--discovery-selection-model", "ema",
+                "--discovery-ema-decay", "0.95",
+                "--discovery-neighbor-filter",
+                "--discovery-neighbor-k", "3",
+                "--discovery-neighbor-min-votes", "2",
+                "--discovery-selective-warmup-epochs", "1",
+                "--discovery-selective-ramp-epochs", "2",
+            ]
+        )
+
+        self.assertEqual(args.command, "train_student")
+        self.assertAlmostEqual(args.alpha_proxy, 0.2)
+        self.assertAlmostEqual(args.proxy_temperature, 0.07)
+        self.assertEqual(args.discovery_pool_mode, "mixed")
+        self.assertAlmostEqual(args.alpha_discovery_selective_energy, 0.1)
+        self.assertAlmostEqual(args.discovery_select_ratio, 0.25)
+        self.assertEqual(args.discovery_select_mode, "consensus")
+        self.assertEqual(args.discovery_selection_model, "ema")
+        self.assertAlmostEqual(args.discovery_ema_decay, 0.95)
+        self.assertTrue(args.discovery_neighbor_filter)
+        self.assertEqual(args.discovery_neighbor_k, 3)
+        self.assertEqual(args.discovery_neighbor_min_votes, 2)
+        self.assertEqual(args.discovery_selective_warmup_epochs, 1)
+        self.assertEqual(args.discovery_selective_ramp_epochs, 2)
+
+    def test_selective_discovery_weight_schedule(self):
+        self.assertEqual(scheduled_weight(0, warmup_epochs=1, ramp_epochs=2), 0.0)
+        self.assertAlmostEqual(scheduled_weight(1, warmup_epochs=1, ramp_epochs=2), 0.5)
+        self.assertEqual(scheduled_weight(2, warmup_epochs=1, ramp_epochs=2), 1.0)
+        self.assertEqual(scheduled_weight(1, warmup_epochs=1, ramp_epochs=0), 1.0)
 
 
 class LossBehaviorTest(unittest.TestCase):
@@ -70,6 +127,30 @@ class LossBehaviorTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertGreater(loss.item(), 0.0)
 
+    def test_proxy_contrastive_loss_works_without_batch_positive_pairs(self):
+        features = torch.eye(3, requires_grad=True)
+        labels = torch.tensor([0, 1, 2])
+        proxies = torch.eye(3, requires_grad=True)
+
+        loss = proxy_contrastive_loss(features, labels, proxies, temperature=0.1)
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreater(loss.item(), 0.0)
+        self.assertIsNotNone(features.grad)
+
+    def test_update_ema_model_smooths_parameters(self):
+        source = torch.nn.Linear(1, 1, bias=False)
+        ema = torch.nn.Linear(1, 1, bias=False)
+        with torch.no_grad():
+            source.weight.fill_(2.0)
+            ema.weight.fill_(0.0)
+
+        update_ema_model(ema, source, decay=0.9)
+
+        self.assertAlmostEqual(ema.weight.item(), 0.2, places=6)
+        self.assertFalse(ema.training)
+
 
 class ScoreBehaviorTest(unittest.TestCase):
     def test_score_normalization_does_not_require_prototypes_for_entropy_stats(self):
@@ -82,6 +163,98 @@ class ScoreBehaviorTest(unittest.TestCase):
 
         self.assertIn("entropy", stats)
         self.assertNotIn("proto_dist", stats)
+
+    def test_odin_score_requires_extracted_odin_values(self):
+        outputs = {
+            "entropy": np.array([0.1, 0.2]),
+            "epistemic": np.array([0.0, 0.0]),
+            "aleatoric": np.array([0.0, 0.0]),
+            "probs": np.array([[0.9, 0.1], [0.6, 0.4]]),
+            "features": np.array([[0.0], [1.0]], dtype=np.float32),
+        }
+
+        with self.assertRaises(ValueError):
+            compute_open_score(outputs, score_mode="odin_msp")
+
+        outputs["odin_msp"] = np.array([0.05, 0.4])
+        score, _ = compute_open_score(outputs, score_mode="odin_msp")
+
+        np.testing.assert_allclose(score, np.array([0.05, 0.4]))
+
+    def test_shared_mahalanobis_uses_precision_matrix(self):
+        features = np.array([[1.0, 0.0], [0.0, 2.0]], dtype=np.float32)
+        stats = {
+            "means": np.array([[0.0, 0.0]], dtype=np.float32),
+            "variances": np.array([[1.0, 4.0]], dtype=np.float32),
+            "precision": np.array([[2.0, 0.0], [0.0, 0.5]], dtype=np.float32),
+        }
+
+        diag = compute_mahalanobis_distance(features, stats, covariance="diag")
+        shared = compute_mahalanobis_distance(features, stats, covariance="shared")
+
+        np.testing.assert_allclose(diag, np.array([0.5, 0.5]))
+        np.testing.assert_allclose(shared, np.array([1.0, 1.0]))
+
+    def test_select_discovery_candidates_picks_high_entropy_samples(self):
+        logits = torch.tensor(
+            [
+                [5.0, 0.0],
+                [0.0, 0.0],
+                [4.0, 0.0],
+                [0.1, 0.1],
+            ]
+        )
+
+        mask = select_discovery_candidates(logits, ratio=0.5, mode="entropy")
+
+        self.assertEqual(mask.sum().item(), 2)
+        self.assertTrue(mask[1].item())
+        self.assertTrue(mask[3].item())
+
+    def test_consensus_selection_requires_multiple_risk_signals(self):
+        logits = torch.tensor(
+            [
+                [5.0, 0.0],
+                [0.0, 0.0],
+                [4.0, 0.0],
+                [0.1, 0.1],
+                [2.0, 2.0],
+                [3.5, 0.0],
+                [0.2, 0.2],
+                [6.0, 0.0],
+            ]
+        )
+        uncertainty = torch.tensor([0.0, 0.9, 0.1, 0.8, 0.95, 0.1, 0.85, 0.0])
+
+        mask = select_discovery_candidates(logits, uncertainty, ratio=0.25, mode="consensus")
+
+        self.assertLessEqual(mask.sum().item(), 2)
+        self.assertTrue(mask[1].item() or mask[3].item() or mask[4].item() or mask[6].item())
+        self.assertFalse(mask[0].item())
+
+    def test_neighbor_filter_keeps_candidates_with_selected_neighbors(self):
+        mask = torch.tensor([True, True, False, True, False])
+        features = torch.tensor(
+            [
+                [1.0, 0.0],
+                [0.9, 0.1],
+                [0.8, 0.2],
+                [0.0, 1.0],
+                [0.1, 0.9],
+            ]
+        )
+
+        filtered, agreement = filter_discovery_candidates_by_neighbors(
+            mask,
+            features,
+            k=2,
+            min_votes=1,
+        )
+
+        self.assertTrue(filtered[0].item())
+        self.assertTrue(filtered[1].item())
+        self.assertFalse(filtered[3].item())
+        self.assertGreater(agreement, 0.0)
 
 
 class CalibrationTest(unittest.TestCase):
@@ -104,6 +277,7 @@ class DiscoveryReportTest(unittest.TestCase):
             "aleatoric": np.zeros(6, dtype=float),
             "expected_entropy": np.zeros(6, dtype=float),
             "head_uncertainty": np.zeros(6, dtype=float),
+            "odin_msp": np.zeros(6, dtype=float),
             "probs": np.array(
                 [
                     [0.9, 0.1],

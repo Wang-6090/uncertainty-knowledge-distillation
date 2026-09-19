@@ -151,6 +151,27 @@ def prototype_alignment_loss(features: torch.Tensor, labels: torch.Tensor, proto
     return 1.0 - (feats * proto).sum(dim=-1).mean()
 
 
+def proxy_contrastive_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    proxies: torch.Tensor,
+    temperature: float = 0.1,
+) -> torch.Tensor:
+    """Use class proxies as contrastive targets when batch positives are sparse.
+
+    This is a lightweight Proxy-NCA / normalized-softmax style loss: each
+    feature is pulled toward its class proxy and pushed away from other class
+    proxies, without requiring another same-class sample in the mini-batch.
+    """
+    valid = labels >= 0
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    feats = F.normalize(features[valid], dim=-1)
+    proxy = F.normalize(proxies, dim=-1)
+    logits = feats @ proxy.T / max(float(temperature), 1e-6)
+    return F.cross_entropy(logits, labels[valid])
+
+
 def pseudo_unknown_loss(logits: torch.Tensor, uncertainty: torch.Tensor) -> torch.Tensor:
     if logits.numel() == 0:
         return logits.new_tensor(0.0)

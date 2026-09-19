@@ -223,6 +223,7 @@ def analyze_run(run_dir: Path):
             "temperature_enabled": calibration.get("temperature_enabled"),
             "ece": calibration.get("reliability", {}).get("ece"),
             "uncertainty_error_correlation": calibration.get("uncertainty_error", {}).get("correlation"),
+            "odin": calibration.get("odin", {}),
         },
         "top_known_reject_classes": top_known_reject,
         "top_novel_false_accept_classes": top_novel_false_accept,
@@ -261,6 +262,11 @@ def format_run_md(item):
     lines.append(f"- ECE: {fmt_float(calibration.get('ece'))}")
     lines.append(f"- temperature: {fmt_float(calibration.get('temperature'))}")
     lines.append(f"- uncertainty/error correlation: {fmt_float(calibration.get('uncertainty_error_correlation'))}")
+    odin = calibration.get("odin") or {}
+    if odin.get("enabled"):
+        lines.append(
+            f"- ODIN: epsilon {fmt_float(odin.get('epsilon'))}, temperature {fmt_float(odin.get('temperature'))}"
+        )
     lines.append(f"- all-unknown oracle NMI: {fmt_float(m.get('cluster_all_unknown_oracle_nmi'))}")
     lines.append(f"- candidate-unknown oracle NMI: {fmt_float(m.get('cluster_candidate_unknown_oracle_nmi'))}")
     lines.append(f"- cluster NMI: {m.get('cluster_nmi', float('nan')):.4f}")

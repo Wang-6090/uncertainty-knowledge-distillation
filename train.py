@@ -69,6 +69,8 @@ def parse_args(argv=None):
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--alpha-unc", type=float, default=0.1)
     p.add_argument("--alpha-proto", type=float, default=0.0)
+    p.add_argument("--alpha-proxy", type=float, default=0.0)
+    p.add_argument("--proxy-temperature", type=float, default=0.1)
     p.add_argument("--alpha-pseudo", type=float, default=0.0)
     p.add_argument("--alpha-energy", type=float, default=0.0)
     p.add_argument("--energy-margin", type=float, default=1.0)
@@ -91,6 +93,8 @@ def parse_args(argv=None):
     p.add_argument("--kd-mode", choices=["standard", "uncertainty"], default="uncertainty")
     p.add_argument("--alpha-supcon", type=float, default=0.1)
     p.add_argument("--alpha-proto", type=float, default=0.0)
+    p.add_argument("--alpha-proxy", type=float, default=0.0)
+    p.add_argument("--proxy-temperature", type=float, default=0.1)
     p.add_argument("--alpha-pseudo", type=float, default=0.0)
     p.add_argument("--alpha-energy", type=float, default=0.0)
     p.add_argument("--energy-margin", type=float, default=1.0)
@@ -114,6 +118,65 @@ def parse_args(argv=None):
         type=float,
         default=0.0,
         help="Apply energy-margin separation between known samples and a pure unknown discovery pool.",
+    )
+    p.add_argument(
+        "--alpha-discovery-selective-unknown",
+        type=float,
+        default=0.0,
+        help="Apply unknown loss only to high-risk samples selected from an unlabeled discovery pool.",
+    )
+    p.add_argument(
+        "--alpha-discovery-selective-energy",
+        type=float,
+        default=0.0,
+        help="Apply energy separation only to high-risk samples selected from an unlabeled discovery pool.",
+    )
+    p.add_argument("--discovery-select-ratio", type=float, default=0.25)
+    p.add_argument(
+        "--discovery-select-mode",
+        choices=["entropy", "max_softmax", "energy", "entropy_uncertainty", "consensus"],
+        default="entropy_uncertainty",
+    )
+    p.add_argument(
+        "--discovery-selective-warmup-epochs",
+        type=int,
+        default=0,
+        help="Keep selective discovery unknown/energy losses disabled for the first N epochs.",
+    )
+    p.add_argument(
+        "--discovery-selective-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp selective discovery unknown/energy loss weights after warmup.",
+    )
+    p.add_argument(
+        "--discovery-selection-model",
+        choices=["student", "ema"],
+        default="student",
+        help="Model used to select high-risk discovery samples; ema follows Mean Teacher-style smoothing.",
+    )
+    p.add_argument(
+        "--discovery-ema-decay",
+        type=float,
+        default=0.99,
+        help="EMA decay for discovery-selection model when --discovery-selection-model ema is used.",
+    )
+    p.add_argument(
+        "--discovery-neighbor-filter",
+        action="store_true",
+        help="Filter selected discovery candidates by kNN agreement in projection space.",
+    )
+    p.add_argument(
+        "--discovery-neighbor-k",
+        type=int,
+        default=5,
+        help="Number of nearest neighbors used by --discovery-neighbor-filter.",
+    )
+    p.add_argument(
+        "--discovery-neighbor-min-votes",
+        type=int,
+        default=2,
+        help="Minimum selected neighbors required to keep a discovery candidate.",
     )
     p.add_argument("--discovery-batch-size", type=int, default=0)
     p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
@@ -162,6 +225,7 @@ def parse_args(argv=None):
             "auto",
             "full",
             "max_softmax",
+            "odin_msp",
             "energy",
             "entropy_only",
             "proto_only",
@@ -172,12 +236,30 @@ def parse_args(argv=None):
             "expected_entropy",
             "epistemic",
             "mahalanobis",
+            "mahalanobis_diag",
+            "mahalanobis_shared",
             "entropy_mahalanobis",
+            "entropy_mahalanobis_diag",
+            "entropy_mahalanobis_shared",
             "normalized_entropy_mahalanobis",
+            "normalized_entropy_mahalanobis_diag",
+            "normalized_entropy_mahalanobis_shared",
         ],
     )
     p.add_argument("--open-val-ratio", type=float, default=0.0)
     p.add_argument("--auto-calibrate-score", action="store_true")
+    p.add_argument(
+        "--odin-epsilon",
+        type=float,
+        default=0.0,
+        help="Enable ODIN-style input perturbation for odin_msp score; value is in normalized image units.",
+    )
+    p.add_argument(
+        "--odin-temperature",
+        type=float,
+        default=1000.0,
+        help="Temperature used by ODIN-style MSP scoring.",
+    )
 
     p = sub.add_parser("inspect_data")
     add_common(p)
@@ -206,6 +288,18 @@ def save_checkpoint(model, path, extra=None):
     if extra:
         payload.update(extra)
     torch.save(payload, path)
+
+
+def scheduled_weight(epoch: int, warmup_epochs: int = 0, ramp_epochs: int = 0) -> float:
+    """Return a loss multiplier using epoch-indexed warmup and linear ramp."""
+    warmup_epochs = max(int(warmup_epochs), 0)
+    ramp_epochs = max(int(ramp_epochs), 0)
+    epoch_number = int(epoch) + 1
+    if epoch_number <= warmup_epochs:
+        return 0.0
+    if ramp_epochs <= 0:
+        return 1.0
+    return min(1.0, max(0.0, (epoch_number - warmup_epochs) / ramp_epochs))
 
 
 def _checkpoint_parts(path_arg: str):
@@ -302,6 +396,16 @@ def _select_score_mode(
     return valid[0], results
 
 
+def _score_needs_shared_mahalanobis(score_mode: str, auto_calibrate: bool = False) -> bool:
+    if auto_calibrate or score_mode == "auto":
+        return True
+    return score_mode.endswith("_shared") or score_mode in {
+        "mahalanobis",
+        "entropy_mahalanobis",
+        "normalized_entropy_mahalanobis",
+    }
+
+
 def fit_teacher(args):
     set_seed(args.seed)
     bundle = build_data_bundle(
@@ -342,6 +446,7 @@ def fit_teacher(args):
             device,
             alpha_unc=args.alpha_unc,
             alpha_proto=args.alpha_proto,
+            alpha_proxy=args.alpha_proxy,
             alpha_pseudo=args.alpha_pseudo,
             alpha_energy=args.alpha_energy,
             pseudo_mode=args.pseudo_mode,
@@ -349,6 +454,7 @@ def fit_teacher(args):
             uncertainty_target_mode=args.uncertainty_target_mode,
             energy_margin=args.energy_margin,
             energy_temperature=args.energy_temperature,
+            proxy_temperature=args.proxy_temperature,
         )
         val_stats = evaluate_classification(model, val_loader, device)
         print(f"[teacher][{epoch+1}/{args.epochs}] {stats} {val_stats}")
@@ -402,8 +508,14 @@ def fit_student(args):
     train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
     discovery_loader = None
-    if (args.alpha_discovery_unknown > 0.0 or args.alpha_discovery_energy > 0.0) and not args.discovery_pool:
-        raise ValueError("alpha-discovery-unknown/energy requires --discovery-pool.")
+    uses_discovery_regularizer = (
+        args.alpha_discovery_unknown > 0.0
+        or args.alpha_discovery_energy > 0.0
+        or args.alpha_discovery_selective_unknown > 0.0
+        or args.alpha_discovery_selective_energy > 0.0
+    )
+    if uses_discovery_regularizer and not args.discovery_pool:
+        raise ValueError("discovery unknown/energy regularizers require --discovery-pool.")
     if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
         if args.discovery_pool_mode == "mixed" and (
             args.alpha_discovery_unknown > 0.0 or args.alpha_discovery_energy > 0.0
@@ -433,6 +545,12 @@ def fit_student(args):
         dropout=args.dropout,
         pretrained=args.pretrained,
     ).to(device)
+    discovery_selection_model = None
+    if args.discovery_selection_model == "ema":
+        discovery_selection_model = copy.deepcopy(student).to(device)
+        discovery_selection_model.eval()
+        for parameter in discovery_selection_model.parameters():
+            parameter.requires_grad_(False)
     teacher_ckpt = resolve_input_checkpoint(args.teacher_ckpt, args.work_dir, "teacher.pt")
     load_checkpoint(teacher, teacher_ckpt, device)
     optim = torch.optim.AdamW(student.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -440,6 +558,11 @@ def fit_student(args):
     best_state = None
     best_epoch = 0
     for epoch in range(args.epochs):
+        selective_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.discovery_selective_warmup_epochs,
+            ramp_epochs=args.discovery_selective_ramp_epochs,
+        )
         stats = train_one_epoch_student(
             student,
             teacher,
@@ -451,6 +574,7 @@ def fit_student(args):
             alpha_feat_kd=args.alpha_feat_kd,
             alpha_supcon=args.alpha_supcon,
             alpha_proto=args.alpha_proto,
+            alpha_proxy=args.alpha_proxy,
             alpha_pseudo=args.alpha_pseudo,
             alpha_energy=args.alpha_energy,
             pseudo_mode=args.pseudo_mode,
@@ -463,11 +587,22 @@ def fit_student(args):
             alpha_discovery=args.alpha_discovery,
             alpha_discovery_unknown=args.alpha_discovery_unknown,
             alpha_discovery_energy=args.alpha_discovery_energy,
+            alpha_discovery_selective_unknown=args.alpha_discovery_selective_unknown * selective_weight,
+            alpha_discovery_selective_energy=args.alpha_discovery_selective_energy * selective_weight,
+            discovery_select_ratio=args.discovery_select_ratio,
+            discovery_select_mode=args.discovery_select_mode,
             discovery_loss_mode=args.discovery_loss,
             discovery_temperature=args.discovery_temperature,
             energy_margin=args.energy_margin,
             energy_temperature=args.energy_temperature,
+            proxy_temperature=args.proxy_temperature,
+            discovery_selection_model=discovery_selection_model,
+            discovery_ema_decay=args.discovery_ema_decay,
+            discovery_neighbor_filter=args.discovery_neighbor_filter,
+            discovery_neighbor_k=args.discovery_neighbor_k,
+            discovery_neighbor_min_votes=args.discovery_neighbor_min_votes,
         )
+        stats["discovery_selective_weight"] = selective_weight
         val_stats = evaluate_classification(student, val_loader, device)
         print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
         if val_stats["known_acc"] > best_acc:
@@ -527,11 +662,32 @@ def discover(args):
     ).to(device)
     ckpt_path = resolve_input_checkpoint(args.student_ckpt, args.work_dir, "student.pt")
     ckpt = load_checkpoint(model, ckpt_path, device)
-    outputs_test = extract_outputs(model, test_loader, device, mc_samples=args.mc_samples)
-    outputs_val = extract_outputs(model, val_loader, device, mc_samples=args.mc_samples)
+    outputs_test = extract_outputs(
+        model,
+        test_loader,
+        device,
+        mc_samples=args.mc_samples,
+        odin_epsilon=args.odin_epsilon,
+        odin_temperature=args.odin_temperature,
+    )
+    outputs_val = extract_outputs(
+        model,
+        val_loader,
+        device,
+        mc_samples=args.mc_samples,
+        odin_epsilon=args.odin_epsilon,
+        odin_temperature=args.odin_temperature,
+    )
     open_val_loader = build_loader(bundle.open_val, args.batch_size, False, args.num_workers) if bundle.open_val is not None else None
     outputs_open_val = (
-        extract_outputs(model, open_val_loader, device, mc_samples=args.mc_samples)
+        extract_outputs(
+            model,
+            open_val_loader,
+            device,
+            mc_samples=args.mc_samples,
+            odin_epsilon=args.odin_epsilon,
+            odin_temperature=args.odin_temperature,
+        )
         if open_val_loader is not None
         else None
     )
@@ -550,6 +706,13 @@ def discover(args):
             key: value.detach().cpu().numpy() if torch.is_tensor(value) else np.asarray(value)
             for key, value in gaussian_stats.items()
         }
+    if (
+        gaussian_stats is None or "precision" not in gaussian_stats
+    ) and _score_needs_shared_mahalanobis(args.score_mode, args.auto_calibrate_score):
+        stats_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        gaussian_stats = collect_diagonal_gaussian_stats(
+            model, stats_loader, device, len(bundle.known_classes)
+        )
     selected_score_mode = args.score_mode
     needs_normalization = selected_score_mode.startswith("normalized_")
     score_normalization = (
@@ -561,6 +724,11 @@ def discover(args):
         "temperature": float(temperature),
         "temperature_enabled": bool(args.temperature_calibration),
         "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
+        "odin": {
+            "epsilon": float(args.odin_epsilon),
+            "temperature": float(args.odin_temperature),
+            "enabled": bool(args.odin_epsilon > 0.0),
+        },
         "reliability": calibration_diagnostics(
             outputs_val["probs"], outputs_val["labels"], args.calibration_bins
         ),
@@ -574,10 +742,18 @@ def discover(args):
             "entropy_only",
             "proto_only",
             "max_softmax",
+            "odin_msp",
             "energy",
+            "normalized_entropy_proto",
+            "entropy_epistemic",
+            "expected_entropy",
             "mahalanobis",
+            "mahalanobis_diag",
+            "mahalanobis_shared",
             "entropy_mahalanobis",
+            "entropy_mahalanobis_shared",
             "normalized_entropy_mahalanobis",
+            "normalized_entropy_mahalanobis_shared",
         ]
         selected, all_candidates = _select_score_mode(
             outputs_val,
@@ -669,6 +845,7 @@ def discover(args):
         "head_uncertainty": detail["head_uncertainty"].tolist(),
         "proto_dist": detail["proto_dist"].tolist(),
         "mahalanobis": detail["mahalanobis"].tolist(),
+        "odin_msp": detail["odin_msp"].tolist(),
         "pred_known": detail["pred_known"].astype(int).tolist(),
         "true_known": detail["true_known"].astype(int).tolist(),
         "pred_class": detail["pred_class"].tolist(),
