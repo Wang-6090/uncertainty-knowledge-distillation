@@ -220,6 +220,120 @@
 
 这次快速实验说明：kNN 确实让训练期 selective 样本更少，第二轮训练中 discovery_raw_selected_ratio 约为 0.115，过滤后 discovery_selected_ratio 约为 0.018；测试时候选池也从 55 个降到 39 个。但是它没有提升 candidate purity，unknown reject rate 和 known accuracy 反而下降。因此当前 kNN 版本只能说明“更保守”，不能说明“更有效”。后续若继续尝试，应优先调整 k / min-votes 或改成按邻域一致性连续加权的 selective energy；如果多组设置仍不能提升 purity，就应暂停 kNN 作为主线。
 
+## 下一步代码分工建议
+
+下面的分工只使用“同学 1 / 同学 2”表示，目的是让两个人都能改代码，但尽量不修改同一批文件，减少冲突。这个分工直接对应当前实验暴露出来的问题：未知检测仍然较弱、候选池污染较重、kNN hard filter 只让候选变少但没有提高 candidate purity、不确定性知识蒸馏还没有被充分验证。
+
+### 同学 1：candidate weighting 与 discovery 筛选
+
+负责问题：
+
+- mixed discovery pool 中不能把所有样本都当未知；
+- 当前 consensus / EMA / kNN 仍然会选入较多误拒的已知样本；
+- 最新 kNN hard filter 实验中，候选数从 55 降到 39，但 candidate purity 从 0.3091 变为 0.3077，说明“硬过滤”没有真正改善候选质量；
+- 下一步应从“选中 / 不选中”的二值判断，改为“不同候选样本具有不同可信权重”的 soft weighting。
+
+建议实现方向：
+
+- 对 discovery sample 先计算 entropy / MSP / Energy / uncertainty 等风险信号；
+- 使用 consensus 得到初筛风险分数；
+- 使用 kNN 邻域一致性判断该样本附近是否也有疑似未知候选；
+- 使用 EMA/student 预测一致性判断当前模型判断是否稳定；
+- 最终输出 candidate_weight，范围建议控制在 0 到 1。
+
+建议权重来源：
+
+- consensus_score：熵、1-MSP、Energy、辅助不确定性等风险信号越一致，权重越高；
+- neighbor_agreement：近邻中也被认为像未知的样本越多，权重越高；
+- ema_student_agreement：EMA 模型和当前 student 对样本风险判断越一致，权重越高。
+
+可参考文献与对应思路：
+
+- Vaze et al., Generalized Category Discovery, CVPR 2022：无标签池同时包含已知类和未知类，不能把 discovery pool 全部当未知；当前 mixed pool 和 candidate purity 记录就是基于这个问题。
+- Sohn et al., FixMatch, NeurIPS 2020：只使用高置信伪标签，不可靠样本不应强行训练；这里对应“candidate_weight 低的样本减少训练强度”。
+- Tarvainen and Valpola, Mean Teachers are Better Role Models, NeurIPS 2017：EMA teacher 的预测更稳定；这里对应 discovery selection model = ema 和 EMA/student agreement。
+- Van Gansbeke et al., SCAN, ECCV 2020：类别结构可以通过近邻一致性学习；这里对应 kNN neighbor agreement。
+- Han et al., AutoNovel, ICLR 2020：新类发现不能只看单样本置信度，还要利用样本间关系；这里对应“样本自己像未知，并且邻居也像未知”。
+- Wen et al., SimGCD, ICCV 2023：训练阶段应利用无标签样本结构，而不是只在测试后聚类；这里支持把 candidate weighting 放到训练阶段。
+
+建议主要修改文件：
+
+- novel_discovery/pipeline.py
+- train.py
+- 可新增 tests/test_discovery_selection.py
+
+尽量不要修改：
+
+- novel_discovery/losses.py
+- README.md 的实验结论部分
+
+建议测试内容：
+
+- 未被初筛选中的样本权重为 0；
+- 邻域一致性越高，权重越高；
+- EMA/student 判断越一致，权重越高；
+- k 大于 batch size 时不报错；
+- 权重不出现 NaN，范围保持在 0 到 1。
+
+### 同学 2：weighted loss 与不确定性蒸馏
+
+负责问题：
+
+- 当前 selective energy 对所有被选中的候选样本几乎一视同仁；
+- 但候选池里仍混有误拒的已知样本，如果它们以同等强度参与 unknown / energy 训练，会继续污染模型；
+- 当前不确定性知识蒸馏已经接入代码，但还没有通过严格消融证明优于标准 KD；
+- 下一步需要让 loss 支持 per-sample weight，方便同学 1 输出的 candidate_weight 真正进入训练目标。
+
+建议实现方向：
+
+- teacher uncertainty 用于 KD weight，再进入 uncertainty-weighted KL / feature KD；
+- candidate_weight 用于 weighted selective energy；
+- 更可靠的候选样本权重大，不可靠候选样本权重小；
+- 新增 per-sample energy margin loss 和 weighted energy margin loss，同时保持旧的 energy_margin_loss 接口不被破坏。
+
+建议同时整理不确定性蒸馏权重：
+
+- raw：保持当前 exp(-uncertainty) 行为；
+- mean_normalized：让 batch 平均权重接近 1，避免只是整体改变 KD 强度；
+- clamp：限制最小 / 最大权重，避免少数样本权重过大或过小；
+- 后续消融比较 CE、标准 KD、不确定性 KD、特征 KD 和完整方法。
+
+可参考文献与对应思路：
+
+- Hinton et al., Distilling the Knowledge in a Neural Network, 2015：标准 KD 使用温度 soft logits 和 KL 散度；当前 KL 蒸馏基线来自这里。
+- Kendall and Gal, What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision?, NeurIPS 2017：区分偶然不确定性和认知不确定性；当前项目需要明确不同不确定性信号在训练和检测中的作用。
+- Gal and Ghahramani, Dropout as a Bayesian Approximation, ICML 2016：MC Dropout 可估计模型不确定性；当前检测端的 epistemic uncertainty 和 predictive entropy 可参考该思路。
+- Liu et al., Energy-based Out-of-distribution Detection, NeurIPS 2020：Energy 分数可用于 OOD 检测和训练约束；当前 selective energy 和 weighted energy loss 主要参考这个方向。
+- Hendrycks et al., Deep Anomaly Detection with Outlier Exposure, ICLR 2019：辅助异常样本可以降低模型对异常输入的置信度；但 mixed pool 不保证全是异常，因此需要 weighted selective loss，而不是全量 OE。
+- Sohn et al., FixMatch, NeurIPS 2020：伪标签样本应该按可靠程度筛选或加权；这里对应对 candidate_weight 使用不同 loss 强度。
+
+建议主要修改文件：
+
+- novel_discovery/losses.py
+- 可新增 novel_discovery/uncertainty_kd.py
+- 可新增 tests/test_uncertainty_kd.py
+
+尽量不要修改：
+
+- novel_discovery/pipeline.py 的训练主循环
+- train.py 的参数入口
+- README.md 的实验结论部分
+
+建议测试内容：
+
+- mean_normalized 权重平均值接近 1；
+- clamp 后权重在指定范围内；
+- weighted energy loss 在空 outlier 输入时返回 0；
+- weighted energy loss 可以正常反向传播；
+- 样本权重越高，对最终 loss 的影响越大；
+- 旧的 energy_margin_loss 和 distillation_loss 原接口仍然可用。
+
+### 两部分如何衔接
+
+同学 1 输出 candidate_weight；同学 2 提供 weighted_energy_margin_loss。最终主流程可以变成：mixed discovery sample 先根据风险、邻域和 EMA/student 一致性计算 candidate_weight，再根据 candidate_weight 计算 weighted selective energy，最后训练学生模型。
+
+这个衔接正好对应当前最大问题链条：未知检测不可靠导致候选池污染，错误候选又以同等权重参与训练，进一步损伤已知分类和未知检测。因此，下一步不是继续单纯调小 alpha 或 ratio，而是把“候选是否可靠”和“候选以多大强度参与训练”拆开处理。
+
 ## 推荐实验协议
 
 1. 固定 CIFAR-100 60/40 划分、backbone、输入尺寸、epoch、batch size、优化器、阈值策略和评分方式。
