@@ -67,7 +67,10 @@
 - 新增 SimGCD 风格双视图 novel consistency：用一个增强视图生成伪标签，约束另一个视图的 novel prototype 预测。
 - 新增 SCAN 风格 neighbor consistency：约束特征空间近邻具有相似的 novel prototype 分布。
 - 通过 --joint-discovery 显式开启，默认关闭；训练后额外保存 novel_head.pt。
+- `--joint-head-temperature` 与 `--joint-assignment-temperature` 分开：前者控制 cosine prototype logits，默认 `0.2`；后者控制均衡分配，默认 `1.0`。
 - --joint-confidence-threshold 使用相对均匀分布的置信度，即 max softmax probability 乘以 novel 类数量。默认值 1.1，适用于 CIFAR-100 的 40 个未知类。
+- `discover` 可通过 `--novel-head-ckpt` 加载 `novel_head.pt`，使用 `--score-mode novel_msp` / `novel_entropy` 做检测，或使用 `--cluster-feature novel` / `novel_pca` 评估 prototype 表示。
+- 新增可选 `--joint-space unified`：把已知分类 logits 与 novel prototype logits 拼成统一的 known+novel 空间，并支持 `unified_novel_mass` 检测分数和 `unified` / `unified_pca` 聚类特征。
 
 这一版是从两阶段“检测后聚类”走向联合新类发现的最小实验模块，还没有实现完整 UNO/SimGCD 的周期性伪标签更新、类别均衡分配优化和未知类分类评测。它目前用于验证训练期 novel prototype 是否能学习结构，不应直接作为最终论文方法。
 
@@ -115,6 +118,11 @@
 - 新增更保守的 consensus 选择后，3 epoch 快速消融结果为 AUROC `0.5575`、FPR95 `0.9095`、known accuracy `0.3372`、unknown reject rate `0.0663`、candidate purity `0.5200`。相比 mixed baseline，它牺牲少量 AUROC，但提高了 known accuracy、降低了 FPR95，并把候选池纯度从 `0.4590` 提高到 `0.5200`；相比原 selective energy，它显著缓解了已知分类下降问题。因此 consensus 筛选比 warmup/ramp 更值得继续验证。
 - 在 consensus 基础上加入 EMA selection model 后，3 epoch 快速消融结果为 AUROC `0.5712`、FPR95 `0.8832`、known accuracy `0.2928`、unknown reject rate `0.0561`、candidate purity `0.5500`。它在 AUROC、FPR95 和候选池纯度上是当前 mixed discovery 相关实验中最好的，但 known accuracy 和 unknown reject rate 下降，说明 EMA 筛选方向有价值，但 selective energy 权重或筛选比例还需要降低。
  - 联合新类发现模块已经完成 toy smoke test 和小规模 CIFAR-100 GPU smoke test。CIFAR smoke 设置为 known/novel = 60/40、训练样本 1000、discovery 样本 1000、1 epoch，训练日志中 `joint_discovery=3.6891`、`joint_consistency=3.6890`、`joint_balance=0.00017`、`joint_neighbor=0.000095`，并成功保存 `novel_head.pt`。这只能证明联合损失确实参与了反向传播且代码可运行，不能证明未知检测或聚类性能已经提升。
+ - 在纯未知 discovery pool、2 epoch、prototype temperature `0.2` 的快速实验中，`joint_information` 从第 1 轮约 `-0.0054` 变为第 2 轮约 `-0.0428`，说明 prototype 分配开始脱离均匀状态。使用 `novel_msp` 检测时 AUROC `0.5127`、unknown reject rate `0.0689`、candidate purity `0.4737`、candidate ARI `0.0697`；使用 `novel_entropy` 时 AUROC `0.5130`、FPR95 `0.9490`、unknown-only ARI `0.3268`。相对同规模 baseline 的 AUROC `0.4685`、unknown reject rate `0.0255`、candidate purity `0.2632`，有初步正向信号，但 FPR95 仍很差，且实验只有单 seed、2 epoch，不能作为最终结论。
+ - 为控制训练轮数和 discovery pool 的影响，补充了同样为纯未知池、2 epoch 的 baseline：AUROC `0.4946`、FPR95 `0.9490`、unknown reject rate `0.0332`、candidate purity `0.3171`。因此在更公平的对照下，novel head 的 `novel_msp` / `novel_entropy` 仍有初步收益，但提升幅度有限，必须进行多 seed 和更长训练验证。
+ - 目前 mixed discovery pool 上的联合 head 没有表现出同样收益，原因是当前 head 只建模 40 个未知 prototype，却把已知和未知混合样本全部送入该 head；这与 GCD/SimGCD 的统一 known+novel 类别空间设定不完全一致。后续应优先改成统一类别空间或加入可靠的未知候选门控，再做正式对比。
+- 已实现统一 known+novel 空间并完成 smoke test。在 mixed discovery pool、2 epoch、60/40 划分下，`unified_novel_mass` 的 AUROC `0.5378`、FPR95 `0.9260`、unknown reject rate `0.0663`、candidate purity `0.4643`、candidate ARI `-0.0118`。相同思路在纯未知 pool 上 AUROC 仅 `0.4874`，说明统一空间更适合 mixed unlabeled pool；但 ARI 仍接近 0，prototype 尚未稳定对应真实新类，不能作为最终方法结论。
+ - 新增 joint candidate gating，支持 EMA + consensus 的 hard gate 和 EMA + entropy/uncertainty 的 soft weighting。mixed pool、2 epoch 快速结果中，hard gate 为 AUROC `0.5180`、FPR95 `0.9293`、unknown reject `0.0255`、candidate purity `0.4000`；soft gate 为 AUROC `0.5157`、FPR95 `0.9424`、unknown reject `0.0816`、candidate purity `0.3902`。两者都没有超过无门控统一空间，说明当前风险分数与 novel structure 的对应关系仍弱，门控暂不作为主方法。
  - 在 consensus 基础上加入 EMA selection model 后，3 epoch 快速消融结果为 AUROC `0.5712`、FPR95 `0.8832`、known accuracy `0.2928`、unknown reject rate `0.0561`、candidate purity `0.5500`。它在 AUROC、FPR95 和候选池纯度上是当前 mixed discovery 相关实验中最好的，但 known accuracy 和 unknown reject rate 下降。
  - 后续参数搜索显示：`alpha=0.03, ratio=0.15, decay=0.99` 的 AUROC `0.5276`、candidate purity `0.3864`；`alpha=0.03, ratio=0.25, decay=0.99` 的 AUROC `0.5569`、candidate purity `0.3529`；`alpha=0.05, ratio=0.25, decay=0.95` 的 AUROC `0.5656`、FPR95 `0.8947`、candidate purity `0.4902`。因此简单降低 selective energy 权重或降低筛选比例没有解决问题，`decay=0.95` 有一定折中但不如原 EMA 0.99 的候选池纯度。
 - 候选池纯度大约为 `0.43–0.50`，说明候选池中混入了较多被误拒的已知样本。
@@ -388,6 +396,7 @@ python train.py train_student --dataset cifar100 --data-root .\data `
   --backbone resnet18 --teacher-backbone resnet34 --student-backbone resnet18 `
   --pretrained --discovery-pool --discovery-pool-mode mixed `
   --limit-discovery 1000 --joint-discovery --joint-num-novel 40 `
+  --joint-head-temperature 0.2 `
   --alpha-joint-discovery 0.2 --joint-confidence-threshold 1.0 `
   --alpha-joint-consistency 1.0 --alpha-joint-balance 0.1 `
   --alpha-joint-neighbor 0.1 --joint-neighbor-k 5 `
@@ -397,6 +406,40 @@ python train.py train_student --dataset cifar100 --data-root .\data `
 ```
 
 该命令必须带 `--discovery-pool`，因为 novel prototype 只在训练期的无标签 discovery pool 上学习。`--joint-confidence-threshold` 是相对均匀分布的置信度阈值，不是普通的最大 softmax 概率；当前模块只用于验证训练期 novel prototype 是否能学习结构，不能替代最终的检测和聚类评测。
+
+如果使用 GCD/SimGCD 风格的混合无标签池，可将训练命令中的联合空间改为：
+
+```text
+--discovery-pool-mode mixed --joint-space unified
+```
+
+该模式同时学习已知和未知的统一 logits，但仍需通过消融实验确认它是否优于只学习 novel prototype 的模式。
+
+候选门控为实验开关，当前不建议直接作为默认方法：
+
+```text
+--joint-candidate-gating
+--joint-candidate-mode entropy_uncertainty
+--joint-candidate-soft-weighting
+--joint-candidate-weight-floor 0.05
+--discovery-selection-model ema
+```
+
+hard gate 会丢弃非候选样本，soft weighting 会保留全部样本但按风险连续加权；两者都需要和无门控版本进行同协议比较。
+
+加载联合 head 并评估 prototype 分数：
+
+```powershell
+python train.py discover --dataset cifar100 --data-root .\data `
+  --num-known 60 --num-novel 40 --split-path .\splits_cifar100_60_40.json `
+  --student-ckpt .\runs\student_joint\student.pt `
+  --novel-head-ckpt .\runs\student_joint\novel_head.pt `
+  --score-mode novel_entropy --cluster-feature novel_pca `
+  --cluster-k oracle --cluster-pca-dim 16 --cluster-normalize `
+  --work-dir .\runs\student_joint_detect --device auto
+```
+
+`novel_msp` 和 `novel_entropy` 只在联合 head 已经形成稳定 prototype 结构时有意义；当前它们仍是实验性分数，必须与原有 Energy、Mahalanobis 等分数做同协议消融。
 
 启用 discovery pool 的 NT-Xent 表示学习：
 
@@ -579,3 +622,32 @@ python aggregate_multiseed.py --root .\runs `
 - oracle-K 只用于聚类上限分析。
 - 使用测试集未知标签选择分数、阈值或聚类配置的结果不能作为严格无监督结果。
 - 目前结果属于阶段性结果，后续必须补充多随机种子实验和统一协议后，才能形成论文结论。
+## Latest local validation (2026-09-20)
+
+- Full CIFAR-100 60/40 run: ImageNet-pretrained ResNet-34 teacher, pretrained ResNet-18 student, seed 42, 10 teacher epochs and 5 unified-joint student epochs.
+- Best teacher validation accuracy: 40.43%; best student validation accuracy: 49.50%.
+- Full 10,000-image open-test result with `unified_novel_mass`: AUROC 0.6698, AUPR 0.5580, FPR95 0.8147, known accuracy 48.93%, unknown reject rate 14.13%.
+- Candidate-pool purity was 66.00%; clustering remains the main weakness: unknown-only NMI 0.421 and ARI 0.088.
+- The full run is a meaningful baseline improvement over the earlier small-data smoke experiments, but it is still one seed and is not a final paper result.
+
+## Recent code changes
+
+- Added `--joint-prototype-init kmeans_candidates` as an experimental option. It is not the default because the current small-data comparison did not improve AUROC.
+- Fixed `--novel-known-temperature` so an explicit command-line value overrides the checkpoint value.
+- Added `unified_novel_mass` to automatic score selection when a novel head is loaded.
+- Added `--auto-score-fast` to skip high-dimensional Mahalanobis calibration during lightweight score comparison. This is useful for smoke tests and multi-seed iteration; it does not change the default full calibration path.
+- Added the optional `classwise_unified_novel_mass` score. It calibrates the unified novel probability mass separately for each predicted known class using known validation samples, which can reduce class-dependent score bias. It is not enabled by default.
+- The first controlled 2,000-image comparison did not support the classwise score: `unified_novel_mass` reached AUROC `0.6939` and FPR95 `0.8051`, while `classwise_unified_novel_mass` reached AUROC `0.6483` and FPR95 `0.8903`. It remains an explicit ablation only and is no longer included in automatic score selection.
+- Added `--skip-clustering` for detection-only experiments. It avoids running KMeans and clustering diagnostics when the goal is only AUROC/FPR95 comparison.
+- Fixed an efficiency bug: non-Mahalanobis scores no longer compute the high-dimensional Mahalanobis distance, and classwise novel-mass calibration no longer fits unnecessary Mahalanobis statistics.
+- The current priority remains improving unknown-class feature structure and clustering, followed by 3-seed ablation experiments.
+
+## Latest local validation update (2026-09-20)
+
+- The discovery pipeline now reuses the final candidate clustering result when writing per-sample assignments. This removes a duplicate PCA/KMeans pass without changing metric definitions.
+- A full open-validation run used 20% of the CIFAR-100 open test pool for score selection and evaluated the remaining 8,000 images. Automatic score selection chose `unified_novel_mass`: AUROC `0.6743`, AUPR `0.5607`, FPR95 `0.8115`, known accuracy `0.4892`, and unknown reject rate `0.1474`.
+- On the same checkpoint, `projection_pca` was the strongest tested clustering representation. In a 2,000-image comparison, unknown-only ARI was `0.1639`, compared with `0.1405` for `feature_pca`, `0.0945` for `novel_pca`, and `0.0727` for `unified_pca`. On the full open-validation run, `projection_pca` reached unknown-only ARI `0.0990`, versus `0.0781` for `unified_pca`.
+- With `projection_pca` fixed, KMeans still exceeded Agglomerative clustering in the 2,000-image comparison (`0.1639` vs. `0.1242` unknown-only ARI), so KMeans remains the default clustering baseline.
+- The command-line default for `--cluster-feature` is now `projection_pca`. This is a provisional single-seed choice and must be checked with multiple seeds before being treated as a final method conclusion.
+- The open-validation result is only a small improvement over the earlier fixed-score baseline. Unknown detection and clustering remain the main research problems; the next formal step is a controlled multi-seed ablation.
+- The classwise score passed unit-level numerical checks but performed worse in the first controlled comparison. No performance claim is made for it.

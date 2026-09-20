@@ -13,7 +13,9 @@ from novel_discovery.joint_discovery import (
     NovelPrototypeHead,
     balanced_assignment_loss,
     balanced_assignments,
+    combine_known_novel_logits,
     joint_discovery_loss,
+    information_maximization_loss,
     neighbor_consistency_loss,
     novel_consistency_loss,
 )
@@ -61,6 +63,37 @@ class JointDiscoveryTest(unittest.TestCase):
         self.assertEqual(novel_consistency_loss(empty, empty).item(), 0.0)
         self.assertEqual(balanced_assignment_loss(empty).item(), 0.0)
         self.assertEqual(neighbor_consistency_loss(torch.empty(1, 6), torch.empty(1, 4)).item(), 0.0)
+
+    def test_information_maximization_is_finite_and_differentiable(self):
+        logits = torch.randn(8, 4, requires_grad=True)
+        loss = information_maximization_loss(logits)
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        self.assertIsNotNone(logits.grad)
+
+    def test_unified_logits_append_novel_classes(self):
+        known = torch.randn(3, 5)
+        novel = torch.randn(3, 4)
+        unified = combine_known_novel_logits(known, novel)
+        self.assertEqual(tuple(unified.shape), (3, 9))
+
+    def test_weighted_joint_loss_is_finite(self):
+        first_features = torch.randn(6, 5, requires_grad=True)
+        second_features = torch.randn(6, 5, requires_grad=True)
+        first_logits = torch.randn(6, 4, requires_grad=True)
+        second_logits = torch.randn(6, 4, requires_grad=True)
+        weights = torch.linspace(0.1, 1.0, steps=6)
+        losses = joint_discovery_loss(
+            first_features,
+            second_features,
+            first_logits,
+            second_logits,
+            confidence_threshold=0.0,
+            sample_weights=weights,
+        )
+        self.assertTrue(torch.isfinite(losses["total"]))
+        losses["total"].backward()
+        self.assertIsNotNone(first_logits.grad)
 
 
 if __name__ == "__main__":

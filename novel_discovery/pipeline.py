@@ -30,7 +30,7 @@ from .losses import (
     uncertainty_alignment_loss,
     weighted_energy_margin_loss,
 )
-from .joint_discovery import joint_discovery_loss
+from .joint_discovery import combine_known_novel_logits, joint_discovery_loss
 from .metrics import (
     clustering_report,
     compute_aupr,
@@ -279,6 +279,44 @@ def compute_discovery_candidate_weights(
     return mask, weights, selected_agreement
 
 
+@torch.no_grad()
+def compute_joint_candidate_weights(
+    logits: torch.Tensor,
+    uncertainty: torch.Tensor | None = None,
+    ratio: float = 0.25,
+    mode: str = "entropy_uncertainty",
+    floor: float = 0.05,
+) -> torch.Tensor:
+    """Return continuous risk weights for joint discovery without labels."""
+    if logits.size(0) == 0:
+        return logits.new_empty((0,))
+    probs = logits.softmax(dim=-1)
+    entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=-1)
+    max_softmax_risk = 1.0 - probs.max(dim=-1).values
+    energy_risk = -torch.logsumexp(logits, dim=-1)
+    if mode == "entropy":
+        risk = entropy
+    elif mode == "max_softmax":
+        risk = max_softmax_risk
+    elif mode == "energy":
+        risk = energy_risk
+    elif mode == "entropy_uncertainty":
+        risk = entropy if uncertainty is None else entropy + uncertainty
+    elif mode == "consensus":
+        components = [entropy, max_softmax_risk, energy_risk]
+        if uncertainty is not None:
+            components.append(uncertainty)
+        risk = torch.stack([_rank_normalize(item) for item in components], dim=0).mean(dim=0)
+    else:
+        raise ValueError(f"Unsupported discovery selection mode: {mode}")
+    risk = _rank_normalize(risk)
+    ratio = min(max(float(ratio), 1e-3), 1.0)
+    cutoff = torch.quantile(risk.detach(), 1.0 - ratio)
+    high_risk = ((risk - cutoff) / (1.0 - cutoff).clamp_min(1e-6)).clamp(0.0, 1.0)
+    floor = min(max(float(floor), 0.0), 1.0)
+    return floor + (1.0 - floor) * high_risk
+
+
 def update_ema_model(ema_model, model, decay: float = 0.99):
     """Update a non-gradient EMA copy used for stable discovery selection."""
     decay = min(max(float(decay), 0.0), 0.999999)
@@ -412,8 +450,20 @@ def train_one_epoch_student(
     joint_assignment_temperature: float = 1.0,
     alpha_joint_consistency: float = 1.0,
     alpha_joint_balance: float = 0.1,
+    alpha_joint_information: float = 0.1,
     alpha_joint_neighbor: float = 0.1,
     joint_neighbor_k: int = 5,
+    joint_space: str = "novel",
+    alpha_joint_known_ce: float = 0.1,
+    joint_known_temperature: float = 1.0,
+    joint_candidate_gating: bool = False,
+    joint_candidate_ratio: float = 0.25,
+    joint_candidate_mode: str = "consensus",
+    joint_candidate_neighbor_filter: bool = False,
+    joint_candidate_neighbor_k: int = 5,
+    joint_candidate_min_votes: int = 2,
+    joint_candidate_soft_weighting: bool = False,
+    joint_candidate_weight_floor: float = 0.05,
 ):
     student.train()
     teacher.eval()
@@ -438,7 +488,10 @@ def train_one_epoch_student(
     joint_meter = AverageMeter()
     joint_consistency_meter = AverageMeter()
     joint_balance_meter = AverageMeter()
+    joint_information_meter = AverageMeter()
     joint_neighbor_meter = AverageMeter()
+    joint_known_ce_meter = AverageMeter()
+    joint_candidate_meter = AverageMeter()
     discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     for batch in tqdm(loader, desc="student-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
@@ -487,7 +540,21 @@ def train_one_epoch_student(
         loss_joint_discovery = s_out["logits"].new_tensor(0.0)
         joint_consistency = s_out["logits"].new_tensor(0.0)
         joint_balance = s_out["logits"].new_tensor(0.0)
+        joint_information = s_out["logits"].new_tensor(0.0)
         joint_neighbor = s_out["logits"].new_tensor(0.0)
+        loss_joint_known_ce = s_out["logits"].new_tensor(0.0)
+        joint_candidate_ratio_value = 0.0
+        joint_sample_weights = None
+        main_novel_logits = None
+        if novel_head is not None and alpha_joint_discovery > 0.0:
+            main_novel_logits = novel_head(s_out["features"])
+            if joint_space == "unified" and alpha_joint_known_ce > 0.0:
+                unified_logits = combine_known_novel_logits(
+                    s_out["logits"],
+                    main_novel_logits,
+                    known_temperature=joint_known_temperature,
+                )
+                loss_joint_known_ce = classification_loss(unified_logits, labels)
         discovery_selected_ratio = 0.0
         discovery_raw_selected_ratio = 0.0
         discovery_neighbor_agreement = 0.0
@@ -510,24 +577,104 @@ def train_one_epoch_student(
             second_view = second_view.to(device)
             first_out = student(first_view)
             second_out = student(second_view)
+            joint_mask = None
+            if joint_candidate_gating and alpha_joint_discovery > 0.0:
+                if discovery_selection_model is None:
+                    first_selection_out = first_out
+                    second_selection_out = second_out
+                else:
+                    with torch.no_grad():
+                        first_selection_out = discovery_selection_model(first_view)
+                        second_selection_out = discovery_selection_model(second_view)
+                if joint_candidate_soft_weighting:
+                    first_weight = compute_joint_candidate_weights(
+                        first_selection_out["logits"],
+                        first_selection_out["uncertainty"],
+                        ratio=joint_candidate_ratio,
+                        mode=joint_candidate_mode,
+                        floor=joint_candidate_weight_floor,
+                    )
+                    second_weight = compute_joint_candidate_weights(
+                        second_selection_out["logits"],
+                        second_selection_out["uncertainty"],
+                        ratio=joint_candidate_ratio,
+                        mode=joint_candidate_mode,
+                        floor=joint_candidate_weight_floor,
+                    )
+                    joint_sample_weights = 0.5 * (first_weight + second_weight)
+                    joint_candidate_ratio_value = (
+                        joint_sample_weights >= 0.5
+                    ).float().mean().item()
+                else:
+                    first_gate = select_discovery_candidates(
+                        first_selection_out["logits"],
+                        first_selection_out["uncertainty"],
+                        ratio=joint_candidate_ratio,
+                        mode=joint_candidate_mode,
+                    )
+                    second_gate = select_discovery_candidates(
+                        second_selection_out["logits"],
+                        second_selection_out["uncertainty"],
+                        ratio=joint_candidate_ratio,
+                        mode=joint_candidate_mode,
+                    )
+                    if joint_candidate_neighbor_filter:
+                        first_gate, _ = filter_discovery_candidates_by_neighbors(
+                            first_gate,
+                            first_selection_out["proj"],
+                            k=joint_candidate_neighbor_k,
+                            min_votes=joint_candidate_min_votes,
+                        )
+                        second_gate, _ = filter_discovery_candidates_by_neighbors(
+                            second_gate,
+                            second_selection_out["proj"],
+                            k=joint_candidate_neighbor_k,
+                            min_votes=joint_candidate_min_votes,
+                        )
+                    # Keep only paired candidates so the two augmented views stay aligned.
+                    joint_mask = first_gate & second_gate
+                    joint_candidate_ratio_value = joint_mask.float().mean().item()
             if novel_head is not None and alpha_joint_discovery > 0.0:
                 first_novel_logits = novel_head(first_out["features"])
                 second_novel_logits = novel_head(second_out["features"])
+                if joint_mask is not None:
+                    first_features = first_out["features"][joint_mask]
+                    second_features = second_out["features"][joint_mask]
+                    first_novel_logits = first_novel_logits[joint_mask]
+                    second_novel_logits = second_novel_logits[joint_mask]
+                    first_known_logits = first_out["logits"][joint_mask]
+                    second_known_logits = second_out["logits"][joint_mask]
+                else:
+                    first_features = first_out["features"]
+                    second_features = second_out["features"]
+                    first_known_logits = first_out["logits"]
+                    second_known_logits = second_out["logits"]
+                confidence_threshold = (
+                    0.0
+                    if joint_mask is not None or joint_sample_weights is not None
+                    else joint_confidence_threshold
+                )
                 joint_losses = joint_discovery_loss(
-                    first_out["features"],
-                    second_out["features"],
+                    first_features,
+                    second_features,
                     first_novel_logits,
                     second_novel_logits,
-                    confidence_threshold=joint_confidence_threshold,
+                    confidence_threshold=confidence_threshold,
                     assignment_temperature=joint_assignment_temperature,
                     alpha_consistency=alpha_joint_consistency,
                     alpha_balance=alpha_joint_balance,
+                    alpha_information=alpha_joint_information,
                     alpha_neighbor=alpha_joint_neighbor,
                     neighbor_k=joint_neighbor_k,
+                    first_known_logits=(first_known_logits if joint_space == "unified" else None),
+                    second_known_logits=(second_known_logits if joint_space == "unified" else None),
+                    known_temperature=joint_known_temperature,
+                    sample_weights=joint_sample_weights,
                 )
                 loss_joint_discovery = joint_losses["total"]
                 joint_consistency = joint_losses["consistency"]
                 joint_balance = joint_losses["balance"]
+                joint_information = joint_losses["information"]
                 joint_neighbor = joint_losses["neighbor"]
             loss_discovery = discovery_view_loss(
                 first_out["proj"],
@@ -689,6 +836,7 @@ def train_one_epoch_student(
             + alpha_discovery_selective_unknown * loss_discovery_selective_unknown
             + alpha_discovery_selective_energy * loss_discovery_selective_energy
             + alpha_joint_discovery * loss_joint_discovery
+            + alpha_joint_known_ce * loss_joint_known_ce
         )
         optimizer.zero_grad()
         loss.backward()
@@ -716,7 +864,10 @@ def train_one_epoch_student(
         joint_meter.update(loss_joint_discovery.item(), images.size(0))
         joint_consistency_meter.update(joint_consistency.item(), images.size(0))
         joint_balance_meter.update(joint_balance.item(), images.size(0))
+        joint_information_meter.update(joint_information.item(), images.size(0))
         joint_neighbor_meter.update(joint_neighbor.item(), images.size(0))
+        joint_known_ce_meter.update(loss_joint_known_ce.item(), images.size(0))
+        joint_candidate_meter.update(joint_candidate_ratio_value, images.size(0))
     return {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
@@ -739,7 +890,10 @@ def train_one_epoch_student(
         "joint_discovery": joint_meter.avg,
         "joint_consistency": joint_consistency_meter.avg,
         "joint_balance": joint_balance_meter.avg,
+        "joint_information": joint_information_meter.avg,
         "joint_neighbor": joint_neighbor_meter.avg,
+        "joint_known_ce": joint_known_ce_meter.avg,
+        "joint_candidate_ratio": joint_candidate_meter.avg,
     }
 
 
@@ -1059,7 +1213,18 @@ def compute_open_score(
         mahalanobis_mode = "diag"
     elif score_mode.endswith("_shared"):
         mahalanobis_mode = "shared"
-    if gaussian_stats is not None:
+    mahalanobis_score_modes = {
+        "mahalanobis",
+        "mahalanobis_diag",
+        "mahalanobis_shared",
+        "entropy_mahalanobis",
+        "entropy_mahalanobis_diag",
+        "entropy_mahalanobis_shared",
+        "normalized_entropy_mahalanobis",
+        "normalized_entropy_mahalanobis_diag",
+        "normalized_entropy_mahalanobis_shared",
+    }
+    if gaussian_stats is not None and score_mode in mahalanobis_score_modes:
         mahalanobis = compute_mahalanobis_distance(
             outputs["features"], gaussian_stats, covariance=mahalanobis_mode
         )
@@ -1070,6 +1235,34 @@ def compute_open_score(
             score = score + proto_dist
     elif score_mode == "max_softmax":
         score = 1.0 - outputs["probs"].max(axis=1)
+    elif score_mode == "novel_msp":
+        if "novel_probs" not in outputs:
+            raise ValueError("novel_msp score requires --novel-head-ckpt")
+        score = outputs["novel_probs"].max(axis=1)
+    elif score_mode == "novel_entropy":
+        if "novel_probs" not in outputs:
+            raise ValueError("novel_entropy score requires --novel-head-ckpt")
+        probs = np.asarray(outputs["novel_probs"], dtype=float)
+        entropy = -(probs * np.log(np.clip(probs, 1e-8, None))).sum(axis=1)
+        score = 1.0 - entropy / np.log(max(probs.shape[1], 2))
+    elif score_mode == "unified_novel_mass":
+        if "unified_novel_mass" not in outputs:
+            raise ValueError("unified_novel_mass requires --novel-head-ckpt")
+        score = np.asarray(outputs["unified_novel_mass"], dtype=float)
+    elif score_mode == "classwise_unified_novel_mass":
+        if "unified_novel_mass" not in outputs:
+            raise ValueError("classwise_unified_novel_mass requires --novel-head-ckpt")
+        if normalization is None or "unified_novel_mass_classwise" not in normalization:
+            raise ValueError(
+                "classwise_unified_novel_mass requires known-validation classwise statistics"
+            )
+        raw_score = np.asarray(outputs["unified_novel_mass"], dtype=float)
+        predicted_class = np.asarray(outputs["logits"]).argmax(axis=1)
+        class_stats = normalization["unified_novel_mass_classwise"]
+        means = np.asarray(class_stats["mean"], dtype=float)
+        stds = np.asarray(class_stats["std"], dtype=float)
+        predicted_class = np.clip(predicted_class, 0, len(means) - 1)
+        score = (raw_score - means[predicted_class]) / np.maximum(stds[predicted_class], 1e-6)
     elif score_mode == "odin_msp":
         if "odin_msp" not in outputs:
             raise ValueError("odin_msp score requires --odin-epsilon greater than 0")
@@ -1141,6 +1334,7 @@ def fit_score_normalization(
     outputs_known: Dict[str, np.ndarray],
     prototypes: np.ndarray | None,
     gaussian_stats: Dict[str, np.ndarray] | None = None,
+    include_mahalanobis: bool = True,
 ) -> Dict[str, Dict[str, float]]:
     """Fit score statistics using known validation samples only."""
     entropy = np.asarray(outputs_known["entropy"], dtype=float)
@@ -1158,7 +1352,7 @@ def fit_score_normalization(
             score_mode="proto_only",
         )
         result["proto_dist"] = stats(proto_dist)
-    if gaussian_stats is not None:
+    if gaussian_stats is not None and include_mahalanobis:
         result["mahalanobis"] = stats(compute_mahalanobis_distance(outputs_known["features"], gaussian_stats))
         result["mahalanobis_diag"] = stats(
             compute_mahalanobis_distance(outputs_known["features"], gaussian_stats, covariance="diag")
@@ -1167,6 +1361,28 @@ def fit_score_normalization(
             result["mahalanobis_shared"] = stats(
                 compute_mahalanobis_distance(outputs_known["features"], gaussian_stats, covariance="shared")
             )
+    if "unified_novel_mass" in outputs_known and "logits" in outputs_known:
+        raw_score = np.asarray(outputs_known["unified_novel_mass"], dtype=float)
+        predicted_class = np.asarray(outputs_known["logits"]).argmax(axis=1)
+        num_classes = int(np.asarray(outputs_known["logits"]).shape[1])
+        global_stats = stats(raw_score)
+        means = np.full(num_classes, global_stats["mean"], dtype=float)
+        stds = np.full(num_classes, global_stats["std"], dtype=float)
+        counts = np.zeros(num_classes, dtype=np.int64)
+        for class_index in range(num_classes):
+            values = raw_score[predicted_class == class_index]
+            counts[class_index] = len(values)
+            if len(values) >= 2:
+                class_stats = stats(values)
+                means[class_index] = class_stats["mean"]
+                stds[class_index] = class_stats["std"]
+        result["unified_novel_mass_classwise"] = {
+            "mean": means.tolist(),
+            "std": stds.tolist(),
+            "count": counts.tolist(),
+            "fallback_mean": global_stats["mean"],
+            "fallback_std": global_stats["std"],
+        }
     return result
 
 
@@ -1340,6 +1556,7 @@ def run_discovery(
     cluster_whiten: bool = True,
     cluster_n_init: int = 10,
     cluster_stability_repeats: int = 5,
+    enable_clustering: bool = True,
 ):
     entropy = outputs["entropy"]
     epistemic = outputs["epistemic"]
@@ -1352,9 +1569,20 @@ def run_discovery(
         gaussian_stats=gaussian_stats,
     )
     proto_dist = np.zeros_like(score) if proto_dist is None else proto_dist
+    mahalanobis_score_modes = {
+        "mahalanobis",
+        "mahalanobis_diag",
+        "mahalanobis_shared",
+        "entropy_mahalanobis",
+        "entropy_mahalanobis_diag",
+        "entropy_mahalanobis_shared",
+        "normalized_entropy_mahalanobis",
+        "normalized_entropy_mahalanobis_diag",
+        "normalized_entropy_mahalanobis_shared",
+    }
     mahalanobis = (
         compute_mahalanobis_distance(outputs["features"], gaussian_stats)
-        if gaussian_stats is not None
+        if gaussian_stats is not None and score_mode in mahalanobis_score_modes
         else np.zeros_like(score)
     )
     pred_known = score <= threshold
@@ -1383,14 +1611,62 @@ def run_discovery(
         "known_class_accuracy_all_known": float(known_class_correct / max(known_total, 1)),
     }
     result.update(open_confusion)
+    if not enable_clustering:
+        result.update(
+            {
+                "cluster_k": None,
+                "cluster_method": cluster_method,
+                "cluster_feature": cluster_feature,
+                "cluster_selection": "skipped",
+                "cluster_pca_dim": int(cluster_pca_dim),
+                "cluster_normalized": bool(cluster_normalize or cluster_feature.endswith("_pca")),
+                "cluster_n_init": int(cluster_n_init),
+                "cluster_stability_repeats": int(cluster_stability_repeats),
+                "cluster_diagnostics": [],
+                "clustering_skipped": True,
+            }
+        )
+        detail = {
+            "score": score,
+            "score_mode": score_mode,
+            "entropy": entropy,
+            "epistemic": epistemic,
+            "aleatoric": aleatoric,
+            "expected_entropy": outputs.get("expected_entropy", aleatoric),
+            "head_uncertainty": outputs.get("head_uncertainty", aleatoric),
+            "proto_dist": proto_dist,
+            "mahalanobis": mahalanobis,
+            "odin_msp": np.asarray(outputs.get("odin_msp", np.zeros_like(score)), dtype=float),
+            "pred_known": pred_known,
+            "true_known": known_mask,
+            "pred_class": pred_class,
+            "true_label": true_labels,
+            "raw_labels": outputs["raw_labels"],
+            "pred_cluster": None,
+            "cluster_k": None,
+            "cluster_method": cluster_method,
+            "cluster_feature": cluster_feature,
+            "cluster_selection": "skipped",
+            "cluster_diagnostics": [],
+        }
+        return result, score, pred_known, detail
     novel_mask = ~pred_known
     selected_cluster_k = None
+    selected_cluster_predictions = None
     cluster_diagnostics = []
     true_unknown_k = int(np.unique(outputs["raw_labels"][~known_mask]).size)
     if cluster_feature in {"projection", "projection_pca"}:
         raw_cluster_features = outputs.get("projections", outputs["features"])
     elif cluster_feature in {"feature", "feature_pca"}:
         raw_cluster_features = outputs["features"]
+    elif cluster_feature in {"novel", "novel_pca"}:
+        if "novel_probs" not in outputs:
+            raise ValueError("novel clustering features require --novel-head-ckpt")
+        raw_cluster_features = outputs["novel_probs"]
+    elif cluster_feature in {"unified", "unified_pca"}:
+        if "unified_probs" not in outputs:
+            raise ValueError("unified clustering features require --novel-head-ckpt")
+        raw_cluster_features = outputs["unified_probs"]
     else:
         raise ValueError(f"Unsupported cluster feature: {cluster_feature}")
     use_pca = cluster_feature.endswith("_pca")
@@ -1461,6 +1737,8 @@ def run_discovery(
             method=cluster_method,
             n_init=cluster_n_init,
         )
+        # Reuse this fit when serializing per-sample cluster assignments below.
+        selected_cluster_predictions = novel_pred
         if len(np.unique(novel_pred)) > 0:
             result.update({f"cluster_{k}": v for k, v in clustering_report(novel_true, novel_pred).items()})
             true_unknown_candidates = (~known_mask)[novel_mask]
@@ -1520,27 +1798,15 @@ def run_discovery(
     }
     if novel_mask.sum() > 1 and num_novel > 0:
         pred_cluster = np.full(len(score), -1, dtype=np.int64)
-        raw_cluster_features = (
-            outputs.get("projections", outputs["features"])
-            if cluster_feature.startswith("projection")
-            else outputs["features"]
-        )
-        raw_cluster_features = np.asarray(raw_cluster_features[novel_mask], dtype=np.float32)
-        cluster_features = (
-            prepare_cluster_features(
-                raw_cluster_features,
-                use_pca=cluster_feature.endswith("_pca"),
-                pca_dim=cluster_pca_dim,
-                whiten=cluster_whiten,
+        if selected_cluster_predictions is None:
+            # Defensive fallback for an unusual short-candidate path.
+            cluster_features = prepare_subset(novel_mask)
+            selected_cluster_predictions = cluster_unknown_samples(
+                cluster_features,
+                num_clusters=selected_cluster_k,
+                method=cluster_method,
+                n_init=cluster_n_init,
             )
-            if cluster_normalize or cluster_feature.endswith("_pca")
-            else raw_cluster_features
-        )
-        pred_cluster[novel_mask] = cluster_unknown_samples(
-            cluster_features,
-            num_clusters=selected_cluster_k,
-            method=cluster_method,
-            n_init=cluster_n_init,
-        )
+        pred_cluster[novel_mask] = selected_cluster_predictions
         detail["pred_cluster"] = pred_cluster
     return result, score, pred_known, detail

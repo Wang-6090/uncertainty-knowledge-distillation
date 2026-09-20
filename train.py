@@ -7,12 +7,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from sklearn.cluster import KMeans
 
 # Keep downloaded torchvision weights inside the project by default.
 os.environ.setdefault("TORCH_HOME", str(Path.cwd() / ".torch_cache"))
 
 from novel_discovery.data import TwoViewDataset, build_data_bundle
-from novel_discovery.joint_discovery import NovelPrototypeHead
+from novel_discovery.joint_discovery import NovelPrototypeHead, combine_known_novel_logits
 from novel_discovery.metrics import compute_auroc
 from novel_discovery.models import build_model
 from novel_discovery.pipeline import (
@@ -196,7 +197,40 @@ def parse_args(argv=None):
         help="Enable the prototype-based joint novel-class discovery objective.",
     )
     p.add_argument("--joint-num-novel", type=int, default=40)
+    p.add_argument(
+        "--joint-prototype-init",
+        choices=["random", "kmeans", "kmeans_candidates"],
+        default="random",
+        help=(
+            "Initialize novel prototypes randomly, from the full discovery pool, "
+            "or from its high-risk candidate subset."
+        ),
+    )
+    p.add_argument(
+        "--joint-prototype-candidate-ratio",
+        type=float,
+        default=0.25,
+        help="Top-risk fraction used by kmeans_candidates prototype initialization.",
+    )
+    p.add_argument(
+        "--joint-prototype-warmup-epochs",
+        type=int,
+        default=0,
+        help="Known-only warmup epochs before KMeans prototype initialization and joint loss.",
+    )
+    p.add_argument(
+        "--joint-space",
+        choices=["novel", "unified"],
+        default="novel",
+        help="Train only novel prototypes or a unified known-plus-novel class space.",
+    )
     p.add_argument("--alpha-joint-discovery", type=float, default=1.0)
+    p.add_argument(
+        "--joint-head-temperature",
+        type=float,
+        default=0.2,
+        help="Temperature for cosine novel-prototype logits; lower values sharpen assignments.",
+    )
     p.add_argument(
         "--joint-confidence-threshold",
         type=float,
@@ -206,8 +240,27 @@ def parse_args(argv=None):
     p.add_argument("--joint-assignment-temperature", type=float, default=1.0)
     p.add_argument("--alpha-joint-consistency", type=float, default=1.0)
     p.add_argument("--alpha-joint-balance", type=float, default=0.1)
+    p.add_argument("--alpha-joint-information", type=float, default=0.1)
     p.add_argument("--alpha-joint-neighbor", type=float, default=0.1)
     p.add_argument("--joint-neighbor-k", type=int, default=5)
+    p.add_argument("--alpha-joint-known-ce", type=float, default=0.1)
+    p.add_argument("--joint-known-temperature", type=float, default=1.0)
+    p.add_argument(
+        "--joint-candidate-gating",
+        action="store_true",
+        help="Apply the joint novel objective only to high-risk unlabeled discovery candidates.",
+    )
+    p.add_argument("--joint-candidate-ratio", type=float, default=0.25)
+    p.add_argument(
+        "--joint-candidate-mode",
+        choices=["entropy", "max_softmax", "energy", "entropy_uncertainty", "consensus"],
+        default="consensus",
+    )
+    p.add_argument("--joint-candidate-neighbor-filter", action="store_true")
+    p.add_argument("--joint-candidate-neighbor-k", type=int, default=5)
+    p.add_argument("--joint-candidate-min-votes", type=int, default=2)
+    p.add_argument("--joint-candidate-soft-weighting", action="store_true")
+    p.add_argument("--joint-candidate-weight-floor", type=float, default=0.05)
     p.add_argument("--discovery-batch-size", type=int, default=0)
     p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
     p.add_argument("--discovery-temperature", type=float, default=0.2)
@@ -215,6 +268,17 @@ def parse_args(argv=None):
     p = sub.add_parser("discover")
     add_common(p)
     p.add_argument("--student-ckpt", default="./runs/student.pt")
+    p.add_argument(
+        "--novel-head-ckpt",
+        default="",
+        help="Optional novel_head.pt from joint discovery training; enables novel/novel_pca clustering features.",
+    )
+    p.add_argument(
+        "--novel-known-temperature",
+        type=float,
+        default=None,
+        help="Override the saved known-logit temperature when scoring a unified novel head.",
+    )
     p.add_argument("--num-novel", type=int, default=40)
     p.add_argument("--cluster-k", choices=["oracle", "auto"], default="auto")
     p.add_argument(
@@ -225,9 +289,21 @@ def parse_args(argv=None):
     )
     p.add_argument(
         "--cluster-feature",
-        choices=["projection", "projection_pca", "feature", "feature_pca"],
-        default="projection",
-        help="Representation used for clustering; *_pca applies PCA and whitening.",
+        choices=[
+            "projection",
+            "projection_pca",
+            "feature",
+            "feature_pca",
+            "novel",
+            "novel_pca",
+            "unified",
+            "unified_pca",
+        ],
+        default="projection_pca",
+        help=(
+            "Representation used for clustering; projection_pca is the default "
+            "because it performed best in the current CIFAR-100 comparison."
+        ),
     )
     p.add_argument(
         "--cluster-selection",
@@ -244,6 +320,11 @@ def parse_args(argv=None):
     p.add_argument("--cluster-no-whiten", action="store_true")
     p.add_argument("--cluster-n-init", type=int, default=10)
     p.add_argument("--cluster-stability-repeats", type=int, default=5)
+    p.add_argument(
+        "--skip-clustering",
+        action="store_true",
+        help="Skip clustering and report only open-set detection metrics.",
+    )
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument("--mc-samples", type=int, default=8)
     p.add_argument("--temperature-calibration", action="store_true")
@@ -255,6 +336,10 @@ def parse_args(argv=None):
             "auto",
             "full",
             "max_softmax",
+            "novel_msp",
+            "novel_entropy",
+            "unified_novel_mass",
+            "classwise_unified_novel_mass",
             "odin_msp",
             "energy",
             "entropy_only",
@@ -279,6 +364,11 @@ def parse_args(argv=None):
     p.add_argument("--open-val-ratio", type=float, default=0.0)
     p.add_argument("--auto-calibrate-score", action="store_true")
     p.add_argument(
+        "--auto-score-fast",
+        action="store_true",
+        help="Use only lightweight scores during auto calibration; skip Mahalanobis candidates.",
+    )
+    p.add_argument(
         "--odin-epsilon",
         type=float,
         default=0.0,
@@ -301,6 +391,94 @@ def load_checkpoint(model, path, device):
     ckpt = torch.load(path, map_location=device)
     model.load_state_dict(ckpt["model"])
     return ckpt
+
+
+@torch.no_grad()
+def attach_novel_outputs(outputs, novel_head, device, known_temperature: float = 1.0):
+    """Add novel-head logits/probabilities for clustering evaluation."""
+    features = torch.as_tensor(outputs["features"], dtype=torch.float32, device=device)
+    novel_logits = novel_head(features)
+    novel_probs = novel_logits.softmax(dim=-1)
+    outputs = dict(outputs)
+    outputs["novel_logits"] = novel_logits.cpu().numpy()
+    outputs["novel_probs"] = novel_probs.cpu().numpy()
+    outputs["novel_entropy"] = (
+        -(novel_probs.clamp_min(1e-8) * novel_probs.clamp_min(1e-8).log()).sum(dim=-1)
+    ).cpu().numpy()
+    known_logits = torch.as_tensor(outputs["logits"], dtype=torch.float32, device=device)
+    unified_logits = combine_known_novel_logits(
+        known_logits,
+        novel_logits,
+        known_temperature=known_temperature,
+    )
+    unified_probs = unified_logits.softmax(dim=-1)
+    known_count = known_logits.size(-1)
+    outputs["unified_probs"] = unified_probs.cpu().numpy()
+    outputs["unified_novel_mass"] = unified_probs[:, known_count:].sum(dim=-1).cpu().numpy()
+    return outputs
+
+
+@torch.no_grad()
+def initialize_novel_head_kmeans(
+    novel_head,
+    student,
+    discovery_loader,
+    device,
+    num_novel: int,
+    seed: int,
+    candidate_ratio: float = 0.25,
+    candidates_only: bool = False,
+):
+    """Initialize novel prototypes from discovery features without labels.
+
+    For a mixed discovery pool, the candidate mode keeps only the highest-risk
+    samples according to the known classifier before fitting KMeans. This avoids
+    using the entire unlabeled pool as if it were novel data.
+    """
+    if discovery_loader is None:
+        raise ValueError("KMeans prototype initialization requires a discovery pool.")
+    student.eval()
+    features = []
+    risks = []
+    for first_view, _ in discovery_loader:
+        outputs = student(first_view.to(device))
+        features.append(torch.nn.functional.normalize(outputs["features"], dim=-1).cpu().numpy())
+        if candidates_only:
+            probs = outputs["logits"].softmax(dim=-1).clamp_min(1e-8)
+            entropy = -(probs * probs.log()).sum(dim=-1)
+            risk = entropy + outputs["uncertainty"]
+            risks.append(risk.cpu().numpy())
+    if not features:
+        raise ValueError("Discovery pool is empty; cannot initialize novel prototypes.")
+    feature_array = np.concatenate(features, axis=0)
+    if candidates_only:
+        risk_array = np.concatenate(risks, axis=0)
+        ratio = min(max(float(candidate_ratio), 1e-3), 1.0)
+        selected_count = max(num_novel, int(np.ceil(len(feature_array) * ratio)))
+        selected_count = min(selected_count, len(feature_array))
+        selected = np.argsort(risk_array)[-selected_count:]
+        feature_array = feature_array[selected]
+    if len(feature_array) < num_novel:
+        raise ValueError(
+            f"Need at least {num_novel} discovery samples for KMeans initialization, "
+            f"got {len(feature_array)}."
+        )
+    clustering = KMeans(
+        n_clusters=num_novel,
+        n_init=10,
+        random_state=int(seed),
+    )
+    clustering.fit(feature_array)
+    centers = torch.as_tensor(clustering.cluster_centers_, dtype=torch.float32, device=device)
+    centers = torch.nn.functional.normalize(centers, dim=-1)
+    novel_head.prototypes.copy_(centers)
+    student.train()
+    return {
+        "samples": int(len(feature_array)),
+        "inertia": float(clustering.inertia_),
+        "candidate_mode": bool(candidates_only),
+        "candidate_ratio": float(candidate_ratio) if candidates_only else None,
+    }
 
 
 def resolve_device(device_arg: str) -> torch.device:
@@ -581,7 +759,7 @@ def fit_student(args):
         novel_head = NovelPrototypeHead(
             student.encoder.out_dim,
             args.joint_num_novel,
-            temperature=args.joint_assignment_temperature,
+            temperature=args.joint_head_temperature,
         ).to(device)
     discovery_selection_model = None
     if args.discovery_selection_model == "ema":
@@ -599,7 +777,42 @@ def fit_student(args):
     best_state = None
     best_novel_head_state = None
     best_epoch = 0
+    prototype_init_stats = None
+    prototype_warmup = max(int(args.joint_prototype_warmup_epochs), 0)
+    if (
+        novel_head is not None
+        and args.joint_prototype_init in {"kmeans", "kmeans_candidates"}
+        and prototype_warmup == 0
+    ):
+        prototype_init_stats = initialize_novel_head_kmeans(
+            novel_head,
+            student,
+            discovery_loader,
+            device,
+            args.joint_num_novel,
+            args.seed,
+            candidate_ratio=args.joint_prototype_candidate_ratio,
+            candidates_only=args.joint_prototype_init == "kmeans_candidates",
+        )
+        print(f"novel prototype KMeans init: {prototype_init_stats}")
     for epoch in range(args.epochs):
+        if (
+            novel_head is not None
+            and args.joint_prototype_init in {"kmeans", "kmeans_candidates"}
+            and epoch == prototype_warmup
+            and prototype_warmup > 0
+        ):
+            prototype_init_stats = initialize_novel_head_kmeans(
+                novel_head,
+                student,
+                discovery_loader,
+                device,
+                args.joint_num_novel,
+                args.seed,
+                candidate_ratio=args.joint_prototype_candidate_ratio,
+                candidates_only=args.joint_prototype_init == "kmeans_candidates",
+            )
+            print(f"novel prototype KMeans init: {prototype_init_stats}")
         selective_weight = scheduled_weight(
             epoch,
             warmup_epochs=args.discovery_selective_warmup_epochs,
@@ -646,13 +859,29 @@ def fit_student(args):
             discovery_soft_weighting=args.discovery_soft_weighting,
             discovery_neighbor_temperature=args.discovery_neighbor_temperature,
             novel_head=novel_head,
-            alpha_joint_discovery=args.alpha_joint_discovery if args.joint_discovery else 0.0,
+            alpha_joint_discovery=(
+                args.alpha_joint_discovery
+                if args.joint_discovery and epoch >= prototype_warmup
+                else 0.0
+            ),
             joint_confidence_threshold=args.joint_confidence_threshold,
             joint_assignment_temperature=args.joint_assignment_temperature,
             alpha_joint_consistency=args.alpha_joint_consistency,
             alpha_joint_balance=args.alpha_joint_balance,
+            alpha_joint_information=args.alpha_joint_information,
             alpha_joint_neighbor=args.alpha_joint_neighbor,
             joint_neighbor_k=args.joint_neighbor_k,
+            joint_space=args.joint_space,
+            alpha_joint_known_ce=args.alpha_joint_known_ce,
+            joint_known_temperature=args.joint_known_temperature,
+            joint_candidate_gating=args.joint_candidate_gating,
+            joint_candidate_ratio=args.joint_candidate_ratio,
+            joint_candidate_mode=args.joint_candidate_mode,
+            joint_candidate_neighbor_filter=args.joint_candidate_neighbor_filter,
+            joint_candidate_neighbor_k=args.joint_candidate_neighbor_k,
+            joint_candidate_min_votes=args.joint_candidate_min_votes,
+            joint_candidate_soft_weighting=args.joint_candidate_soft_weighting,
+            joint_candidate_weight_floor=args.joint_candidate_weight_floor,
         )
         stats["discovery_selective_weight"] = selective_weight
         val_stats = evaluate_classification(student, val_loader, device)
@@ -669,7 +898,15 @@ def fit_student(args):
     if novel_head is not None and best_novel_head_state is not None:
         novel_head.load_state_dict(best_novel_head_state)
     run_dir = ensure_dir(args.work_dir)
-    save_json(run_dir / "config.json", {**vars(args), "best_epoch": best_epoch, "best_val_known_acc": best_acc})
+    save_json(
+        run_dir / "config.json",
+        {
+            **vars(args),
+            "best_epoch": best_epoch,
+            "best_val_known_acc": best_acc,
+            "prototype_init_stats": prototype_init_stats,
+        },
+    )
     proto_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
     prototypes = collect_prototypes(student, proto_loader, device, len(bundle.known_classes)).cpu()
     gaussian_stats = collect_diagonal_gaussian_stats(
@@ -691,6 +928,8 @@ def fit_student(args):
         torch.save(
             {
                 "num_novel": args.joint_num_novel,
+                "temperature": args.joint_head_temperature,
+                "known_temperature": args.joint_known_temperature,
                 "state_dict": novel_head.state_dict(),
             },
             run_dir / "novel_head.pt",
@@ -728,6 +967,28 @@ def discover(args):
     ).to(device)
     ckpt_path = resolve_input_checkpoint(args.student_ckpt, args.work_dir, "student.pt")
     ckpt = load_checkpoint(model, ckpt_path, device)
+    novel_head = None
+    novel_head_state = None
+    novel_head_temperature = 1.0
+    novel_known_temperature = (
+        1.0 if args.novel_known_temperature is None else float(args.novel_known_temperature)
+    )
+    if args.novel_head_ckpt:
+        novel_head_payload = torch.load(args.novel_head_ckpt, map_location=device)
+        novel_head_state = novel_head_payload.get("state_dict", novel_head_payload)
+        novel_head_temperature = float(novel_head_payload.get("temperature", 1.0))
+        if args.novel_known_temperature is None:
+            novel_known_temperature = float(novel_head_payload.get("known_temperature", 1.0))
+    elif ckpt.get("joint_novel_head") is not None:
+        novel_head_state = ckpt["joint_novel_head"]
+    if novel_head_state is not None:
+        novel_head = NovelPrototypeHead(
+            model.encoder.out_dim,
+            args.num_novel,
+            temperature=novel_head_temperature,
+        ).to(device)
+        novel_head.load_state_dict(novel_head_state)
+        novel_head.eval()
     outputs_test = extract_outputs(
         model,
         test_loader,
@@ -744,6 +1005,13 @@ def discover(args):
         odin_epsilon=args.odin_epsilon,
         odin_temperature=args.odin_temperature,
     )
+    if novel_head is not None:
+        outputs_test = attach_novel_outputs(
+            outputs_test, novel_head, device, known_temperature=novel_known_temperature
+        )
+        outputs_val = attach_novel_outputs(
+            outputs_val, novel_head, device, known_temperature=novel_known_temperature
+        )
     open_val_loader = build_loader(bundle.open_val, args.batch_size, False, args.num_workers) if bundle.open_val is not None else None
     outputs_open_val = (
         extract_outputs(
@@ -757,6 +1025,10 @@ def discover(args):
         if open_val_loader is not None
         else None
     )
+    if novel_head is not None and outputs_open_val is not None:
+        outputs_open_val = attach_novel_outputs(
+            outputs_open_val, novel_head, device, known_temperature=novel_known_temperature
+        )
     temperature = fit_temperature(outputs_val) if args.temperature_calibration else 1.0
     if args.temperature_calibration:
         outputs_test = apply_temperature(outputs_test, temperature)
@@ -772,17 +1044,31 @@ def discover(args):
             key: value.detach().cpu().numpy() if torch.is_tensor(value) else np.asarray(value)
             for key, value in gaussian_stats.items()
         }
+    if args.auto_score_fast and (args.score_mode == "auto" or args.auto_calibrate_score):
+        # Fast calibration does not compare Mahalanobis scores, so avoid
+        # loading or fitting their high-dimensional statistics.
+        gaussian_stats = None
     if (
-        gaussian_stats is None or "precision" not in gaussian_stats
-    ) and _score_needs_shared_mahalanobis(args.score_mode, args.auto_calibrate_score):
+        not args.auto_score_fast
+        and (gaussian_stats is None or "precision" not in gaussian_stats)
+        and _score_needs_shared_mahalanobis(args.score_mode, args.auto_calibrate_score)
+    ):
         stats_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
         gaussian_stats = collect_diagonal_gaussian_stats(
             model, stats_loader, device, len(bundle.known_classes)
         )
     selected_score_mode = args.score_mode
-    needs_normalization = selected_score_mode.startswith("normalized_")
+    needs_normalization = (
+        selected_score_mode.startswith("normalized_")
+        or selected_score_mode == "classwise_unified_novel_mass"
+    )
     score_normalization = (
-        fit_score_normalization(outputs_val, proto, gaussian_stats)
+        fit_score_normalization(
+            outputs_val,
+            proto,
+            gaussian_stats if selected_score_mode != "classwise_unified_novel_mass" else None,
+            include_mahalanobis=selected_score_mode != "classwise_unified_novel_mass",
+        )
         if needs_normalization or args.score_mode == "auto" or args.auto_calibrate_score
         else {}
     )
@@ -821,6 +1107,28 @@ def discover(args):
             "normalized_entropy_mahalanobis",
             "normalized_entropy_mahalanobis_shared",
         ]
+        if args.auto_score_fast:
+            candidate_modes = [
+                "full",
+                "entropy_proto",
+                "entropy_only",
+                "proto_only",
+                "max_softmax",
+                "energy",
+                "normalized_entropy_proto",
+                "entropy_epistemic",
+                "expected_entropy",
+            ]
+        if novel_head is not None:
+            # Let unified joint checkpoints compete with legacy OOD scores
+            # during open-validation calibration.
+            candidate_modes.extend(
+                [
+                    "novel_msp",
+                    "novel_entropy",
+                    "unified_novel_mass",
+                ]
+            )
         selected, all_candidates = _select_score_mode(
             outputs_val,
             outputs_open_val,
@@ -889,6 +1197,7 @@ def discover(args):
         cluster_whiten=not args.cluster_no_whiten,
         cluster_n_init=args.cluster_n_init,
         cluster_stability_repeats=args.cluster_stability_repeats,
+        enable_clustering=not args.skip_clustering,
     )
     run_dir = ensure_dir(args.work_dir)
     save_json(run_dir / "config.json", vars(args))

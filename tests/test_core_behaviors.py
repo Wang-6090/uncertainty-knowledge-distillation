@@ -203,6 +203,29 @@ class ScoreBehaviorTest(unittest.TestCase):
         self.assertIn("entropy", stats)
         self.assertNotIn("proto_dist", stats)
 
+    def test_classwise_novel_mass_score_uses_known_class_statistics(self):
+        outputs = {
+            "entropy": np.zeros(4),
+            "epistemic": np.zeros(4),
+            "aleatoric": np.zeros(4),
+            "features": np.arange(4, dtype=np.float32).reshape(4, 1),
+            "logits": np.array(
+                [[4.0, 0.0], [3.0, 0.0], [0.0, 3.0], [0.0, 4.0]],
+                dtype=np.float32,
+            ),
+            "unified_novel_mass": np.array([0.1, 0.3, 0.2, 0.4]),
+        }
+        stats = fit_score_normalization(outputs, prototypes=None, gaussian_stats=None)
+        score, _ = compute_open_score(
+            outputs,
+            score_mode="classwise_unified_novel_mass",
+            normalization=stats,
+        )
+
+        self.assertIn("unified_novel_mass_classwise", stats)
+        self.assertTrue(np.isfinite(score).all())
+        self.assertGreater(score[1], score[0])
+
     def test_odin_score_requires_extracted_odin_values(self):
         outputs = {
             "entropy": np.array([0.1, 0.2]),
@@ -233,6 +256,30 @@ class ScoreBehaviorTest(unittest.TestCase):
 
         np.testing.assert_allclose(diag, np.array([0.5, 0.5]))
         np.testing.assert_allclose(shared, np.array([1.0, 1.0]))
+
+    def test_non_mahalanobis_score_skips_mahalanobis_computation(self):
+        outputs = {
+            "entropy": np.array([0.1, 0.2]),
+            "epistemic": np.zeros(2),
+            "aleatoric": np.zeros(2),
+            "probs": np.array([[0.9, 0.1], [0.6, 0.4]]),
+            "features": np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32),
+        }
+        # Deliberately incompatible precision shape: non-Mahalanobis scores
+        # should not touch this statistic.
+        stats = {
+            "means": np.zeros((1, 2), dtype=np.float32),
+            "variances": np.ones((1, 2), dtype=np.float32),
+            "precision": np.zeros((3, 3), dtype=np.float32),
+        }
+
+        score, _ = compute_open_score(
+            outputs,
+            score_mode="entropy_only",
+            gaussian_stats=stats,
+        )
+
+        np.testing.assert_allclose(score, outputs["entropy"])
 
     def test_select_discovery_candidates_picks_high_entropy_samples(self):
         logits = torch.tensor(
@@ -397,7 +444,7 @@ class DiscoveryReportTest(unittest.TestCase):
             "is_known": np.array([1, 1, 0, 0, 0, 1]),
         }
 
-        report, _, _, _ = run_discovery(
+        report, _, _, detail = run_discovery(
             outputs,
             threshold=1.0,
             num_novel=2,
@@ -413,6 +460,33 @@ class DiscoveryReportTest(unittest.TestCase):
         self.assertIn("cluster_candidate_unknown_oracle_nmi", report)
         self.assertEqual(report["cluster_k"], 2)
         self.assertIn("unknown_reject_rate", report)
+        self.assertIsNotNone(detail["pred_cluster"])
+        self.assertTrue(np.all(detail["pred_cluster"][2:5] >= 0))
+
+    def test_run_discovery_can_skip_clustering(self):
+        outputs = {
+            "entropy": np.array([0.1, 0.2, 2.0, 2.2]),
+            "epistemic": np.zeros(4),
+            "aleatoric": np.zeros(4),
+            "probs": np.array([[0.9, 0.1], [0.8, 0.2], [0.5, 0.5], [0.4, 0.6]]),
+            "logits": np.array([[2.0, 0.0], [1.5, 0.0], [0.1, 0.2], [0.2, 0.1]]),
+            "features": np.eye(4, dtype=np.float32),
+            "projections": np.eye(4, dtype=np.float32),
+            "labels": np.array([0, 1, -1, -1]),
+            "raw_labels": np.array([0, 1, 10, 11]),
+            "is_known": np.array([1, 1, 0, 0]),
+        }
+        report, _, _, detail = run_discovery(
+            outputs,
+            threshold=1.0,
+            num_novel=2,
+            score_mode="entropy_only",
+            enable_clustering=False,
+        )
+
+        self.assertTrue(report["clustering_skipped"])
+        self.assertIsNone(detail["pred_cluster"])
+        self.assertNotIn("cluster_candidate_count", report)
 
 
 if __name__ == "__main__":

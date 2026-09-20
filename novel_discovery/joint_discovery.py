@@ -22,6 +22,20 @@ class NovelPrototypeHead(nn.Module):
         return features @ prototypes.T / self.temperature
 
 
+def combine_known_novel_logits(
+    known_logits: torch.Tensor | None,
+    novel_logits: torch.Tensor,
+    known_temperature: float = 1.0,
+) -> torch.Tensor:
+    """Build a unified known-plus-novel classification space."""
+    if known_logits is None:
+        return novel_logits
+    if known_logits.size(0) != novel_logits.size(0):
+        raise ValueError("known and novel logits must have the same batch size")
+    temperature = max(float(known_temperature), 1e-6)
+    return torch.cat([known_logits / temperature, novel_logits], dim=-1)
+
+
 @torch.no_grad()
 def balanced_assignments(
     logits: torch.Tensor,
@@ -45,14 +59,42 @@ def balanced_assignments(
 def balanced_assignment_loss(
     logits: torch.Tensor,
     temperature: float = 1.0,
+    sample_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Penalize collapse of the batch-average novel assignment distribution."""
     if logits.numel() == 0:
         return logits.new_tensor(0.0)
-    probs = logits.softmax(dim=-1).mean(dim=0)
+    probs = logits.softmax(dim=-1)
+    if sample_weights is not None:
+        weights = sample_weights.detach().to(logits).clamp_min(0.0)
+        probs = (probs * weights.unsqueeze(-1)).sum(dim=0) / weights.sum().clamp_min(1e-8)
+    else:
+        probs = probs.mean(dim=0)
     num_classes = logits.size(-1)
     uniform = logits.new_tensor(1.0 / num_classes)
     return (probs * (probs.clamp_min(1e-8).log() - uniform.log())).sum()
+
+
+def information_maximization_loss(
+    logits: torch.Tensor,
+    sample_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Minimize sample entropy while maximizing batch-marginal entropy."""
+    if logits.numel() == 0:
+        return logits.new_tensor(0.0)
+    probs = logits.softmax(dim=-1).clamp_min(1e-8)
+    entropy = -(probs * probs.log()).sum(dim=-1)
+    if sample_weights is not None:
+        weights = sample_weights.detach().to(logits).clamp_min(0.0)
+        sample_entropy = (entropy * weights).sum() / weights.sum().clamp_min(1e-8)
+        marginal = (probs * weights.unsqueeze(-1)).sum(dim=0)
+        marginal = marginal / weights.sum().clamp_min(1e-8)
+    else:
+        sample_entropy = entropy.mean()
+        marginal = probs.mean(dim=0)
+    marginal = marginal.clamp_min(1e-8)
+    marginal_entropy = -(marginal * marginal.log()).sum()
+    return sample_entropy - marginal_entropy
 
 
 def novel_consistency_loss(
@@ -60,6 +102,7 @@ def novel_consistency_loss(
     second_logits: torch.Tensor,
     confidence_threshold: float = 0.6,
     temperature: float = 1.0,
+    sample_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Use one augmented view as a balanced pseudo-label teacher."""
     if first_logits.numel() == 0 or second_logits.numel() == 0:
@@ -77,9 +120,19 @@ def novel_consistency_loss(
     second_loss = -(second_target * F.log_softmax(first_logits, dim=-1)).sum(dim=-1)
     losses = []
     if first_mask.any():
-        losses.append(first_loss[first_mask].mean())
+        values = first_loss[first_mask]
+        if sample_weights is None:
+            losses.append(values.mean())
+        else:
+            weights = sample_weights[first_mask].detach().to(values).clamp_min(0.0)
+            losses.append((values * weights).sum() / weights.sum().clamp_min(1e-8))
     if second_mask.any():
-        losses.append(second_loss[second_mask].mean())
+        values = second_loss[second_mask]
+        if sample_weights is None:
+            losses.append(values.mean())
+        else:
+            weights = sample_weights[second_mask].detach().to(values).clamp_min(0.0)
+            losses.append((values * weights).sum() / weights.sum().clamp_min(1e-8))
     if not losses:
         return first_logits.new_tensor(0.0)
     return torch.stack(losses).mean()
@@ -89,6 +142,7 @@ def neighbor_consistency_loss(
     features: torch.Tensor,
     logits: torch.Tensor,
     k: int = 5,
+    sample_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Match novel predictions of nearby samples, following SCAN-style consistency."""
     if features.size(0) <= 1 or logits.numel() == 0 or k <= 0:
@@ -100,11 +154,15 @@ def neighbor_consistency_loss(
     indices = similarity.topk(effective_k, dim=1, largest=True).indices
     probs = logits.softmax(dim=-1)
     neighbor_probs = probs[indices].detach().mean(dim=1)
-    return F.kl_div(
+    per_sample = F.kl_div(
         probs.clamp_min(1e-8).log(),
         neighbor_probs,
-        reduction="batchmean",
-    )
+        reduction="none",
+    ).sum(dim=-1)
+    if sample_weights is not None:
+        weights = sample_weights.detach().to(per_sample).clamp_min(0.0)
+        return (per_sample * weights).sum() / weights.sum().clamp_min(1e-8)
+    return per_sample.mean()
 
 
 def joint_discovery_loss(
@@ -116,32 +174,54 @@ def joint_discovery_loss(
     assignment_temperature: float = 1.0,
     alpha_consistency: float = 1.0,
     alpha_balance: float = 0.1,
+    alpha_information: float = 0.1,
     alpha_neighbor: float = 0.1,
     neighbor_k: int = 5,
+    first_known_logits: torch.Tensor | None = None,
+    second_known_logits: torch.Tensor | None = None,
+    known_temperature: float = 1.0,
+    sample_weights: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Combine novel pseudo-label, balance, and neighborhood objectives."""
+    """Combine novel or unified-space pseudo-label objectives."""
+    first_joint_logits = combine_known_novel_logits(
+        first_known_logits, first_logits, known_temperature=known_temperature
+    )
+    second_joint_logits = combine_known_novel_logits(
+        second_known_logits, second_logits, known_temperature=known_temperature
+    )
     consistency = novel_consistency_loss(
-        first_logits,
-        second_logits,
+        first_joint_logits,
+        second_joint_logits,
         confidence_threshold=confidence_threshold,
         temperature=assignment_temperature,
+        sample_weights=sample_weights,
     )
     balance = 0.5 * (
-        balanced_assignment_loss(first_logits)
-        + balanced_assignment_loss(second_logits)
+        balanced_assignment_loss(first_joint_logits, sample_weights=sample_weights)
+        + balanced_assignment_loss(second_joint_logits, sample_weights=sample_weights)
+    )
+    information = 0.5 * (
+        information_maximization_loss(first_joint_logits, sample_weights=sample_weights)
+        + information_maximization_loss(second_joint_logits, sample_weights=sample_weights)
     )
     neighbor = 0.5 * (
-        neighbor_consistency_loss(first_features, first_logits, k=neighbor_k)
-        + neighbor_consistency_loss(second_features, second_logits, k=neighbor_k)
+        neighbor_consistency_loss(
+            first_features, first_joint_logits, k=neighbor_k, sample_weights=sample_weights
+        )
+        + neighbor_consistency_loss(
+            second_features, second_joint_logits, k=neighbor_k, sample_weights=sample_weights
+        )
     )
     total = (
         alpha_consistency * consistency
         + alpha_balance * balance
+        + alpha_information * information
         + alpha_neighbor * neighbor
     )
     return {
         "total": total,
         "consistency": consistency,
         "balance": balance,
+        "information": information,
         "neighbor": neighbor,
     }
