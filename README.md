@@ -651,3 +651,42 @@ python aggregate_multiseed.py --root .\runs `
 - The command-line default for `--cluster-feature` is now `projection_pca`. This is a provisional single-seed choice and must be checked with multiple seeds before being treated as a final method conclusion.
 - The open-validation result is only a small improvement over the earlier fixed-score baseline. Unknown detection and clustering remain the main research problems; the next formal step is a controlled multi-seed ablation.
 - The classwise score passed unit-level numerical checks but performed worse in the first controlled comparison. No performance claim is made for it.
+
+## 本次吸收 qiyuhan 分支的内容（2026-09-21）
+
+本次没有整体合并 qiyuhan 分支，因为该分支基于较早版本，整体合并会覆盖当前 main 已有的统一 known+novel 空间、`--skip-clustering`、Mahalanobis 延迟计算和聚类结果复用等改进。当前只吸收了三个可独立验证的功能，并保持默认行为不变：
+
+1. 不确定性感知蒸馏权重裁剪
+   - 新增 `--uncertainty-weight-min` 和 `--uncertainty-weight-max`。
+   - 作用于 logits KL 蒸馏和 projection 特征蒸馏，限制 `exp(-teacher_uncertainty)` 的极端值，避免少量样本过度放大或削弱蒸馏梯度。
+   - 默认值为 `None`，不改变原有 `raw` / `mean_normalized` 蒸馏行为。
+
+2. 类别条件未知检测阈值
+   - `discover` 新增 `--threshold-policy {global,class_conditional}` 和 `--threshold-min-class-samples`。
+   - `class_conditional` 只使用已知验证集，按照模型预测的已知类别分别计算分位数阈值；样本不足的类别回退到全局阈值。
+   - 默认仍为 `global`，避免历史实验结果因阈值定义变化而失去可比性。阈值类型和具体阈值会保存到 `calibration_report.json`。
+
+3. 聚类前候选池纯化
+   - `discover` 新增 `--candidate-purify {none,open_score,entropy,head_uncertainty,uncertainty_consensus}` 和 `--candidate-keep-ratio`。
+   - 纯化只改变进入聚类的候选池，不改变 AUROC、AUPR、FPR95 或 known/unknown 检测判断，因此不能把候选池纯度提升宣称为未知检测提升。
+   - `discovery_report.json` 和 `discovery_detail.json` 会记录纯化前后数量、删除数量、候选池纯度和真实未知召回率。
+   - 默认是 `none`、`1.0`；建议把纯化作为聚类前处理消融，而不是默认主方法。
+
+### qiyuhan 分支已有实验的正确解读
+
+该分支三 seed 对比中，Standard KD 的 AUROC/FPR95/NMI/ARI 为 `0.5883/0.8697/0.4677/0.0529`，Uncertainty KD 为 `0.6012/0.8720/0.4923/0.0507`。这说明不确定性蒸馏对 AUROC、AUPR 和 NMI 有初步收益，但 FPR95 略差、ARI 没有提高，不能声称它全面有效。候选纯化示例中候选纯度约从 `0.4486` 提升到 `0.4707`，同时会删除候选样本，因此必须同步报告未知召回率。
+
+### 当前建议的验证命令
+
+```powershell
+# 保持旧实验定义：全局阈值、不过滤候选池
+python train.py discover --dataset cifar100 --threshold-policy global --candidate-purify none
+
+# 只比较类别条件阈值，不改变聚类流程
+python train.py discover --dataset cifar100 --threshold-policy class_conditional --threshold-min-class-samples 5
+
+# 只比较聚类前候选池纯化；检测指标仍按未纯化的 open score 计算
+python train.py discover --dataset cifar100 --candidate-purify uncertainty_consensus --candidate-keep-ratio 0.75
+```
+
+候选纯化实验应至少同时查看 AUROC、FPR95、known accuracy、unknown reject rate、candidate purity 和 candidate unknown recall；如果只是候选数量减少而纯度或聚类 NMI/ARI没有稳定提升，就不应继续把它作为主线方法。

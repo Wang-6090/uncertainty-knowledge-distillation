@@ -424,6 +424,8 @@ def train_one_epoch_student(
     temperature: float = 2.0,
     kd_mode: str = "uncertainty",
     uncertainty_weight_mode: str = "raw",
+    uncertainty_weight_min: float | None = None,
+    uncertainty_weight_max: float | None = None,
     discovery_loader=None,
     alpha_discovery: float = 0.0,
     alpha_discovery_unknown: float = 0.0,
@@ -511,6 +513,8 @@ def train_one_epoch_student(
             temperature=temperature,
             uncertainty_weighted=(kd_mode == "uncertainty"),
             uncertainty_weight_mode=uncertainty_weight_mode,
+            uncertainty_weight_min=uncertainty_weight_min,
+            uncertainty_weight_max=uncertainty_weight_max,
         )
         feature_teacher_uncertainty = t_out["uncertainty"] if kd_mode == "uncertainty" else None
         loss_feat_kd = feature_distillation_loss(
@@ -518,6 +522,8 @@ def train_one_epoch_student(
             t_out["proj"],
             teacher_uncertainty=feature_teacher_uncertainty,
             uncertainty_weight_mode=uncertainty_weight_mode,
+            uncertainty_weight_min=uncertainty_weight_min,
+            uncertainty_weight_max=uncertainty_weight_max,
         )
         loss_supcon = supervised_contrastive_loss(s_out["proj"], labels)
         loss_proto = prototype_alignment_loss(s_out["features"], labels, student.classifier.weight)
@@ -1390,6 +1396,102 @@ def calibrate_threshold(scores_known: np.ndarray, percentile: float = 95.0) -> f
     return float(np.percentile(scores_known, percentile))
 
 
+def calibrate_class_thresholds(
+    scores_known: np.ndarray,
+    predicted_classes: np.ndarray,
+    num_classes: int,
+    percentile: float = 95.0,
+    min_samples: int = 5,
+) -> np.ndarray:
+    """Calibrate known-only thresholds separately for predicted classes.
+
+    Classes with too few validation predictions use the global threshold. The
+    calibration never consumes unknown labels, so it remains valid for open
+    set evaluation.
+    """
+    scores_known = np.asarray(scores_known, dtype=float)
+    predicted_classes = np.asarray(predicted_classes, dtype=int)
+    if scores_known.ndim != 1 or predicted_classes.shape != scores_known.shape:
+        raise ValueError("scores_known and predicted_classes must be matching 1-D arrays")
+    global_threshold = calibrate_threshold(scores_known, percentile)
+    thresholds = np.full(int(num_classes), global_threshold, dtype=float)
+    required_samples = max(int(min_samples), 1)
+    for class_id in range(int(num_classes)):
+        values = scores_known[predicted_classes == class_id]
+        if len(values) >= required_samples:
+            thresholds[class_id] = np.percentile(values, percentile)
+    return thresholds
+
+
+def _rank_normalize_numpy(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    if len(values) <= 1:
+        return np.ones_like(values)
+    order = np.argsort(np.argsort(values, kind="stable"), kind="stable")
+    return (order + 1.0) / len(values)
+
+
+def candidate_purification_score(
+    outputs: Dict[str, np.ndarray],
+    mode: str = "none",
+    open_score: np.ndarray | None = None,
+) -> np.ndarray:
+    """Build a label-free ranking used only to clean the cluster candidate pool."""
+    if mode == "none":
+        return np.zeros(len(outputs["entropy"]), dtype=float)
+    if mode == "open_score":
+        if open_score is None:
+            raise ValueError("open_score purification requires an open-set score")
+        return _rank_normalize_numpy(open_score)
+    if mode == "entropy":
+        return _rank_normalize_numpy(outputs["entropy"])
+    if mode == "head_uncertainty":
+        return _rank_normalize_numpy(outputs["head_uncertainty"])
+    if mode == "uncertainty_consensus":
+        components = [
+            _rank_normalize_numpy(outputs["entropy"]),
+            _rank_normalize_numpy(outputs["epistemic"]),
+            _rank_normalize_numpy(outputs["head_uncertainty"]),
+            _rank_normalize_numpy(1.0 - outputs["probs"].max(axis=1)),
+        ]
+        return np.mean(components, axis=0)
+    raise ValueError(f"Unsupported candidate purification mode: {mode}")
+
+
+def purify_candidate_mask(
+    outputs: Dict[str, np.ndarray],
+    candidate_mask: np.ndarray,
+    mode: str = "none",
+    keep_ratio: float = 1.0,
+    open_score: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict]:
+    """Keep the highest-ranked rejected samples for clustering only."""
+    candidate_mask = np.asarray(candidate_mask, dtype=bool)
+    before_count = int(candidate_mask.sum())
+    if mode == "none" or before_count <= 1:
+        return candidate_mask, {
+            "mode": mode,
+            "keep_ratio": 1.0,
+            "before_count": before_count,
+            "after_count": before_count,
+            "removed_count": 0,
+        }
+    ratio = float(np.clip(keep_ratio, 0.0, 1.0))
+    keep_count = min(before_count, max(2, int(np.ceil(before_count * ratio))))
+    scores = candidate_purification_score(outputs, mode, open_score=open_score)
+    indices = np.flatnonzero(candidate_mask)
+    order = np.argsort(scores[indices], kind="stable")[::-1]
+    purified = np.zeros_like(candidate_mask)
+    purified[indices[order[:keep_count]]] = True
+    return purified, {
+        "mode": mode,
+        "keep_ratio": float(keep_count / max(before_count, 1)),
+        "before_count": before_count,
+        "after_count": int(purified.sum()),
+        "removed_count": before_count - int(purified.sum()),
+    }
+
+
 def prepare_cluster_features(
     features: np.ndarray,
     use_pca: bool = False,
@@ -1556,6 +1658,8 @@ def run_discovery(
     cluster_whiten: bool = True,
     cluster_n_init: int = 10,
     cluster_stability_repeats: int = 5,
+    candidate_purify: str = "none",
+    candidate_keep_ratio: float = 1.0,
     enable_clustering: bool = True,
 ):
     entropy = outputs["entropy"]
@@ -1585,14 +1689,23 @@ def run_discovery(
         if gaussian_stats is not None and score_mode in mahalanobis_score_modes
         else np.zeros_like(score)
     )
-    pred_known = score <= threshold
     known_mask = outputs["is_known"].astype(bool)
     open_labels = (~known_mask).astype(int)
     auroc = compute_auroc(open_labels, score)
     aupr = compute_aupr(open_labels, score)
     fpr95 = compute_fpr95(open_labels, score)
-    open_confusion = open_set_confusion(known_mask, pred_known)
     pred_class = outputs["logits"].argmax(axis=1)
+    threshold_values = np.asarray(threshold)
+    if threshold_values.ndim == 0:
+        sample_threshold = float(threshold_values)
+        threshold_type = "global"
+    elif threshold_values.ndim == 1 and len(threshold_values) > 0:
+        sample_threshold = threshold_values[np.clip(pred_class, 0, len(threshold_values) - 1)]
+        threshold_type = "class_conditional"
+    else:
+        raise ValueError("threshold must be a scalar or non-empty class threshold vector")
+    pred_known = score <= sample_threshold
+    open_confusion = open_set_confusion(known_mask, pred_known)
     true_labels = outputs["labels"]
     class_correct = pred_class == true_labels
     oscr = compute_oscr(known_mask, pred_known, class_correct, score)
@@ -1609,6 +1722,7 @@ def run_discovery(
         "known_class_wrong": known_class_wrong,
         "known_class_accuracy_after_accept": float(known_class_correct / max(known_class_correct + known_class_wrong, 1)),
         "known_class_accuracy_all_known": float(known_class_correct / max(known_total, 1)),
+        "threshold_type": threshold_type,
     }
     result.update(open_confusion)
     if not enable_clustering:
@@ -1623,6 +1737,15 @@ def run_discovery(
                 "cluster_n_init": int(cluster_n_init),
                 "cluster_stability_repeats": int(cluster_stability_repeats),
                 "cluster_diagnostics": [],
+                "candidate_purify": candidate_purify,
+                "candidate_keep_ratio": float(candidate_keep_ratio),
+                "candidate_purification": {
+                    "mode": candidate_purify,
+                    "keep_ratio": 1.0,
+                    "before_count": 0,
+                    "after_count": 0,
+                    "removed_count": 0,
+                },
                 "clustering_skipped": True,
             }
         )
@@ -1648,9 +1771,25 @@ def run_discovery(
             "cluster_feature": cluster_feature,
             "cluster_selection": "skipped",
             "cluster_diagnostics": [],
+            "candidate_purify": candidate_purify,
+            "candidate_keep_ratio": float(candidate_keep_ratio),
+            "candidate_purification": {
+                "mode": candidate_purify,
+                "keep_ratio": float(candidate_keep_ratio),
+                "before_count": int((~pred_known).sum()),
+                "after_count": int((~pred_known).sum()),
+                "removed_count": 0,
+            },
         }
         return result, score, pred_known, detail
     novel_mask = ~pred_known
+    cluster_mask, purification = purify_candidate_mask(
+        outputs,
+        novel_mask,
+        mode=candidate_purify,
+        keep_ratio=candidate_keep_ratio,
+        open_score=score,
+    )
     selected_cluster_k = None
     selected_cluster_predictions = None
     cluster_diagnostics = []
@@ -1704,8 +1843,8 @@ def run_discovery(
 
     add_oracle_report("cluster_all_unknown_oracle", ~known_mask)
     add_oracle_report("cluster_candidate_unknown_oracle", novel_mask & ~known_mask)
-    if novel_mask.sum() > 1 and num_novel > 0:
-        raw_novel_features = np.asarray(raw_cluster_features[novel_mask], dtype=np.float32)
+    if cluster_mask.sum() > 1 and num_novel > 0:
+        raw_novel_features = np.asarray(raw_cluster_features[cluster_mask], dtype=np.float32)
         novel_features = (
             prepare_cluster_features(
                 raw_novel_features,
@@ -1716,7 +1855,7 @@ def run_discovery(
             if cluster_normalize or use_pca
             else raw_novel_features
         )
-        novel_true = outputs["raw_labels"][novel_mask]
+        novel_true = outputs["raw_labels"][cluster_mask]
         selected_cluster_k = (
             min(num_novel, len(novel_features))
             if cluster_k == "oracle"
@@ -1741,7 +1880,7 @@ def run_discovery(
         selected_cluster_predictions = novel_pred
         if len(np.unique(novel_pred)) > 0:
             result.update({f"cluster_{k}": v for k, v in clustering_report(novel_true, novel_pred).items()})
-            true_unknown_candidates = (~known_mask)[novel_mask]
+            true_unknown_candidates = (~known_mask)[cluster_mask]
             if true_unknown_candidates.sum() > 1:
                 result.update(
                     {
@@ -1753,6 +1892,19 @@ def run_discovery(
                     }
                 )
             result["cluster_candidate_count"] = int(len(novel_true))
+            result["cluster_candidate_count_before_purification"] = purification["before_count"]
+            result["cluster_candidate_removed_count"] = purification["removed_count"]
+            true_unknown_before = int((~known_mask & novel_mask).sum())
+            result["cluster_candidate_true_unknown_count_before_purification"] = true_unknown_before
+            result["cluster_candidate_false_reject_count_before_purification"] = int(
+                (known_mask & novel_mask).sum()
+            )
+            result["cluster_candidate_purity_before_purification"] = float(
+                true_unknown_before / max(purification["before_count"], 1)
+            )
+            result["cluster_candidate_unknown_recall"] = float(
+                true_unknown_candidates.sum() / max(true_unknown_before, 1)
+            )
             result["cluster_true_unknown_count"] = int(true_unknown_candidates.sum())
             result["cluster_false_reject_count"] = int((~true_unknown_candidates).sum())
             result["cluster_candidate_purity"] = float(
@@ -1771,6 +1923,9 @@ def run_discovery(
             "cluster_n_init": int(cluster_n_init),
             "cluster_stability_repeats": int(cluster_stability_repeats),
             "cluster_diagnostics": cluster_diagnostics,
+            "candidate_purify": candidate_purify,
+            "candidate_keep_ratio": float(candidate_keep_ratio),
+            "candidate_purification": purification,
         }
     )
     detail = {
@@ -1795,18 +1950,21 @@ def run_discovery(
         "cluster_feature": cluster_feature,
         "cluster_selection": cluster_selection,
         "cluster_diagnostics": cluster_diagnostics,
+        "candidate_purify": candidate_purify,
+        "candidate_keep_ratio": float(candidate_keep_ratio),
+        "candidate_purification": purification,
     }
-    if novel_mask.sum() > 1 and num_novel > 0:
+    if cluster_mask.sum() > 1 and num_novel > 0:
         pred_cluster = np.full(len(score), -1, dtype=np.int64)
         if selected_cluster_predictions is None:
             # Defensive fallback for an unusual short-candidate path.
-            cluster_features = prepare_subset(novel_mask)
+            cluster_features = prepare_subset(cluster_mask)
             selected_cluster_predictions = cluster_unknown_samples(
                 cluster_features,
                 num_clusters=selected_cluster_k,
                 method=cluster_method,
                 n_init=cluster_n_init,
             )
-        pred_cluster[novel_mask] = selected_cluster_predictions
+        pred_cluster[cluster_mask] = selected_cluster_predictions
         detail["pred_cluster"] = pred_cluster
     return result, score, pred_known, detail

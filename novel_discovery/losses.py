@@ -7,6 +7,8 @@ from torch.nn import functional as F
 def uncertainty_weights(
     uncertainty: torch.Tensor,
     mode: str = "raw",
+    uncertainty_weight_min: float | None = None,
+    uncertainty_weight_max: float | None = None,
 ) -> torch.Tensor:
     """Convert teacher uncertainty to per-sample distillation weights.
 
@@ -15,11 +17,17 @@ def uncertainty_weights(
     signal is allocated instead of also changing the total KD strength.
     """
     weights = torch.exp(-uncertainty.detach())
-    if mode == "raw":
-        return weights
     if mode == "mean_normalized":
-        return weights / weights.mean().clamp_min(1e-6)
-    raise ValueError(f"Unsupported uncertainty weight mode: {mode}")
+        weights = weights / weights.mean().clamp_min(1e-6)
+    elif mode != "raw":
+        raise ValueError(f"Unsupported uncertainty weight mode: {mode}")
+    if uncertainty_weight_min is not None or uncertainty_weight_max is not None:
+        min_value = -float("inf") if uncertainty_weight_min is None else float(uncertainty_weight_min)
+        max_value = float("inf") if uncertainty_weight_max is None else float(uncertainty_weight_max)
+        if min_value > max_value:
+            raise ValueError("uncertainty_weight_min must be <= uncertainty_weight_max")
+        weights = weights.clamp(min=min_value, max=max_value)
+    return weights
 
 
 def classification_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -65,12 +73,19 @@ def distillation_loss(
     temperature: float = 2.0,
     uncertainty_weighted: bool = True,
     uncertainty_weight_mode: str = "raw",
+    uncertainty_weight_min: float | None = None,
+    uncertainty_weight_max: float | None = None,
 ) -> torch.Tensor:
     student_log_prob = F.log_softmax(student_logits / temperature, dim=-1)
     teacher_prob = F.softmax(teacher_logits / temperature, dim=-1).detach()
     per_sample = F.kl_div(student_log_prob, teacher_prob, reduction="none").sum(dim=1) * (temperature**2)
     if teacher_uncertainty is not None and uncertainty_weighted:
-        weight = uncertainty_weights(teacher_uncertainty, mode=uncertainty_weight_mode)
+        weight = uncertainty_weights(
+            teacher_uncertainty,
+            mode=uncertainty_weight_mode,
+            uncertainty_weight_min=uncertainty_weight_min,
+            uncertainty_weight_max=uncertainty_weight_max,
+        )
         per_sample = per_sample * weight
     return per_sample.mean()
 
@@ -151,6 +166,8 @@ def feature_distillation_loss(
     teacher_projection: torch.Tensor,
     teacher_uncertainty: torch.Tensor | None = None,
     uncertainty_weight_mode: str = "raw",
+    uncertainty_weight_min: float | None = None,
+    uncertainty_weight_max: float | None = None,
 ) -> torch.Tensor:
     """Distill relationally useful normalized representations.
 
@@ -161,7 +178,12 @@ def feature_distillation_loss(
         student_projection, teacher_projection.detach(), dim=-1
     )
     if teacher_uncertainty is not None:
-        weight = uncertainty_weights(teacher_uncertainty, mode=uncertainty_weight_mode)
+        weight = uncertainty_weights(
+            teacher_uncertainty,
+            mode=uncertainty_weight_mode,
+            uncertainty_weight_min=uncertainty_weight_min,
+            uncertainty_weight_max=uncertainty_weight_max,
+        )
         per_sample = per_sample * weight
     return per_sample.mean()
 

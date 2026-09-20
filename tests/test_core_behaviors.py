@@ -18,6 +18,7 @@ from novel_discovery.losses import (
     proxy_contrastive_loss,
     supervised_contrastive_loss,
     weighted_energy_margin_loss,
+    uncertainty_weights,
 )
 from novel_discovery.pipeline import (
     calibration_diagnostics,
@@ -27,6 +28,8 @@ from novel_discovery.pipeline import (
     filter_discovery_candidates_by_neighbors,
     fit_score_normalization,
     run_discovery,
+    calibrate_class_thresholds,
+    purify_candidate_mask,
     select_discovery_candidates,
     update_ema_model,
 )
@@ -63,6 +66,8 @@ class CommandLineTest(unittest.TestCase):
                 "train_student",
                 "--alpha-proxy", "0.2",
                 "--proxy-temperature", "0.07",
+                "--uncertainty-weight-min", "0.5",
+                "--uncertainty-weight-max", "1.0",
                 "--discovery-pool",
                 "--discovery-pool-mode", "mixed",
                 "--alpha-discovery-selective-energy", "0.1",
@@ -83,6 +88,8 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(args.command, "train_student")
         self.assertAlmostEqual(args.alpha_proxy, 0.2)
         self.assertAlmostEqual(args.proxy_temperature, 0.07)
+        self.assertAlmostEqual(args.uncertainty_weight_min, 0.5)
+        self.assertAlmostEqual(args.uncertainty_weight_max, 1.0)
         self.assertEqual(args.discovery_pool_mode, "mixed")
         self.assertAlmostEqual(args.alpha_discovery_selective_energy, 0.1)
         self.assertAlmostEqual(args.discovery_select_ratio, 0.25)
@@ -105,6 +112,14 @@ class CommandLineTest(unittest.TestCase):
 
 
 class LossBehaviorTest(unittest.TestCase):
+    def test_uncertainty_weights_can_be_clipped(self):
+        values = uncertainty_weights(
+            torch.tensor([0.0, 2.0]),
+            uncertainty_weight_min=0.5,
+            uncertainty_weight_max=0.75,
+        )
+        self.assertTrue(torch.allclose(values, torch.tensor([0.75, 0.5])))
+
     def test_energy_margin_loss_is_finite_and_has_gradient(self):
         known = torch.tensor([[3.0, 0.0], [2.0, 0.0]], requires_grad=True)
         outlier = torch.tensor([[0.0, 0.0], [0.0, 0.0]], requires_grad=True)
@@ -375,6 +390,16 @@ class ScoreBehaviorTest(unittest.TestCase):
 
 
 class CalibrationTest(unittest.TestCase):
+    def test_class_conditional_thresholds_fallback_for_small_classes(self):
+        thresholds = calibrate_class_thresholds(
+            np.array([1.0, 2.0, 10.0, 12.0]),
+            np.array([0, 0, 1, 1]),
+            num_classes=3,
+            percentile=50.0,
+            min_samples=3,
+        )
+        self.assertTrue(np.allclose(thresholds, np.array([6.0, 6.0, 6.0])))
+
     def test_calibration_diagnostics_reports_ece(self):
         result = calibration_diagnostics(
             np.array([[0.9, 0.1], [0.6, 0.4], [0.2, 0.8]]),
@@ -387,6 +412,23 @@ class CalibrationTest(unittest.TestCase):
 
 
 class DiscoveryReportTest(unittest.TestCase):
+    def test_candidate_purification_keeps_highest_risk_only(self):
+        outputs = {
+            "entropy": np.array([0.1, 0.5, 0.9, 0.2]),
+            "epistemic": np.zeros(4),
+            "head_uncertainty": np.zeros(4),
+            "probs": np.full((4, 2), 0.5),
+        }
+        mask, report = purify_candidate_mask(
+            outputs,
+            np.array([False, True, True, True]),
+            mode="entropy",
+            keep_ratio=2 / 3,
+        )
+        self.assertEqual(mask.sum(), 2)
+        self.assertTrue(mask[2])
+        self.assertEqual(report["removed_count"], 1)
+
     def test_run_discovery_reports_candidate_pool_purity(self):
         outputs = {
             "entropy": np.array([0.1, 0.2, 2.0, 2.2, 2.1, 0.15], dtype=float),
