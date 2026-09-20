@@ -28,6 +28,7 @@ from .losses import (
     prototype_alignment_loss,
     supervised_contrastive_loss,
     uncertainty_alignment_loss,
+    weighted_energy_margin_loss,
 )
 from .metrics import (
     clustering_report,
@@ -180,21 +181,101 @@ def filter_discovery_candidates_by_neighbors(
     candidates should not only look risky by themselves, but should also live
     near other risky samples in representation space.
     """
+    agreement = compute_neighbor_agreement(mask, features, k=k)
     batch_size = mask.numel()
     if batch_size <= 1 or k <= 0:
-        return mask, 0.0
+        return mask, agreement[mask].mean().item() if mask.any() else 0.0
     with torch.no_grad():
         effective_k = min(int(k), batch_size - 1)
         required_votes = min(max(int(min_votes), 1), effective_k)
-        normalized = F.normalize(features.detach().float(), dim=-1)
-        similarity = torch.matmul(normalized, normalized.T)
-        similarity.fill_diagonal_(float("-inf"))
-        neighbor_indices = torch.topk(similarity, k=effective_k, dim=1, largest=True).indices
-        neighbor_votes = mask[neighbor_indices].float().sum(dim=1)
-        agreement = neighbor_votes / float(effective_k)
-        filtered = mask & (neighbor_votes >= required_votes)
+        filtered = mask & (agreement * effective_k >= required_votes)
         selected_agreement = agreement[mask].mean().item() if mask.any() else 0.0
     return filtered, selected_agreement
+
+
+@torch.no_grad()
+def compute_neighbor_agreement(
+    mask: torch.Tensor,
+    features: torch.Tensor,
+    k: int = 5,
+) -> torch.Tensor:
+    """Return the fraction of selected kNN neighbors for every sample."""
+    batch_size = mask.numel()
+    agreement = torch.zeros(batch_size, dtype=torch.float32, device=mask.device)
+    if batch_size <= 1 or k <= 0:
+        return agreement
+    effective_k = min(int(k), batch_size - 1)
+    normalized = F.normalize(features.detach().float(), dim=-1)
+    similarity = torch.matmul(normalized, normalized.T)
+    similarity.fill_diagonal_(float("-inf"))
+    neighbor_indices = torch.topk(similarity, k=effective_k, dim=1, largest=True).indices
+    return mask[neighbor_indices].float().mean(dim=1)
+
+
+@torch.no_grad()
+def compute_discovery_candidate_weights(
+    logits: torch.Tensor,
+    uncertainty: torch.Tensor | None = None,
+    features: torch.Tensor | None = None,
+    student_logits: torch.Tensor | None = None,
+    student_uncertainty: torch.Tensor | None = None,
+    ratio: float = 0.25,
+    mode: str = "consensus",
+    neighbor_k: int = 5,
+    neighbor_temperature: float = 0.5,
+) -> tuple[torch.Tensor, torch.Tensor, float]:
+    """Compute soft candidate weights without using discovery labels.
+
+    The hard candidate mask remains the gate. Selected samples receive a
+    continuous weight based on risk strength, local neighbor agreement, and
+    optional EMA/student agreement. This follows FixMatch-style confidence
+    weighting while using SCAN/AutoNovel-style local structure.
+    """
+    mask = select_discovery_candidates(logits, uncertainty, ratio=ratio, mode=mode)
+    weights = torch.zeros_like(logits[:, 0], dtype=torch.float32)
+    if not mask.any():
+        return mask, weights, 0.0
+    probs = logits.softmax(dim=-1)
+    entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=-1)
+    max_softmax_risk = 1.0 - probs.max(dim=-1).values
+    energy_risk = -torch.logsumexp(logits, dim=-1)
+    if mode == "entropy":
+        risk = entropy
+    elif mode == "max_softmax":
+        risk = max_softmax_risk
+    elif mode == "energy":
+        risk = energy_risk
+    elif mode == "entropy_uncertainty":
+        risk = entropy if uncertainty is None else entropy + uncertainty
+    elif mode == "consensus":
+        components = [entropy, max_softmax_risk, energy_risk]
+        if uncertainty is not None:
+            components.append(uncertainty)
+        risk = torch.stack([_rank_normalize(item) for item in components], dim=0).mean(dim=0)
+    else:
+        raise ValueError(f"Unsupported discovery selection mode: {mode}")
+    risk = _rank_normalize(risk)
+    candidate_weight = 0.5 + 0.5 * risk
+    neighbor_agreement = torch.zeros_like(candidate_weight)
+    if features is not None:
+        neighbor_agreement = compute_neighbor_agreement(mask, features, k=neighbor_k)
+        temperature = max(float(neighbor_temperature), 1e-6)
+        # A smooth gate keeps isolated candidates trainable, but downweights them.
+        candidate_weight = candidate_weight * torch.sigmoid(
+            (neighbor_agreement - 0.5) / temperature
+        )
+    if student_logits is not None:
+        student_mask = select_discovery_candidates(
+            student_logits,
+            student_uncertainty,
+            ratio=ratio,
+            mode=mode,
+        )
+        agreement = (student_mask == mask).float()
+        candidate_weight = candidate_weight * (0.5 + 0.5 * agreement)
+    weights[mask] = candidate_weight[mask].clamp(0.0, 1.0)
+    selected_agreement = neighbor_agreement[mask].mean().item() if mask.any() else 0.0
+    return mask, weights, selected_agreement
 
 
 def update_ema_model(ema_model, model, decay: float = 0.99):
@@ -322,6 +403,8 @@ def train_one_epoch_student(
     discovery_neighbor_filter: bool = False,
     discovery_neighbor_k: int = 5,
     discovery_neighbor_min_votes: int = 2,
+    discovery_soft_weighting: bool = False,
+    discovery_neighbor_temperature: float = 0.5,
 ):
     student.train()
     teacher.eval()
@@ -342,6 +425,7 @@ def train_one_epoch_student(
     discovery_selected_meter = AverageMeter()
     discovery_raw_selected_meter = AverageMeter()
     discovery_neighbor_agreement_meter = AverageMeter()
+    discovery_weight_mean_meter = AverageMeter()
     discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     for batch in tqdm(loader, desc="student-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
@@ -390,6 +474,7 @@ def train_one_epoch_student(
         discovery_selected_ratio = 0.0
         discovery_raw_selected_ratio = 0.0
         discovery_neighbor_agreement = 0.0
+        discovery_weight_mean = 0.0
         if discovery_iter is not None and (
             alpha_discovery > 0.0
             or alpha_discovery_unknown > 0.0
@@ -470,27 +555,85 @@ def train_one_epoch_student(
                         min_votes=discovery_neighbor_min_votes,
                     )
                     discovery_neighbor_agreement = 0.5 * (first_agreement + second_agreement)
+                first_weight = first_mask.float()
+                second_weight = second_mask.float()
+                if discovery_soft_weighting:
+                    first_mask, first_weight, first_agreement = compute_discovery_candidate_weights(
+                        first_selection_out["logits"],
+                        first_selection_out["uncertainty"],
+                        features=first_selection_out["proj"],
+                        student_logits=first_out["logits"],
+                        student_uncertainty=first_out["uncertainty"],
+                        ratio=discovery_select_ratio,
+                        mode=discovery_select_mode,
+                        neighbor_k=discovery_neighbor_k,
+                        neighbor_temperature=discovery_neighbor_temperature,
+                    )
+                    second_mask, second_weight, second_agreement = compute_discovery_candidate_weights(
+                        second_selection_out["logits"],
+                        second_selection_out["uncertainty"],
+                        features=second_selection_out["proj"],
+                        student_logits=second_out["logits"],
+                        student_uncertainty=second_out["uncertainty"],
+                        ratio=discovery_select_ratio,
+                        mode=discovery_select_mode,
+                        neighbor_k=discovery_neighbor_k,
+                        neighbor_temperature=discovery_neighbor_temperature,
+                    )
+                    discovery_neighbor_agreement = 0.5 * (first_agreement + second_agreement)
                 discovery_selected_ratio = 0.5 * (
                     first_mask.float().mean().item() + second_mask.float().mean().item()
                 )
+                selected_weights = torch.cat(
+                    [first_weight[first_mask], second_weight[second_mask]], dim=0
+                )
+                discovery_weight_mean = selected_weights.mean().item() if selected_weights.numel() else 0.0
                 if alpha_discovery_selective_unknown > 0.0:
                     loss_discovery_selective_unknown = 0.5 * (
-                        discovery_unknown_loss(first_out["logits"][first_mask], first_out["uncertainty"][first_mask])
-                        + discovery_unknown_loss(second_out["logits"][second_mask], second_out["uncertainty"][second_mask])
+                        discovery_unknown_loss(
+                            first_out["logits"][first_mask],
+                            first_out["uncertainty"][first_mask],
+                            first_weight[first_mask] if discovery_soft_weighting else None,
+                        )
+                        + discovery_unknown_loss(
+                            second_out["logits"][second_mask],
+                            second_out["uncertainty"][second_mask],
+                            second_weight[second_mask] if discovery_soft_weighting else None,
+                        )
                     )
                 if alpha_discovery_selective_energy > 0.0:
                     loss_discovery_selective_energy = 0.5 * (
-                        energy_margin_loss(
-                            s_out["logits"],
-                            first_out["logits"][first_mask],
-                            margin=energy_margin,
-                            temperature=energy_temperature,
+                        (
+                            weighted_energy_margin_loss(
+                                s_out["logits"],
+                                first_out["logits"][first_mask],
+                                first_weight[first_mask],
+                                margin=energy_margin,
+                                temperature=energy_temperature,
+                            )
+                            if discovery_soft_weighting
+                            else energy_margin_loss(
+                                s_out["logits"],
+                                first_out["logits"][first_mask],
+                                margin=energy_margin,
+                                temperature=energy_temperature,
+                            )
                         )
-                        + energy_margin_loss(
-                            s_out["logits"],
-                            second_out["logits"][second_mask],
-                            margin=energy_margin,
-                            temperature=energy_temperature,
+                        + (
+                            weighted_energy_margin_loss(
+                                s_out["logits"],
+                                second_out["logits"][second_mask],
+                                second_weight[second_mask],
+                                margin=energy_margin,
+                                temperature=energy_temperature,
+                            )
+                            if discovery_soft_weighting
+                            else energy_margin_loss(
+                                s_out["logits"],
+                                second_out["logits"][second_mask],
+                                margin=energy_margin,
+                                temperature=energy_temperature,
+                            )
                         )
                     )
         loss = (
@@ -531,6 +674,7 @@ def train_one_epoch_student(
         discovery_selected_meter.update(discovery_selected_ratio, images.size(0))
         discovery_raw_selected_meter.update(discovery_raw_selected_ratio, images.size(0))
         discovery_neighbor_agreement_meter.update(discovery_neighbor_agreement, images.size(0))
+        discovery_weight_mean_meter.update(discovery_weight_mean, images.size(0))
     return {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
@@ -549,6 +693,7 @@ def train_one_epoch_student(
         "discovery_selected_ratio": discovery_selected_meter.avg,
         "discovery_raw_selected_ratio": discovery_raw_selected_meter.avg,
         "discovery_neighbor_agreement": discovery_neighbor_agreement_meter.avg,
+        "discovery_weight_mean": discovery_weight_mean_meter.avg,
     }
 
 

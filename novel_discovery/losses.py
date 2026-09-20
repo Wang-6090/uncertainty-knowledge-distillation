@@ -89,12 +89,61 @@ def energy_margin_loss(
     """Separate known and pseudo-outlier energies without absolute thresholds."""
     if known_logits.numel() == 0 or outlier_logits.numel() == 0:
         return known_logits.new_tensor(0.0)
+    return per_sample_energy_margin_loss(
+        known_logits,
+        outlier_logits,
+        margin=margin,
+        temperature=temperature,
+    ).mean()
+
+
+def per_sample_energy_margin_loss(
+    known_logits: torch.Tensor,
+    outlier_logits: torch.Tensor,
+    margin: float = 1.0,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Return one Energy-margin loss value per paired known/outlier sample."""
+    if known_logits.numel() == 0 or outlier_logits.numel() == 0:
+        return known_logits.new_empty(0)
     known_energy = energy_score(known_logits, temperature=temperature)
     outlier_energy = energy_score(outlier_logits, temperature=temperature)
     pair_count = min(known_energy.size(0), outlier_energy.size(0))
     known_energy = known_energy[:pair_count]
     outlier_energy = outlier_energy[:pair_count]
-    return F.relu(known_energy - outlier_energy + margin).mean()
+    return F.relu(known_energy - outlier_energy + margin)
+
+
+def weighted_energy_margin_loss(
+    known_logits: torch.Tensor,
+    outlier_logits: torch.Tensor,
+    outlier_weight: torch.Tensor | None = None,
+    margin: float = 1.0,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Apply a normalized per-outlier weight to Energy-margin training.
+
+    A zero total weight returns a differentiable zero tensor. This lets mixed
+    discovery batches safely contain no selected candidates.
+    """
+    per_sample = per_sample_energy_margin_loss(
+        known_logits,
+        outlier_logits,
+        margin=margin,
+        temperature=temperature,
+    )
+    if per_sample.numel() == 0:
+        return known_logits.new_tensor(0.0)
+    if outlier_weight is None:
+        return per_sample.mean()
+    weight = outlier_weight.reshape(-1).to(per_sample).clamp_min(0.0)
+    weight = weight[: per_sample.numel()]
+    if weight.numel() != per_sample.numel():
+        raise ValueError("outlier_weight must match the outlier batch size.")
+    denominator = weight.sum()
+    if denominator <= 0:
+        return per_sample.sum() * 0.0
+    return (per_sample * weight).sum() / denominator
 
 
 def feature_distillation_loss(
@@ -188,6 +237,7 @@ def pseudo_unknown_loss(logits: torch.Tensor, uncertainty: torch.Tensor) -> torc
 def discovery_unknown_loss(
     logits: torch.Tensor,
     uncertainty: torch.Tensor,
+    sample_weight: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Encourage unlabeled discovery samples to leave the known classifier.
 
@@ -201,11 +251,16 @@ def discovery_unknown_loss(
     entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=-1)
     max_entropy = logits.new_tensor(float(logits.size(-1))).log()
     normalized_entropy = entropy / max_entropy.clamp_min(1e-8)
-    return (
-        confidence.mean()
-        + (1.0 - normalized_entropy).pow(2).mean()
-        + F.mse_loss(uncertainty, torch.ones_like(uncertainty))
-    )
+    per_sample = confidence + (1.0 - normalized_entropy).pow(2) + (uncertainty - 1.0).pow(2)
+    if sample_weight is None:
+        return per_sample.mean()
+    weight = sample_weight.reshape(-1).to(per_sample).clamp_min(0.0)
+    if weight.numel() != per_sample.numel():
+        raise ValueError("sample_weight must match the logits batch size.")
+    denominator = weight.sum()
+    if denominator <= 0:
+        return per_sample.sum() * 0.0
+    return (per_sample * weight).sum() / denominator
 
 
 def discovery_consistency_loss(

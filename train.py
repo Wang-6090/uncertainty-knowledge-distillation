@@ -178,6 +178,17 @@ def parse_args(argv=None):
         default=2,
         help="Minimum selected neighbors required to keep a discovery candidate.",
     )
+    p.add_argument(
+        "--discovery-soft-weighting",
+        action="store_true",
+        help="Use continuous candidate weights instead of equal-weight selective discovery loss.",
+    )
+    p.add_argument(
+        "--discovery-neighbor-temperature",
+        type=float,
+        default=0.5,
+        help="Temperature for smoothing kNN agreement in soft candidate weighting.",
+    )
     p.add_argument("--discovery-batch-size", type=int, default=0)
     p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
     p.add_argument("--discovery-temperature", type=float, default=0.2)
@@ -601,6 +612,8 @@ def fit_student(args):
             discovery_neighbor_filter=args.discovery_neighbor_filter,
             discovery_neighbor_k=args.discovery_neighbor_k,
             discovery_neighbor_min_votes=args.discovery_neighbor_min_votes,
+            discovery_soft_weighting=args.discovery_soft_weighting,
+            discovery_neighbor_temperature=args.discovery_neighbor_temperature,
         )
         stats["discovery_selective_weight"] = selective_weight
         val_stats = evaluate_classification(student, val_loader, device)

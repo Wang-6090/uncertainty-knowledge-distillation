@@ -11,11 +11,19 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from novel_discovery.losses import energy_margin_loss, proxy_contrastive_loss, supervised_contrastive_loss
+from novel_discovery.losses import (
+    discovery_unknown_loss,
+    energy_margin_loss,
+    per_sample_energy_margin_loss,
+    proxy_contrastive_loss,
+    supervised_contrastive_loss,
+    weighted_energy_margin_loss,
+)
 from novel_discovery.pipeline import (
     calibration_diagnostics,
     compute_mahalanobis_distance,
     compute_open_score,
+    compute_discovery_candidate_weights,
     filter_discovery_candidates_by_neighbors,
     fit_score_normalization,
     run_discovery,
@@ -65,6 +73,8 @@ class CommandLineTest(unittest.TestCase):
                 "--discovery-neighbor-filter",
                 "--discovery-neighbor-k", "3",
                 "--discovery-neighbor-min-votes", "2",
+                "--discovery-soft-weighting",
+                "--discovery-neighbor-temperature", "0.3",
                 "--discovery-selective-warmup-epochs", "1",
                 "--discovery-selective-ramp-epochs", "2",
             ]
@@ -82,6 +92,8 @@ class CommandLineTest(unittest.TestCase):
         self.assertTrue(args.discovery_neighbor_filter)
         self.assertEqual(args.discovery_neighbor_k, 3)
         self.assertEqual(args.discovery_neighbor_min_votes, 2)
+        self.assertTrue(args.discovery_soft_weighting)
+        self.assertAlmostEqual(args.discovery_neighbor_temperature, 0.3)
         self.assertEqual(args.discovery_selective_warmup_epochs, 1)
         self.assertEqual(args.discovery_selective_ramp_epochs, 2)
 
@@ -102,6 +114,33 @@ class LossBehaviorTest(unittest.TestCase):
 
         self.assertTrue(torch.isfinite(loss))
         self.assertIsNotNone(known.grad)
+
+    def test_weighted_energy_margin_loss_has_per_sample_behavior(self):
+        known = torch.tensor([[3.0, 0.0], [2.0, 0.0]], requires_grad=True)
+        outlier = torch.tensor([[0.0, 0.0], [1.0, 0.0]], requires_grad=True)
+        per_sample = per_sample_energy_margin_loss(known, outlier, margin=1.0)
+        weighted = weighted_energy_margin_loss(
+            known,
+            outlier,
+            outlier_weight=torch.tensor([1.0, 0.0]),
+            margin=1.0,
+        )
+
+        self.assertEqual(per_sample.numel(), 2)
+        self.assertAlmostEqual(weighted.item(), per_sample[0].item(), places=6)
+        weighted.backward()
+        self.assertIsNotNone(outlier.grad)
+
+    def test_weighted_losses_return_zero_for_zero_weights(self):
+        logits = torch.zeros(2, 3, requires_grad=True)
+        uncertainty = torch.zeros(2, requires_grad=True)
+        loss = discovery_unknown_loss(
+            logits,
+            uncertainty,
+            sample_weight=torch.zeros(2),
+        )
+        self.assertEqual(loss.item(), 0.0)
+        self.assertTrue(torch.isfinite(loss))
 
     def test_supervised_contrastive_loss_ignores_anchors_without_positives(self):
         features = torch.eye(4)
@@ -255,6 +294,37 @@ class ScoreBehaviorTest(unittest.TestCase):
         self.assertTrue(filtered[1].item())
         self.assertFalse(filtered[3].item())
         self.assertGreater(agreement, 0.0)
+
+    def test_soft_candidate_weights_are_bounded_and_nonuniform(self):
+        logits = torch.tensor(
+            [
+                [5.0, 0.0],
+                [0.0, 0.0],
+                [4.0, 0.0],
+                [0.1, 0.1],
+            ]
+        )
+        features = torch.tensor(
+            [
+                [1.0, 0.0],
+                [0.9, 0.1],
+                [0.0, 1.0],
+                [0.1, 0.9],
+            ]
+        )
+        mask, weights, _ = compute_discovery_candidate_weights(
+            logits,
+            features=features,
+            ratio=0.5,
+            mode="entropy",
+            neighbor_k=2,
+        )
+
+        self.assertEqual(mask.sum().item(), 2)
+        self.assertTrue(torch.all(weights >= 0.0))
+        self.assertTrue(torch.all(weights <= 1.0))
+        self.assertTrue(torch.all(weights[~mask] == 0.0))
+        self.assertGreater(weights[mask].max().item(), weights[mask].min().item())
 
 
 class CalibrationTest(unittest.TestCase):

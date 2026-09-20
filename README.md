@@ -75,6 +75,7 @@
 
 ### 未知检测与聚类
 
+- 新增可选 soft candidate weighting：--discovery-soft-weighting 不再让所有初筛候选以同等强度参与 selective unknown / Energy loss，而是结合风险强度、kNN 邻域一致性和 EMA/student 一致性生成连续权重；默认关闭，以保持旧实验可复现。
 - 开放集分数支持 MSP、ODIN-style MSP、Energy、predictive entropy、epistemic uncertainty、prototype distance、diagonal / shared-covariance Mahalanobis distance 及组合分数。
 - ODIN-style MSP 使用温度缩放和输入微扰，在不重新训练模型的情况下作为未知检测强基线。
 - MC Dropout 用于估计预测熵、数据不确定性代理和认知不确定性。
@@ -220,9 +221,148 @@
 
 这次快速实验说明：kNN 确实让训练期 selective 样本更少，第二轮训练中 discovery_raw_selected_ratio 约为 0.115，过滤后 discovery_selected_ratio 约为 0.018；测试时候选池也从 55 个降到 39 个。但是它没有提升 candidate purity，unknown reject rate 和 known accuracy 反而下降。因此当前 kNN 版本只能说明“更保守”，不能说明“更有效”。后续若继续尝试，应优先调整 k / min-votes 或改成按邻域一致性连续加权的 selective energy；如果多组设置仍不能提升 purity，就应暂停 kNN 作为主线。
 
-## 下一步代码分工建议
+soft candidate weighting 已进一步实现为可选训练机制。它参考 FixMatch 的置信度加权、Mean Teacher 的稳定 teacher/student 预测、SCAN 的近邻一致性和 AutoNovel 的样本关系思想：初筛候选仍由风险信号决定，但 candidate_weight 会随风险、邻域一致性和 EMA/student 一致性连续变化；同时新增 weighted Energy-margin loss 和 weighted discovery unknown loss。CIFAR-100 快速实验表明它能减少候选污染，但检测排序指标没有同步提升，说明当前权重公式可能过于保守，后续需要调节邻域平滑温度或加入权重下限，不能直接作为默认方法。
+
+soft candidate weighting 的小规模 CIFAR-100 结果为：candidate purity 从 0.3091 提升到 0.3913，unknown reject rate 从 0.0434 提升到 0.0459，但 AUROC 从 0.4854 降到 0.4805，FPR95 从 0.9490 变差到 0.9589。该结果只能说明候选池纯度有所改善，不能说明开放集检测整体改善。
+
+## 当前三人并行分工
+
+为了让负责人和两位同学同时开工且尽量不产生代码冲突，当前采用三个独立方向。三个人都需要修改代码或测试，不直接在 main 分支开发；每个人先从最新 main 创建自己的分支。
+
+| 角色 | 负责方向 | 主要修改范围 | 对应当前问题 |
+| --- | --- | --- | --- |
+| 负责人 | 实验协议、结果分析、主流程集成 | scripts/、analyze_results.py、analysis/、实验配置文件 | 实验设置不统一、结论缺少多 seed 验证 |
+| 同学 1 | 不确定性知识蒸馏与加权损失 | novel_discovery/losses.py、可新增 uncertainty_kd.py、独立测试文件 | 不确定性 KD 尚未证明稳定有效，候选 loss 目前较粗糙 |
+| 同学 2 | 未知检测、候选筛选与新类发现 | novel_discovery/pipeline.py、可新增 discovery_selection.py、独立测试文件 | AUROC/FPR95 较差，候选池污染严重，auto-K 不可靠 |
+
+### 负责人：实验与主流程集成
+
+负责人不与两位同学争抢同一个核心模块，主要负责把方法改动放进统一、可比较的实验协议中。
+
+代码任务：
+
+- 新增或整理 scripts/ 下的轻量实验脚本，固定 CIFAR-100 60/40、seed、数据量、epoch、backbone、评分方式和输出目录；
+- 完善 analyze_results.py 或新增实验汇总脚本，统一读取 discovery_report.json；
+- 增加多 seed 汇总、mean/std、方法对比表和失败实验记录；
+- 在两位同学完成模块后负责主流程集成、参数兼容检查和小规模实验；
+- 检查 README、实验配置和实际命令是否一致。
+
+不应直接重写：
+
+- 同学 1 正在修改的 losses.py；
+- 同学 2 正在修改的 pipeline.py；
+- 数据集划分规则和已有指标定义。
+
+建议优先验证：
+
+- CE、标准 KD、不确定性 KD、soft weighted loss 的单模块消融；
+- EMA + consensus、hard kNN、soft weighting 的发现端消融；
+- 至少 3 个 seed 后再判断方法是否稳定有效。
+
+参考依据：
+
+- Hinton 等人的 Knowledge Distillation：固定标准 KD 作为训练对照；
+- Vaze 等人的 GCD：强调 known/novel 混合无标签池和公平评测；
+- Fini 等人的 UNO、Wen 等人的 SimGCD：支持将训练设置和新类发现目标统一记录；
+- 多 seed、均值和标准差是为了避免把单次快速实验误当成最终结论。
+
+建议分支名：负责人可以在 main 的本地工作分支上负责集成，例如 owner-integration。
+
+### 同学 1：不确定性知识蒸馏与加权损失
+
+代码范围：
+
+- novel_discovery/losses.py；
+- 可新增 novel_discovery/uncertainty_kd.py；
+- 新增 tests/test_uncertainty_kd.py，不修改 tests/test_discovery_selection.py。
+
+代码任务：
+
+- 检查标准 KL KD 与 uncertainty-weighted KD 的数值行为；
+- 完善 uncertainty weight 的 raw、mean_normalized、clamp 等模式；
+- 保持当前 distillation_loss、energy_margin_loss 的旧调用接口；
+- 完善 per-sample Energy margin loss、weighted Energy margin loss；
+- 验证 zero-weight、空 batch、梯度反向传播和权重归一化；
+- 如果提出新的 uncertainty target，只新增独立函数和参数说明，不直接改动 discovery 主流程。
+
+参考文献及对应思路：
+
+- Hinton et al., Distilling the Knowledge in a Neural Network：温度 soft logits 和 KL 蒸馏；
+- Kendall and Gal, What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision：区分偶然不确定性与认知不确定性；
+- Gal and Ghahramani, Dropout as a Bayesian Approximation：MC Dropout 不确定性估计；
+- Liu et al., Energy-based Out-of-distribution Detection：Energy 分数和 Energy margin；
+- Hendrycks et al., Outlier Exposure：异常样本应降低模型置信度，但 mixed pool 不能被全量当作异常；
+- FixMatch：不可靠伪标签应降低训练强度，而不是全部等权使用。
+
+验收标准：
+
+- 原有 19 个测试仍然通过；
+- 新增测试覆盖权重范围、归一化、空输入和梯度；
+- 不确定性 KD 的改动可以通过独立参数关闭；
+- 不直接修改 pipeline.py 的训练主循环。
+
+建议分支名：lky-uncertainty-losses。
+
+### 同学 2：未知检测、候选筛选与新类发现
+
+代码范围：
+
+- novel_discovery/pipeline.py；
+- 可新增 novel_discovery/discovery_selection.py；
+- 新增 tests/test_discovery_selection.py，不修改 tests/test_uncertainty_kd.py。
+
+代码任务：
+
+- 改进当前 consensus、EMA、kNN 和 soft candidate weighting；
+- 比较 hard filter 与 soft weight，重点观察 candidate purity、unknown reject rate、AUROC 和 FPR95；
+- 检查邻域计算在小 batch、k 大于 batch size、空候选时的稳定性；
+- 改进候选筛选函数的可解释统计，例如风险分数、邻域一致性和 EMA/student agreement；
+- 检查 auto-K 的上限、silhouette、稳定性和候选池规模之间的关系；
+- 暂时不要改 losses.py，weighted loss 通过现有接口调用。
+
+参考文献及对应思路：
+
+- Vaze et al., Generalized Category Discovery：mixed unlabeled pool 不能直接全量当 unknown；
+- Tarvainen and Valpola, Mean Teachers are Better Role Models：EMA teacher 稳定伪标签；
+- Sohn et al., FixMatch：按伪标签可靠度筛选或加权；
+- Van Gansbeke et al., SCAN：利用 nearest-neighbor consistency；
+- Han et al., AutoNovel：利用样本关系而不是只使用单样本分数；
+- Han et al., Deep Transfer Clustering、Fini et al., UNO、Wen et al., SimGCD：逐步把聚类结构和伪标签纳入训练，而不是只在最后 KMeans。
+
+验收标准：
+
+- 原有 19 个测试仍然通过；
+- 新增测试覆盖 hard/soft 两种模式、空候选和 k 边界；
+- 默认参数保持旧行为，新增方法必须通过显式参数开启；
+- 不直接修改 losses.py；
+- 不改变 known/novel 数据划分和指标定义。
+
+建议分支名：qiyuhan-discovery-selection。
+
+### 并行开发和合并顺序
+
+三个人开始工作前都执行：
+
+    git checkout main
+    git pull origin main
+
+然后分别创建 owner-integration、lky-uncertainty-losses、qiyuhan-discovery-selection 分支。每个人只提交自己负责范围内的文件，不上传数据集和 .pt 模型权重。
+
+建议合并顺序：
+
+1. 先合并同学 1 的 losses 和测试；
+2. 运行 compileall 和全部单元测试；
+3. 再合并同学 2 的 pipeline、discovery selection 和测试；
+4. 负责人最后合并实验脚本、结果分析和 README；
+5. 在统一协议下运行三组以上 seed，再决定哪些方法进入论文主结果。
+
+如果两个分支确实需要修改同一个文件，应先提交独立函数或新模块，不要互相覆盖整段训练代码；最终由负责人统一接入。
+
+## 旧版两人分工记录（已由当前三人方案替代）
 
 下面的分工只使用“同学 1 / 同学 2”表示，目的是让两个人都能改代码，但尽量不修改同一批文件，减少冲突。这个分工直接对应当前实验暴露出来的问题：未知检测仍然较弱、候选池污染较重、kNN hard filter 只让候选变少但没有提高 candidate purity、不确定性知识蒸馏还没有被充分验证。
+
+第一版 soft candidate weighting 和 weighted loss 已经加入主分支并完成轻量测试，因此下面两部分的任务应理解为“继续完善、做消融和修正”，不是从零开始重复实现。
 
 ### 同学 1：candidate weighting 与 discovery 筛选
 
@@ -495,6 +635,14 @@ python train.py train_student --dataset cifar100 --data-root .\data `
 ```
 
 EMA+consensus 目前更适合提高候选池纯度和降低 FPR95，但会损伤已知分类准确率；正式实验应优先尝试更小的 selective energy 权重。
+
+如果希望让候选样本按可信度参与训练，而不是所有候选等权，可以在上述命令中增加：
+
+    --discovery-soft-weighting
+    --discovery-neighbor-k 5
+    --discovery-neighbor-temperature 0.5
+
+该选项目前是实验功能。它可能提高 candidate purity，但快速实验尚未证明能同步提高 AUROC 和 FPR95。
 
 在纯未知 discovery pool 上启用 Energy 分离约束：
 
