@@ -30,6 +30,7 @@ from .losses import (
     uncertainty_alignment_loss,
     weighted_energy_margin_loss,
 )
+from .joint_discovery import joint_discovery_loss
 from .metrics import (
     clustering_report,
     compute_aupr,
@@ -405,6 +406,14 @@ def train_one_epoch_student(
     discovery_neighbor_min_votes: int = 2,
     discovery_soft_weighting: bool = False,
     discovery_neighbor_temperature: float = 0.5,
+    novel_head=None,
+    alpha_joint_discovery: float = 0.0,
+    joint_confidence_threshold: float = 0.6,
+    joint_assignment_temperature: float = 1.0,
+    alpha_joint_consistency: float = 1.0,
+    alpha_joint_balance: float = 0.1,
+    alpha_joint_neighbor: float = 0.1,
+    joint_neighbor_k: int = 5,
 ):
     student.train()
     teacher.eval()
@@ -426,6 +435,10 @@ def train_one_epoch_student(
     discovery_raw_selected_meter = AverageMeter()
     discovery_neighbor_agreement_meter = AverageMeter()
     discovery_weight_mean_meter = AverageMeter()
+    joint_meter = AverageMeter()
+    joint_consistency_meter = AverageMeter()
+    joint_balance_meter = AverageMeter()
+    joint_neighbor_meter = AverageMeter()
     discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     for batch in tqdm(loader, desc="student-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
@@ -471,6 +484,10 @@ def train_one_epoch_student(
         loss_discovery_energy = s_out["logits"].new_tensor(0.0)
         loss_discovery_selective_unknown = s_out["logits"].new_tensor(0.0)
         loss_discovery_selective_energy = s_out["logits"].new_tensor(0.0)
+        loss_joint_discovery = s_out["logits"].new_tensor(0.0)
+        joint_consistency = s_out["logits"].new_tensor(0.0)
+        joint_balance = s_out["logits"].new_tensor(0.0)
+        joint_neighbor = s_out["logits"].new_tensor(0.0)
         discovery_selected_ratio = 0.0
         discovery_raw_selected_ratio = 0.0
         discovery_neighbor_agreement = 0.0
@@ -481,6 +498,7 @@ def train_one_epoch_student(
             or alpha_discovery_energy > 0.0
             or alpha_discovery_selective_unknown > 0.0
             or alpha_discovery_selective_energy > 0.0
+            or alpha_joint_discovery > 0.0
         ):
             try:
                 discovery_images = next(discovery_iter)
@@ -492,6 +510,25 @@ def train_one_epoch_student(
             second_view = second_view.to(device)
             first_out = student(first_view)
             second_out = student(second_view)
+            if novel_head is not None and alpha_joint_discovery > 0.0:
+                first_novel_logits = novel_head(first_out["features"])
+                second_novel_logits = novel_head(second_out["features"])
+                joint_losses = joint_discovery_loss(
+                    first_out["features"],
+                    second_out["features"],
+                    first_novel_logits,
+                    second_novel_logits,
+                    confidence_threshold=joint_confidence_threshold,
+                    assignment_temperature=joint_assignment_temperature,
+                    alpha_consistency=alpha_joint_consistency,
+                    alpha_balance=alpha_joint_balance,
+                    alpha_neighbor=alpha_joint_neighbor,
+                    neighbor_k=joint_neighbor_k,
+                )
+                loss_joint_discovery = joint_losses["total"]
+                joint_consistency = joint_losses["consistency"]
+                joint_balance = joint_losses["balance"]
+                joint_neighbor = joint_losses["neighbor"]
             loss_discovery = discovery_view_loss(
                 first_out["proj"],
                 second_out["proj"],
@@ -651,6 +688,7 @@ def train_one_epoch_student(
             + alpha_discovery_energy * loss_discovery_energy
             + alpha_discovery_selective_unknown * loss_discovery_selective_unknown
             + alpha_discovery_selective_energy * loss_discovery_selective_energy
+            + alpha_joint_discovery * loss_joint_discovery
         )
         optimizer.zero_grad()
         loss.backward()
@@ -675,6 +713,10 @@ def train_one_epoch_student(
         discovery_raw_selected_meter.update(discovery_raw_selected_ratio, images.size(0))
         discovery_neighbor_agreement_meter.update(discovery_neighbor_agreement, images.size(0))
         discovery_weight_mean_meter.update(discovery_weight_mean, images.size(0))
+        joint_meter.update(loss_joint_discovery.item(), images.size(0))
+        joint_consistency_meter.update(joint_consistency.item(), images.size(0))
+        joint_balance_meter.update(joint_balance.item(), images.size(0))
+        joint_neighbor_meter.update(joint_neighbor.item(), images.size(0))
     return {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
@@ -694,6 +736,10 @@ def train_one_epoch_student(
         "discovery_raw_selected_ratio": discovery_raw_selected_meter.avg,
         "discovery_neighbor_agreement": discovery_neighbor_agreement_meter.avg,
         "discovery_weight_mean": discovery_weight_mean_meter.avg,
+        "joint_discovery": joint_meter.avg,
+        "joint_consistency": joint_consistency_meter.avg,
+        "joint_balance": joint_balance_meter.avg,
+        "joint_neighbor": joint_neighbor_meter.avg,
     }
 
 

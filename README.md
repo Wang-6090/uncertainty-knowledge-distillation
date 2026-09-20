@@ -60,6 +60,17 @@
 - SupCon 只对 batch 内确实存在同类正样本的 anchor 计算损失，避免单样本类别干扰训练。
 - 新增 `--alpha-proxy`：参考 Proxy-NCA / Proxy Anchor / normalized softmax 思路，把分类器权重作为类别代理，让样本特征靠近自己的类代理并远离其他类代理。它不依赖 batch 内同类正样本，适合 CIFAR-100 这类类别多、batch 内正样本稀疏的快速实验。目前只完成 toy smoke test，尚未在 CIFAR 正式消融验证。
 
+### 联合新类发现（实验版）
+
+- 新增 NovelPrototypeHead：在学生模型特征上学习一组未知类原型，不改变原有已知分类头。
+- 新增 UNO 风格 balanced assignment，缓解所有未知样本塌缩到少数 prototype 的问题。
+- 新增 SimGCD 风格双视图 novel consistency：用一个增强视图生成伪标签，约束另一个视图的 novel prototype 预测。
+- 新增 SCAN 风格 neighbor consistency：约束特征空间近邻具有相似的 novel prototype 分布。
+- 通过 --joint-discovery 显式开启，默认关闭；训练后额外保存 novel_head.pt。
+- --joint-confidence-threshold 使用相对均匀分布的置信度，即 max softmax probability 乘以 novel 类数量。默认值 1.1，适用于 CIFAR-100 的 40 个未知类。
+
+这一版是从两阶段“检测后聚类”走向联合新类发现的最小实验模块，还没有实现完整 UNO/SimGCD 的周期性伪标签更新、类别均衡分配优化和未知类分类评测。它目前用于验证训练期 novel prototype 是否能学习结构，不应直接作为最终论文方法。
+
 ### Discovery pool 学习
 
 - 支持双视图 cosine consistency。
@@ -103,6 +114,7 @@
 - 针对上述问题，代码新增了 selective discovery warmup/ramp，并完成 3 epoch 快速消融。结果显示 warmup/ramp 版本 AUROC `0.5358`、FPR95 `0.9128`、known accuracy `0.2895`、unknown reject rate `0.0587`、candidate purity `0.4107`，没有优于 mixed baseline，也没有优于不加 warmup 的 selective energy。因此该策略目前只能作为可选稳定化机制，不能作为主改进结论。
 - 新增更保守的 consensus 选择后，3 epoch 快速消融结果为 AUROC `0.5575`、FPR95 `0.9095`、known accuracy `0.3372`、unknown reject rate `0.0663`、candidate purity `0.5200`。相比 mixed baseline，它牺牲少量 AUROC，但提高了 known accuracy、降低了 FPR95，并把候选池纯度从 `0.4590` 提高到 `0.5200`；相比原 selective energy，它显著缓解了已知分类下降问题。因此 consensus 筛选比 warmup/ramp 更值得继续验证。
 - 在 consensus 基础上加入 EMA selection model 后，3 epoch 快速消融结果为 AUROC `0.5712`、FPR95 `0.8832`、known accuracy `0.2928`、unknown reject rate `0.0561`、candidate purity `0.5500`。它在 AUROC、FPR95 和候选池纯度上是当前 mixed discovery 相关实验中最好的，但 known accuracy 和 unknown reject rate 下降，说明 EMA 筛选方向有价值，但 selective energy 权重或筛选比例还需要降低。
+ - 联合新类发现模块已经完成 toy smoke test 和小规模 CIFAR-100 GPU smoke test。CIFAR smoke 设置为 known/novel = 60/40、训练样本 1000、discovery 样本 1000、1 epoch，训练日志中 `joint_discovery=3.6891`、`joint_consistency=3.6890`、`joint_balance=0.00017`、`joint_neighbor=0.000095`，并成功保存 `novel_head.pt`。这只能证明联合损失确实参与了反向传播且代码可运行，不能证明未知检测或聚类性能已经提升。
  - 在 consensus 基础上加入 EMA selection model 后，3 epoch 快速消融结果为 AUROC `0.5712`、FPR95 `0.8832`、known accuracy `0.2928`、unknown reject rate `0.0561`、candidate purity `0.5500`。它在 AUROC、FPR95 和候选池纯度上是当前 mixed discovery 相关实验中最好的，但 known accuracy 和 unknown reject rate 下降。
  - 后续参数搜索显示：`alpha=0.03, ratio=0.15, decay=0.99` 的 AUROC `0.5276`、candidate purity `0.3864`；`alpha=0.03, ratio=0.25, decay=0.99` 的 AUROC `0.5569`、candidate purity `0.3529`；`alpha=0.05, ratio=0.25, decay=0.95` 的 AUROC `0.5656`、FPR95 `0.8947`、candidate purity `0.4902`。因此简单降低 selective energy 权重或降低筛选比例没有解决问题，`decay=0.95` 有一定折中但不如原 EMA 0.99 的候选池纯度。
 - 候选池纯度大约为 `0.43–0.50`，说明候选池中混入了较多被误拒的已知样本。
@@ -225,144 +237,55 @@ soft candidate weighting 已进一步实现为可选训练机制。它参考 Fix
 
 soft candidate weighting 的小规模 CIFAR-100 结果为：candidate purity 从 0.3091 提升到 0.3913，unknown reject rate 从 0.0434 提升到 0.0459，但 AUROC 从 0.4854 降到 0.4805，FPR95 从 0.9490 变差到 0.9589。该结果只能说明候选池纯度有所改善，不能说明开放集检测整体改善。
 
-## 当前三人并行分工
+## 当前三人并行算法分工
 
-为了让负责人和两位同学同时开工且尽量不产生代码冲突，当前采用三个独立方向。三个人都需要修改代码或测试，不直接在 main 分支开发；每个人先从最新 main 创建自己的分支。
+三个人同时做算法，但分别负责不同的机制，避免直接修改同一核心文件。每个人从最新 `main` 创建自己的分支，完成单元测试和轻量 smoke test 后再合并。
 
-| 角色 | 负责方向 | 主要修改范围 | 对应当前问题 |
+| 角色 | 算法方向 | 主要文件范围 | 直接对应的问题 |
 | --- | --- | --- | --- |
-| 负责人 | 端到端新类发现与联合训练算法 | 可新增 novel_discovery/novel_head.py、novel_discovery/joint_discovery.py、独立测试文件 | 当前仍是“检测后聚类”，还不是统一的新类发现模型 |
-| 同学 1 | 不确定性知识蒸馏与加权损失 | novel_discovery/losses.py、可新增 uncertainty_kd.py、独立测试文件 | 不确定性 KD 尚未证明稳定有效，候选 loss 目前较粗糙 |
-| 同学 2 | 未知检测、候选筛选与新类发现 | novel_discovery/pipeline.py、可新增 discovery_selection.py、独立测试文件 | AUROC/FPR95 较差，候选池污染严重，auto-K 不可靠 |
+| 负责人 | 联合新类发现与原型分配 | `novel_discovery/joint_discovery.py`、可新增 `novel_head.py`、`train.py` 的接入、独立测试 | 目前主要是检测后聚类，未知类结构没有在训练期学习 |
+| 同学 1 | 不确定性感知知识蒸馏 | `novel_discovery/losses.py`、可新增 `uncertainty_kd.py`、独立测试 | 不确定性 KD 尚未证明稳定优于普通 KD，蒸馏权重还需校准 |
+| 同学 2 | 未知检测与候选筛选/聚类 | 可新增 `novel_discovery/discovery_selection.py`、检测和聚类评测脚本、独立测试 | AUROC/FPR95 较差，候选池污染严重，auto-K 不可靠 |
 
-### 负责人：端到端新类发现与联合训练
+### 负责人：联合新类发现与原型分配
 
-负责人负责第三个算法方向，不只是做实验整合：把已知分类、未知候选筛选和未知类结构学习逐步放入统一训练目标，同时保留当前两阶段流程作为基线。
+负责人负责把未知类结构学习真正放进训练目标，而不是只做最后的 KMeans：
 
-代码任务：
+- 维护 `NovelPrototypeHead`、balanced assignment、双视图一致性和近邻一致性；
+- 参考 UNO 的类别均衡分配、SimGCD 的自蒸馏、SCAN 的近邻一致性，逐步加入周期性伪标签更新和 prototype 稳定化；
+- 通过 `train.py` 接入已知分类、蒸馏与 novel discovery loss，并保留 `--joint-discovery` 作为可关闭开关；
+- 训练阶段只能使用 train/discovery pool，不能使用测试集未知标签；
+- 对比“检测后 KMeans”与“训练期联合 novel head”，报告 AUROC、FPR95、known accuracy、candidate purity、NMI 和 ARI。
 
-- 新增独立的 novel head 或 discovery head，为未知样本提供可学习的类别表示；
-- 设计高置信候选的伪标签更新、聚类一致性损失和类别均衡约束；
-- 先实现“已知分类头 + novel prototype/head + discovery consistency”的最小版本，不直接一次复现完整 UNO 或 SimGCD；
-- 明确训练期和测试期使用的特征、伪标签与聚类 K，避免把测试标签泄漏进训练；
-- 在两位同学的模块稳定后，负责把接口接入 train.py，并对比当前检测后 KMeans 基线；
-- 同时维护独立的轻量实验脚本和结果记录，但不修改两位同学的核心函数。
+参考方法：Fini et al., UNO (ICCV 2021) 的 balanced assignment；Wen et al., SimGCD (ICCV 2023) 的 self-distillation 与统一分类空间；Van Gansbeke et al., SCAN (ECCV 2020) 的 nearest-neighbor consistency；Han et al., Deep Transfer Clustering (ICCV 2019) 的监督特征迁移；Vaze et al., GCD (CVPR 2022) 的 known/novel 混合评测协议。
 
-建议主要修改文件：
+当前已完成最小版本：`NovelPrototypeHead`、UNO 风格近似均衡分配、SimGCD 风格双视图 consistency、SCAN 风格 neighbor consistency，并已通过 toy 与小规模 CIFAR smoke test。尚未完成完整 UNO/SimGCD 的周期性伪标签更新和严格的 novel head 评测。
 
-- 可新增 novel_discovery/novel_head.py；
-- 可新增 novel_discovery/joint_discovery.py；
-- 可新增 tests/test_joint_discovery.py；
-- 最后集成时再最小化修改 train.py。
+### 同学 1：不确定性感知知识蒸馏
 
-参考文献及对应方法：
+- 在 `losses.py` 或独立 `uncertainty_kd.py` 中实现并比较标准 KL、教师不确定性加权 KL、特征蒸馏和不确定性校准；
+- 参考 Hinton et al. 的温度 KL 蒸馏、Kendall and Gal 的 aleatoric/epistemic 不确定性区分、Gal and Ghahramani 的 MC Dropout、Liu et al. 的 Energy 分数；
+- 检查不确定性权重的范围、归一化、截断、空 batch 和梯度传播，不改变未知检测和聚类主流程；
+- 通过 CE、普通 KD、不确定性 KD 三组消融，报告 known accuracy、ECE、AUROC、FPR95 和多 seed 均值。
 
-- Fini et al., UNO, ICCV 2021：已知类监督、未知类伪标签和类别均衡的统一目标；可先借鉴 balanced assignment 和双头结构。
-- Wen et al., SimGCD, ICCV 2023：通过自蒸馏、伪标签和统一分类空间学习 novel structure；可借鉴周期性伪标签更新和 self-distillation。
-- Han et al., Deep Transfer Clustering, ICCV 2019：将已知类监督特征迁移到未知类聚类；可借鉴联合特征学习。
-- Van Gansbeke et al., SCAN, ECCV 2020：使用 nearest-neighbor consistency 学习类别结构；可借鉴 cluster/class consistency loss。
-- Vaze et al., GCD, CVPR 2022：known/novel 混合无标签池的统一类别发现设定；用于确定评测协议和避免把所有无标签样本当 unknown。
-- Caron et al., DINO, ICCV 2021：teacher-student 自蒸馏形成更有结构的表征；可作为后续增强表征的参考，但暂不直接替换 backbone。
+建议分支：`lky-uncertainty-losses`。只提交损失函数、独立模块和对应测试，不修改 `joint_discovery.py`。
 
-验收标准：
+### 同学 2：未知检测与候选筛选/聚类
 
-- 新模块可以独立关闭，不破坏当前 detection + clustering 基线；
-- 伪标签更新不使用测试集未知标签；
-- 对比报告 known accuracy、AUROC、FPR95、candidate purity、NMI 和 ARI；
-- 至少完成 toy smoke 和小规模 CIFAR 实验后，再考虑完整训练；
-- 新增 tests/test_joint_discovery.py，不修改同学 1 和同学 2 的测试文件。
+- 新增独立的 `discovery_selection.py` 或评测脚本，改进 consensus、EMA、kNN、soft weighting 和 auto-K；
+- 参考 Vaze et al. 的 GCD 混合无标签池设定、Tarvainen and Valpola 的 Mean Teacher、Sohn et al. 的 FixMatch 置信度筛选、SCAN 的邻域一致性、AutoNovel 的样本关系建模；
+- 重点比较 hard filter 与 soft weight，分析候选池纯度、unknown reject rate、AUROC、FPR95、silhouette、NMI 和 ARI；
+- 检查空候选、小 batch、`k > batch size` 和 auto-K 边界，默认参数保持当前行为，所有新策略都用显式开关开启；
+- 不修改 `losses.py` 和 `joint_discovery.py`，如果需要训练接入，先提交独立接口，由负责人统一合并。
 
-建议分支名：owner-joint-discovery。
+建议分支：`qiyuhan-discovery-selection`。只提交候选筛选、检测/聚类评测和对应测试。
 
-### 同学 1：不确定性知识蒸馏与加权损失
+### 并行协作规则
 
-代码范围：
-
-- novel_discovery/losses.py；
-- 可新增 novel_discovery/uncertainty_kd.py；
-- 新增 tests/test_uncertainty_kd.py，不修改 tests/test_discovery_selection.py。
-
-代码任务：
-
-- 检查标准 KL KD 与 uncertainty-weighted KD 的数值行为；
-- 完善 uncertainty weight 的 raw、mean_normalized、clamp 等模式；
-- 保持当前 distillation_loss、energy_margin_loss 的旧调用接口；
-- 完善 per-sample Energy margin loss、weighted Energy margin loss；
-- 验证 zero-weight、空 batch、梯度反向传播和权重归一化；
-- 如果提出新的 uncertainty target，只新增独立函数和参数说明，不直接改动 discovery 主流程。
-
-参考文献及对应思路：
-
-- Hinton et al., Distilling the Knowledge in a Neural Network：温度 soft logits 和 KL 蒸馏；
-- Kendall and Gal, What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision：区分偶然不确定性与认知不确定性；
-- Gal and Ghahramani, Dropout as a Bayesian Approximation：MC Dropout 不确定性估计；
-- Liu et al., Energy-based Out-of-distribution Detection：Energy 分数和 Energy margin；
-- Hendrycks et al., Outlier Exposure：异常样本应降低模型置信度，但 mixed pool 不能被全量当作异常；
-- FixMatch：不可靠伪标签应降低训练强度，而不是全部等权使用。
-
-验收标准：
-
-- 原有 19 个测试仍然通过；
-- 新增测试覆盖权重范围、归一化、空输入和梯度；
-- 不确定性 KD 的改动可以通过独立参数关闭；
-- 不直接修改 pipeline.py 的训练主循环。
-
-建议分支名：lky-uncertainty-losses。
-
-### 同学 2：未知检测、候选筛选与新类发现
-
-代码范围：
-
-- novel_discovery/pipeline.py；
-- 可新增 novel_discovery/discovery_selection.py；
-- 新增 tests/test_discovery_selection.py，不修改 tests/test_uncertainty_kd.py。
-
-代码任务：
-
-- 改进当前 consensus、EMA、kNN 和 soft candidate weighting；
-- 比较 hard filter 与 soft weight，重点观察 candidate purity、unknown reject rate、AUROC 和 FPR95；
-- 检查邻域计算在小 batch、k 大于 batch size、空候选时的稳定性；
-- 改进候选筛选函数的可解释统计，例如风险分数、邻域一致性和 EMA/student agreement；
-- 检查 auto-K 的上限、silhouette、稳定性和候选池规模之间的关系；
-- 暂时不要改 losses.py，weighted loss 通过现有接口调用。
-
-参考文献及对应思路：
-
-- Vaze et al., Generalized Category Discovery：mixed unlabeled pool 不能直接全量当 unknown；
-- Tarvainen and Valpola, Mean Teachers are Better Role Models：EMA teacher 稳定伪标签；
-- Sohn et al., FixMatch：按伪标签可靠度筛选或加权；
-- Van Gansbeke et al., SCAN：利用 nearest-neighbor consistency；
-- Han et al., AutoNovel：利用样本关系而不是只使用单样本分数；
-- Han et al., Deep Transfer Clustering、Fini et al., UNO、Wen et al., SimGCD：逐步把聚类结构和伪标签纳入训练，而不是只在最后 KMeans。
-
-验收标准：
-
-- 原有 19 个测试仍然通过；
-- 新增测试覆盖 hard/soft 两种模式、空候选和 k 边界；
-- 默认参数保持旧行为，新增方法必须通过显式参数开启；
-- 不直接修改 losses.py；
-- 不改变 known/novel 数据划分和指标定义。
-
-建议分支名：qiyuhan-discovery-selection。
-
-### 并行开发和合并顺序
-
-三个人开始工作前都执行：
-
-    git checkout main
-    git pull origin main
-
-然后分别创建 owner-joint-discovery、lky-uncertainty-losses、qiyuhan-discovery-selection 分支。每个人只提交自己负责范围内的文件，不上传数据集和 .pt 模型权重。
-
-建议合并顺序：
-
-1. 先合并同学 1 的 losses 和测试；
-2. 运行 compileall 和全部单元测试；
-3. 再合并同学 2 的 pipeline、discovery selection 和测试；
-4. 再合并负责人的 novel head、joint discovery 模块和测试；
-5. 由负责人统一运行三组以上 seed，并决定哪些方法进入论文主结果。
-
-如果两个分支确实需要修改同一个文件，应先提交独立函数或新模块，不要互相覆盖整段训练代码；最终由负责人统一接入。
+- 三个人都从最新 `main` 建分支，不提交数据集、`.pt` 权重和大型运行目录；
+- 负责人拥有 `train.py` 的最终接入权；同学 1 不改 `joint_discovery.py`，同学 2 不改 `losses.py` 或 `joint_discovery.py`；
+- 每个方向先提供独立函数和测试，再做主流程接入；
+- 合并后统一运行 `compileall`、全量单元测试和固定协议的多 seed 消融，不能仅凭单次 smoke test 宣称有效。
 
 ## 推荐实验协议
 
@@ -456,6 +379,24 @@ python train.py train_student --dataset cifar100 --data-root .\data `
 ```
 
 `--alpha-proxy 0` 时保持原有训练行为。该功能目前只是可选特征学习模块，需要和 CE / KD / SupCon 在同一协议下做消融对比后才能判断是否有效。
+
+启用负责人实现的联合新类发现实验版：
+
+```powershell
+python train.py train_student --dataset cifar100 --data-root .\data `
+  --num-known 60 --seed 42 --split-path .\splits_cifar100_60_40.json `
+  --backbone resnet18 --teacher-backbone resnet34 --student-backbone resnet18 `
+  --pretrained --discovery-pool --discovery-pool-mode mixed `
+  --limit-discovery 1000 --joint-discovery --joint-num-novel 40 `
+  --alpha-joint-discovery 0.2 --joint-confidence-threshold 1.0 `
+  --alpha-joint-consistency 1.0 --alpha-joint-balance 0.1 `
+  --alpha-joint-neighbor 0.1 --joint-neighbor-k 5 `
+  --teacher-ckpt .\runs\teacher\teacher.pt `
+  --student-ckpt .\runs\student_joint\student.pt `
+  --work-dir .\runs\student_joint --device auto
+```
+
+该命令必须带 `--discovery-pool`，因为 novel prototype 只在训练期的无标签 discovery pool 上学习。`--joint-confidence-threshold` 是相对均匀分布的置信度阈值，不是普通的最大 softmax 概率；当前模块只用于验证训练期 novel prototype 是否能学习结构，不能替代最终的检测和聚类评测。
 
 启用 discovery pool 的 NT-Xent 表示学习：
 

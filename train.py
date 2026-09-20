@@ -12,6 +12,7 @@ import torch
 os.environ.setdefault("TORCH_HOME", str(Path.cwd() / ".torch_cache"))
 
 from novel_discovery.data import TwoViewDataset, build_data_bundle
+from novel_discovery.joint_discovery import NovelPrototypeHead
 from novel_discovery.metrics import compute_auroc
 from novel_discovery.models import build_model
 from novel_discovery.pipeline import (
@@ -189,6 +190,24 @@ def parse_args(argv=None):
         default=0.5,
         help="Temperature for smoothing kNN agreement in soft candidate weighting.",
     )
+    p.add_argument(
+        "--joint-discovery",
+        action="store_true",
+        help="Enable the prototype-based joint novel-class discovery objective.",
+    )
+    p.add_argument("--joint-num-novel", type=int, default=40)
+    p.add_argument("--alpha-joint-discovery", type=float, default=1.0)
+    p.add_argument(
+        "--joint-confidence-threshold",
+        type=float,
+        default=1.1,
+        help="Relative novel confidence: max softmax probability multiplied by num novel classes.",
+    )
+    p.add_argument("--joint-assignment-temperature", type=float, default=1.0)
+    p.add_argument("--alpha-joint-consistency", type=float, default=1.0)
+    p.add_argument("--alpha-joint-balance", type=float, default=0.1)
+    p.add_argument("--alpha-joint-neighbor", type=float, default=0.1)
+    p.add_argument("--joint-neighbor-k", type=int, default=5)
     p.add_argument("--discovery-batch-size", type=int, default=0)
     p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
     p.add_argument("--discovery-temperature", type=float, default=0.2)
@@ -524,9 +543,10 @@ def fit_student(args):
         or args.alpha_discovery_energy > 0.0
         or args.alpha_discovery_selective_unknown > 0.0
         or args.alpha_discovery_selective_energy > 0.0
+        or args.joint_discovery
     )
     if uses_discovery_regularizer and not args.discovery_pool:
-        raise ValueError("discovery unknown/energy regularizers require --discovery-pool.")
+        raise ValueError("Discovery regularizers require --discovery-pool.")
     if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
         if args.discovery_pool_mode == "mixed" and (
             args.alpha_discovery_unknown > 0.0 or args.alpha_discovery_energy > 0.0
@@ -556,6 +576,13 @@ def fit_student(args):
         dropout=args.dropout,
         pretrained=args.pretrained,
     ).to(device)
+    novel_head = None
+    if args.joint_discovery:
+        novel_head = NovelPrototypeHead(
+            student.encoder.out_dim,
+            args.joint_num_novel,
+            temperature=args.joint_assignment_temperature,
+        ).to(device)
     discovery_selection_model = None
     if args.discovery_selection_model == "ema":
         discovery_selection_model = copy.deepcopy(student).to(device)
@@ -564,9 +591,13 @@ def fit_student(args):
             parameter.requires_grad_(False)
     teacher_ckpt = resolve_input_checkpoint(args.teacher_ckpt, args.work_dir, "teacher.pt")
     load_checkpoint(teacher, teacher_ckpt, device)
-    optim = torch.optim.AdamW(student.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    trainable_parameters = list(student.parameters())
+    if novel_head is not None:
+        trainable_parameters += list(novel_head.parameters())
+    optim = torch.optim.AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
     best_acc = -1.0
     best_state = None
+    best_novel_head_state = None
     best_epoch = 0
     for epoch in range(args.epochs):
         selective_weight = scheduled_weight(
@@ -614,6 +645,14 @@ def fit_student(args):
             discovery_neighbor_min_votes=args.discovery_neighbor_min_votes,
             discovery_soft_weighting=args.discovery_soft_weighting,
             discovery_neighbor_temperature=args.discovery_neighbor_temperature,
+            novel_head=novel_head,
+            alpha_joint_discovery=args.alpha_joint_discovery if args.joint_discovery else 0.0,
+            joint_confidence_threshold=args.joint_confidence_threshold,
+            joint_assignment_temperature=args.joint_assignment_temperature,
+            alpha_joint_consistency=args.alpha_joint_consistency,
+            alpha_joint_balance=args.alpha_joint_balance,
+            alpha_joint_neighbor=args.alpha_joint_neighbor,
+            joint_neighbor_k=args.joint_neighbor_k,
         )
         stats["discovery_selective_weight"] = selective_weight
         val_stats = evaluate_classification(student, val_loader, device)
@@ -621,9 +660,14 @@ def fit_student(args):
         if val_stats["known_acc"] > best_acc:
             best_acc = val_stats["known_acc"]
             best_state = copy.deepcopy(student.state_dict())
+            best_novel_head_state = (
+                copy.deepcopy(novel_head.state_dict()) if novel_head is not None else None
+            )
             best_epoch = epoch + 1
     if best_state is not None:
         student.load_state_dict(best_state)
+    if novel_head is not None and best_novel_head_state is not None:
+        novel_head.load_state_dict(best_novel_head_state)
     run_dir = ensure_dir(args.work_dir)
     save_json(run_dir / "config.json", {**vars(args), "best_epoch": best_epoch, "best_val_known_acc": best_acc})
     proto_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
@@ -640,8 +684,17 @@ def fit_student(args):
             "known_classes": list(bundle.known_classes),
             "prototypes": prototypes,
             "gaussian_stats": gaussian_stats,
+            "joint_novel_head": novel_head.state_dict() if novel_head is not None else None,
         },
     )
+    if novel_head is not None:
+        torch.save(
+            {
+                "num_novel": args.joint_num_novel,
+                "state_dict": novel_head.state_dict(),
+            },
+            run_dir / "novel_head.pt",
+        )
     print(f"saved to {student_ckpt} (best_epoch={best_epoch}, best_val_known_acc={best_acc:.4f})")
 
 
