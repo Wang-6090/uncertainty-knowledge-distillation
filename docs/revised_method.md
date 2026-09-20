@@ -52,11 +52,14 @@ choose a score or threshold.
 
 ## Discovery
 
-Unknown samples are filtered by the calibrated score and clustered in the
-normalized projection space. `--cluster-k oracle` is the known-class-count
-baseline and must be labelled as such. `--cluster-k auto` estimates the number
-of clusters using silhouette score without unknown labels; it is reported as a
-separate experiment.
+Unknown samples are filtered by the calibrated score and clustered in a
+whitened PCA projection space by default. `--cluster-k oracle` is the
+known-class-count baseline and must be labelled as such. `--cluster-k auto`
+estimates the number of clusters using label-free internal metrics without
+unknown labels; it is reported as a separate experiment. The search is allowed
+to reach the protocol maximum instead of being capped at 20. Reports also
+include the searched maximum and the gap between the best and second-best
+internal scores.
 
 This version is still a two-stage discovery pipeline. A later NCD/GCD phase
 will add an unlabeled discovery pool and multi-view pseudo-label consistency.

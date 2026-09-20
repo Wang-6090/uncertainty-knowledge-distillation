@@ -17,6 +17,7 @@ from novel_discovery.models import build_model
 from novel_discovery.pipeline import (
     build_loader,
     calibrate_threshold,
+    calibrate_class_thresholds,
     collect_diagonal_gaussian_stats,
     collect_prototypes,
     fit_score_normalization,
@@ -90,6 +91,8 @@ def parse_args():
     p.add_argument("--uncertainty-target-mode", choices=["confidence", "classification_error", "margin"], default="confidence")
     p.add_argument("--temperature", type=float, default=2.0)
     p.add_argument("--uncertainty-weight-mode", choices=["raw", "mean_normalized"], default="raw")
+    p.add_argument("--uncertainty-weight-min", type=float, default=None)
+    p.add_argument("--uncertainty-weight-max", type=float, default=None)
     p.add_argument("--teacher-ckpt", default="./runs/teacher.pt")
     p.add_argument("--student-ckpt", default="./runs/student.pt")
     p.add_argument(
@@ -117,13 +120,13 @@ def parse_args():
     p.add_argument(
         "--cluster-feature",
         choices=["projection", "projection_pca", "feature", "feature_pca"],
-        default="projection",
+        default="projection_pca",
         help="Representation used for clustering; *_pca applies PCA and whitening.",
     )
     p.add_argument(
         "--cluster-selection",
         choices=["silhouette", "composite", "stability"],
-        default="silhouette",
+        default="composite",
         help="K selection criterion: silhouette, composite internal metrics, or stability.",
     )
     p.add_argument("--cluster-pca-dim", type=int, default=32)
@@ -136,6 +139,20 @@ def parse_args():
     p.add_argument("--cluster-n-init", type=int, default=10)
     p.add_argument("--cluster-stability-repeats", type=int, default=5)
     p.add_argument("--threshold-percentile", type=float, default=95.0)
+    p.add_argument(
+        "--threshold-policy",
+        choices=["global", "class_conditional"],
+        default="class_conditional",
+        help="Calibrate one global or one known-only threshold per predicted class.",
+    )
+    p.add_argument("--threshold-min-class-samples", type=int, default=5)
+    p.add_argument(
+        "--candidate-purify",
+        choices=["none", "open_score", "entropy", "head_uncertainty", "uncertainty_consensus"],
+        default="open_score",
+        help="Label-free purification applied only before clustering rejected samples.",
+    )
+    p.add_argument("--candidate-keep-ratio", type=float, default=0.75)
     p.add_argument("--mc-samples", type=int, default=8)
     p.add_argument(
         "--score-mode",
@@ -420,6 +437,8 @@ def fit_student(args):
             temperature=args.temperature,
             kd_mode=args.kd_mode,
             uncertainty_weight_mode=args.uncertainty_weight_mode,
+            uncertainty_weight_min=args.uncertainty_weight_min,
+            uncertainty_weight_max=args.uncertainty_weight_max,
             discovery_loader=discovery_loader,
             alpha_discovery=args.alpha_discovery,
             alpha_discovery_unknown=args.alpha_discovery_unknown,
@@ -553,6 +572,23 @@ def discover(args):
         )
         threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
 
+    if args.threshold_policy == "class_conditional":
+        val_pred_class = outputs_val["logits"].argmax(axis=1)
+        threshold = calibrate_class_thresholds(
+            scores_val,
+            val_pred_class,
+            num_classes=len(bundle.known_classes),
+            percentile=args.threshold_percentile,
+            min_samples=args.threshold_min_class_samples,
+        )
+        if calibration_report is not None:
+            calibration_report["threshold_policy"] = {
+                "type": "known_val_class_conditional_percentile",
+                "percentile": args.threshold_percentile,
+                "min_class_samples": args.threshold_min_class_samples,
+            }
+            calibration_report["known_val_threshold"] = threshold.tolist()
+
     result, scores_test, pred_known, detail = run_discovery(
         outputs_test,
         threshold,
@@ -570,6 +606,8 @@ def discover(args):
         cluster_whiten=not args.cluster_no_whiten,
         cluster_n_init=args.cluster_n_init,
         cluster_stability_repeats=args.cluster_stability_repeats,
+        candidate_purify=args.candidate_purify,
+        candidate_keep_ratio=args.candidate_keep_ratio,
     )
     run_dir = ensure_dir(args.work_dir)
     save_json(run_dir / "config.json", vars(args))
@@ -583,6 +621,14 @@ def discover(args):
     save_json(run_dir / "discovery_report.json", result)
     if calibration_report is not None:
         save_json(run_dir / "calibration_report.json", calibration_report)
+    save_json(
+        run_dir / "threshold.json",
+        {
+            "policy": args.threshold_policy,
+            "percentile": args.threshold_percentile,
+            "values": np.asarray(threshold).tolist(),
+        },
+    )
     save_json(run_dir / "discovery_detail.json", {
         "score_mode": detail["score_mode"],
         "score": detail["score"].tolist(),
@@ -604,6 +650,12 @@ def discover(args):
         "cluster_feature": detail.get("cluster_feature"),
         "cluster_selection": detail.get("cluster_selection"),
         "cluster_diagnostics": detail.get("cluster_diagnostics", []),
+        "cluster_k_search_max": detail.get("cluster_k_search_max"),
+        "cluster_selection_score": detail.get("cluster_selection_score"),
+        "cluster_selection_margin": detail.get("cluster_selection_margin"),
+        "candidate_purify": detail.get("candidate_purify"),
+        "candidate_keep_ratio": detail.get("candidate_keep_ratio"),
+        "candidate_purification": detail.get("candidate_purification"),
     })
     np.save(run_dir / "open_scores.npy", scores_test)
     print(result)
@@ -619,7 +671,15 @@ def discover(args):
             },
         )
     save_json(run_dir / "score_normalization.json", score_normalization)
-    print(f"threshold={threshold:.6f}")
+    if np.asarray(threshold).ndim == 0:
+        print(f"threshold={float(threshold):.6f}")
+    else:
+        print(
+            "threshold="
+            f"class_conditional[min={float(np.min(threshold)):.6f},"
+            f"max={float(np.max(threshold)):.6f},"
+            f"mean={float(np.mean(threshold)):.6f}]"
+        )
 
 
 def inspect_data(args):

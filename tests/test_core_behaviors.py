@@ -12,7 +12,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from novel_discovery.losses import supervised_contrastive_loss
-from novel_discovery.pipeline import fit_score_normalization, run_discovery
+from novel_discovery.pipeline import (
+    calibrate_class_thresholds,
+    evaluate_cluster_candidates,
+    fit_score_normalization,
+    purify_candidate_mask,
+    run_discovery,
+)
 
 
 class LossBehaviorTest(unittest.TestCase):
@@ -55,6 +61,90 @@ class ScoreBehaviorTest(unittest.TestCase):
 
 
 class DiscoveryReportTest(unittest.TestCase):
+    def test_class_conditional_thresholds_fall_back_for_small_classes(self):
+        scores_known = np.array([1.0, 1.1, 1.2, 3.0, 3.1, 3.2])
+        thresholds = calibrate_class_thresholds(
+            scores_known=scores_known,
+            predicted_classes=np.array([0, 0, 0, 1, 1, 1]),
+            num_classes=3,
+            percentile=90.0,
+            min_samples=3,
+        )
+
+        self.assertGreater(thresholds[1], thresholds[0])
+        self.assertEqual(thresholds[2], np.percentile(scores_known, 90.0))
+
+    def test_candidate_purification_keeps_only_high_uncertainty_rejections(self):
+        outputs = {
+            "entropy": np.array([0.1, 0.2, 0.9, 1.0, 1.1]),
+            "epistemic": np.zeros(5),
+            "head_uncertainty": np.array([0.1, 0.2, 0.4, 0.8, 0.9]),
+            "probs": np.array(
+                [
+                    [0.9, 0.1],
+                    [0.8, 0.2],
+                    [0.6, 0.4],
+                    [0.4, 0.6],
+                    [0.5, 0.5],
+                ]
+            ),
+        }
+        mask, report = purify_candidate_mask(
+            outputs,
+            np.array([False, False, True, True, True]),
+            mode="head_uncertainty",
+            keep_ratio=2 / 3,
+        )
+
+        self.assertEqual(report["before_count"], 3)
+        self.assertEqual(report["after_count"], 2)
+        self.assertTrue(np.array_equal(mask, np.array([False, False, False, True, True])))
+
+    def test_candidate_purification_can_rank_by_open_score(self):
+        outputs = {
+            "entropy": np.zeros(5),
+            "epistemic": np.zeros(5),
+            "head_uncertainty": np.zeros(5),
+            "probs": np.full((5, 2), 0.5),
+        }
+        mask, report = purify_candidate_mask(
+            outputs,
+            np.array([True, True, True, False, False]),
+            mode="open_score",
+            keep_ratio=2 / 3,
+            open_score=np.array([0.1, 0.9, 0.8, 0.7, 0.6]),
+        )
+
+        self.assertEqual(report["before_count"], 3)
+        self.assertEqual(report["after_count"], 2)
+        self.assertTrue(np.array_equal(mask, np.array([False, True, True, False, False])))
+
+    def test_auto_k_search_reaches_protocol_maximum(self):
+        rng = np.random.default_rng(7)
+        centers = np.array(
+            [
+                [-6.0, -6.0],
+                [-6.0, 6.0],
+                [6.0, -6.0],
+                [6.0, 6.0],
+            ],
+            dtype=np.float32,
+        )
+        features = np.concatenate(
+            [center + 0.15 * rng.normal(size=(12, 2)) for center in centers],
+            axis=0,
+        ).astype(np.float32)
+
+        selected, diagnostics = evaluate_cluster_candidates(
+            features,
+            max_clusters=4,
+            selection="silhouette",
+            stability_repeats=2,
+        )
+
+        self.assertEqual(selected, 4)
+        self.assertEqual(diagnostics[-1]["k"], 4)
+
     def test_run_discovery_reports_candidate_pool_purity(self):
         outputs = {
             "entropy": np.array([0.1, 0.2, 2.0, 2.2, 2.1, 0.15], dtype=float),

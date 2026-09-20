@@ -47,7 +47,7 @@ Uncertainty-Aware Knowledge Distillation for Novel Class Discovery
 - 修正 `supervised_contrastive_loss`：只对 batch 内存在同类正样本的 anchor 计算监督对比损失，避免单样本类别稀释 SupCon。
 - 增加 `--uncertainty-weight-mode`：支持 `raw` 和 `mean_normalized`，便于公平比较标准 KD 与不确定性加权 KD。
 - 增强 discovery pool 训练：支持 `--discovery-loss consistency|nt_xent`、`--alpha-discovery-unknown` 和 `--discovery-pool-mode unknown|mixed`。
-- 增强聚类评估：`discover` 现在可选择 KMeans、Agglomerative、Spectral，可选择 projection/feature/PCA 特征，并记录 auto-K 诊断。
+- 增强聚类评估：`discover` 现在可选择 KMeans、Agglomerative、Spectral，可选择 projection/feature/PCA 特征，并记录 auto-K 诊断。默认使用 `projection_pca + composite`，避免高维原始投影上的 silhouette 被少数大块结构锁定在 K=2。
 - 增加候选池污染诊断：`discovery_report.json` 会记录 candidate count、true unknown count、false reject count、candidate purity 和 K 估计误差。
 - 改进分析脚本：`analyze_results.py` 的 Markdown 汇总会展示 candidate purity、estimated K 和更清晰的缺失文件错误。
 
@@ -60,7 +60,7 @@ Uncertainty-Aware Knowledge Distillation for Novel Class Discovery
 3. 主对照保持 `CE`、`standard KD`、`uncertainty KD`、`full representation`、`full + discovery pool`。
 4. 主检测分数优先比较 `entropy_proto` 与 `normalized_entropy_mahalanobis`。
 5. 聚类同时报告 oracle-K 和 auto-K；oracle-K 只作为上限分析，不作为最终无监督结论。
-6. 每次报告 candidate purity，先判断候选池是否被误拒已知样本污染，再解释聚类指标。
+6. 每次报告 candidate purity，先判断候选池是否被误拒已知样本污染，再解释聚类指标。auto-K 还要报告搜索上限、选择分数和分数间隔。
 
 ## 项目成员
 
