@@ -231,42 +231,48 @@ soft candidate weighting 的小规模 CIFAR-100 结果为：candidate purity 从
 
 | 角色 | 负责方向 | 主要修改范围 | 对应当前问题 |
 | --- | --- | --- | --- |
-| 负责人 | 实验协议、结果分析、主流程集成 | scripts/、analyze_results.py、analysis/、实验配置文件 | 实验设置不统一、结论缺少多 seed 验证 |
+| 负责人 | 端到端新类发现与联合训练算法 | 可新增 novel_discovery/novel_head.py、novel_discovery/joint_discovery.py、独立测试文件 | 当前仍是“检测后聚类”，还不是统一的新类发现模型 |
 | 同学 1 | 不确定性知识蒸馏与加权损失 | novel_discovery/losses.py、可新增 uncertainty_kd.py、独立测试文件 | 不确定性 KD 尚未证明稳定有效，候选 loss 目前较粗糙 |
 | 同学 2 | 未知检测、候选筛选与新类发现 | novel_discovery/pipeline.py、可新增 discovery_selection.py、独立测试文件 | AUROC/FPR95 较差，候选池污染严重，auto-K 不可靠 |
 
-### 负责人：实验与主流程集成
+### 负责人：端到端新类发现与联合训练
 
-负责人不与两位同学争抢同一个核心模块，主要负责把方法改动放进统一、可比较的实验协议中。
+负责人负责第三个算法方向，不只是做实验整合：把已知分类、未知候选筛选和未知类结构学习逐步放入统一训练目标，同时保留当前两阶段流程作为基线。
 
 代码任务：
 
-- 新增或整理 scripts/ 下的轻量实验脚本，固定 CIFAR-100 60/40、seed、数据量、epoch、backbone、评分方式和输出目录；
-- 完善 analyze_results.py 或新增实验汇总脚本，统一读取 discovery_report.json；
-- 增加多 seed 汇总、mean/std、方法对比表和失败实验记录；
-- 在两位同学完成模块后负责主流程集成、参数兼容检查和小规模实验；
-- 检查 README、实验配置和实际命令是否一致。
+- 新增独立的 novel head 或 discovery head，为未知样本提供可学习的类别表示；
+- 设计高置信候选的伪标签更新、聚类一致性损失和类别均衡约束；
+- 先实现“已知分类头 + novel prototype/head + discovery consistency”的最小版本，不直接一次复现完整 UNO 或 SimGCD；
+- 明确训练期和测试期使用的特征、伪标签与聚类 K，避免把测试标签泄漏进训练；
+- 在两位同学的模块稳定后，负责把接口接入 train.py，并对比当前检测后 KMeans 基线；
+- 同时维护独立的轻量实验脚本和结果记录，但不修改两位同学的核心函数。
 
-不应直接重写：
+建议主要修改文件：
 
-- 同学 1 正在修改的 losses.py；
-- 同学 2 正在修改的 pipeline.py；
-- 数据集划分规则和已有指标定义。
+- 可新增 novel_discovery/novel_head.py；
+- 可新增 novel_discovery/joint_discovery.py；
+- 可新增 tests/test_joint_discovery.py；
+- 最后集成时再最小化修改 train.py。
 
-建议优先验证：
+参考文献及对应方法：
 
-- CE、标准 KD、不确定性 KD、soft weighted loss 的单模块消融；
-- EMA + consensus、hard kNN、soft weighting 的发现端消融；
-- 至少 3 个 seed 后再判断方法是否稳定有效。
+- Fini et al., UNO, ICCV 2021：已知类监督、未知类伪标签和类别均衡的统一目标；可先借鉴 balanced assignment 和双头结构。
+- Wen et al., SimGCD, ICCV 2023：通过自蒸馏、伪标签和统一分类空间学习 novel structure；可借鉴周期性伪标签更新和 self-distillation。
+- Han et al., Deep Transfer Clustering, ICCV 2019：将已知类监督特征迁移到未知类聚类；可借鉴联合特征学习。
+- Van Gansbeke et al., SCAN, ECCV 2020：使用 nearest-neighbor consistency 学习类别结构；可借鉴 cluster/class consistency loss。
+- Vaze et al., GCD, CVPR 2022：known/novel 混合无标签池的统一类别发现设定；用于确定评测协议和避免把所有无标签样本当 unknown。
+- Caron et al., DINO, ICCV 2021：teacher-student 自蒸馏形成更有结构的表征；可作为后续增强表征的参考，但暂不直接替换 backbone。
 
-参考依据：
+验收标准：
 
-- Hinton 等人的 Knowledge Distillation：固定标准 KD 作为训练对照；
-- Vaze 等人的 GCD：强调 known/novel 混合无标签池和公平评测；
-- Fini 等人的 UNO、Wen 等人的 SimGCD：支持将训练设置和新类发现目标统一记录；
-- 多 seed、均值和标准差是为了避免把单次快速实验误当成最终结论。
+- 新模块可以独立关闭，不破坏当前 detection + clustering 基线；
+- 伪标签更新不使用测试集未知标签；
+- 对比报告 known accuracy、AUROC、FPR95、candidate purity、NMI 和 ARI；
+- 至少完成 toy smoke 和小规模 CIFAR 实验后，再考虑完整训练；
+- 新增 tests/test_joint_discovery.py，不修改同学 1 和同学 2 的测试文件。
 
-建议分支名：负责人可以在 main 的本地工作分支上负责集成，例如 owner-integration。
+建议分支名：owner-joint-discovery。
 
 ### 同学 1：不确定性知识蒸馏与加权损失
 
@@ -346,133 +352,17 @@ soft candidate weighting 的小规模 CIFAR-100 结果为：candidate purity 从
     git checkout main
     git pull origin main
 
-然后分别创建 owner-integration、lky-uncertainty-losses、qiyuhan-discovery-selection 分支。每个人只提交自己负责范围内的文件，不上传数据集和 .pt 模型权重。
+然后分别创建 owner-joint-discovery、lky-uncertainty-losses、qiyuhan-discovery-selection 分支。每个人只提交自己负责范围内的文件，不上传数据集和 .pt 模型权重。
 
 建议合并顺序：
 
 1. 先合并同学 1 的 losses 和测试；
 2. 运行 compileall 和全部单元测试；
 3. 再合并同学 2 的 pipeline、discovery selection 和测试；
-4. 负责人最后合并实验脚本、结果分析和 README；
-5. 在统一协议下运行三组以上 seed，再决定哪些方法进入论文主结果。
+4. 再合并负责人的 novel head、joint discovery 模块和测试；
+5. 由负责人统一运行三组以上 seed，并决定哪些方法进入论文主结果。
 
 如果两个分支确实需要修改同一个文件，应先提交独立函数或新模块，不要互相覆盖整段训练代码；最终由负责人统一接入。
-
-## 旧版两人分工记录（已由当前三人方案替代）
-
-下面的分工只使用“同学 1 / 同学 2”表示，目的是让两个人都能改代码，但尽量不修改同一批文件，减少冲突。这个分工直接对应当前实验暴露出来的问题：未知检测仍然较弱、候选池污染较重、kNN hard filter 只让候选变少但没有提高 candidate purity、不确定性知识蒸馏还没有被充分验证。
-
-第一版 soft candidate weighting 和 weighted loss 已经加入主分支并完成轻量测试，因此下面两部分的任务应理解为“继续完善、做消融和修正”，不是从零开始重复实现。
-
-### 同学 1：candidate weighting 与 discovery 筛选
-
-负责问题：
-
-- mixed discovery pool 中不能把所有样本都当未知；
-- 当前 consensus / EMA / kNN 仍然会选入较多误拒的已知样本；
-- 最新 kNN hard filter 实验中，候选数从 55 降到 39，但 candidate purity 从 0.3091 变为 0.3077，说明“硬过滤”没有真正改善候选质量；
-- 下一步应从“选中 / 不选中”的二值判断，改为“不同候选样本具有不同可信权重”的 soft weighting。
-
-建议实现方向：
-
-- 对 discovery sample 先计算 entropy / MSP / Energy / uncertainty 等风险信号；
-- 使用 consensus 得到初筛风险分数；
-- 使用 kNN 邻域一致性判断该样本附近是否也有疑似未知候选；
-- 使用 EMA/student 预测一致性判断当前模型判断是否稳定；
-- 最终输出 candidate_weight，范围建议控制在 0 到 1。
-
-建议权重来源：
-
-- consensus_score：熵、1-MSP、Energy、辅助不确定性等风险信号越一致，权重越高；
-- neighbor_agreement：近邻中也被认为像未知的样本越多，权重越高；
-- ema_student_agreement：EMA 模型和当前 student 对样本风险判断越一致，权重越高。
-
-可参考文献与对应思路：
-
-- Vaze et al., Generalized Category Discovery, CVPR 2022：无标签池同时包含已知类和未知类，不能把 discovery pool 全部当未知；当前 mixed pool 和 candidate purity 记录就是基于这个问题。
-- Sohn et al., FixMatch, NeurIPS 2020：只使用高置信伪标签，不可靠样本不应强行训练；这里对应“candidate_weight 低的样本减少训练强度”。
-- Tarvainen and Valpola, Mean Teachers are Better Role Models, NeurIPS 2017：EMA teacher 的预测更稳定；这里对应 discovery selection model = ema 和 EMA/student agreement。
-- Van Gansbeke et al., SCAN, ECCV 2020：类别结构可以通过近邻一致性学习；这里对应 kNN neighbor agreement。
-- Han et al., AutoNovel, ICLR 2020：新类发现不能只看单样本置信度，还要利用样本间关系；这里对应“样本自己像未知，并且邻居也像未知”。
-- Wen et al., SimGCD, ICCV 2023：训练阶段应利用无标签样本结构，而不是只在测试后聚类；这里支持把 candidate weighting 放到训练阶段。
-
-建议主要修改文件：
-
-- novel_discovery/pipeline.py
-- train.py
-- 可新增 tests/test_discovery_selection.py
-
-尽量不要修改：
-
-- novel_discovery/losses.py
-- README.md 的实验结论部分
-
-建议测试内容：
-
-- 未被初筛选中的样本权重为 0；
-- 邻域一致性越高，权重越高；
-- EMA/student 判断越一致，权重越高；
-- k 大于 batch size 时不报错；
-- 权重不出现 NaN，范围保持在 0 到 1。
-
-### 同学 2：weighted loss 与不确定性蒸馏
-
-负责问题：
-
-- 当前 selective energy 对所有被选中的候选样本几乎一视同仁；
-- 但候选池里仍混有误拒的已知样本，如果它们以同等强度参与 unknown / energy 训练，会继续污染模型；
-- 当前不确定性知识蒸馏已经接入代码，但还没有通过严格消融证明优于标准 KD；
-- 下一步需要让 loss 支持 per-sample weight，方便同学 1 输出的 candidate_weight 真正进入训练目标。
-
-建议实现方向：
-
-- teacher uncertainty 用于 KD weight，再进入 uncertainty-weighted KL / feature KD；
-- candidate_weight 用于 weighted selective energy；
-- 更可靠的候选样本权重大，不可靠候选样本权重小；
-- 新增 per-sample energy margin loss 和 weighted energy margin loss，同时保持旧的 energy_margin_loss 接口不被破坏。
-
-建议同时整理不确定性蒸馏权重：
-
-- raw：保持当前 exp(-uncertainty) 行为；
-- mean_normalized：让 batch 平均权重接近 1，避免只是整体改变 KD 强度；
-- clamp：限制最小 / 最大权重，避免少数样本权重过大或过小；
-- 后续消融比较 CE、标准 KD、不确定性 KD、特征 KD 和完整方法。
-
-可参考文献与对应思路：
-
-- Hinton et al., Distilling the Knowledge in a Neural Network, 2015：标准 KD 使用温度 soft logits 和 KL 散度；当前 KL 蒸馏基线来自这里。
-- Kendall and Gal, What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision?, NeurIPS 2017：区分偶然不确定性和认知不确定性；当前项目需要明确不同不确定性信号在训练和检测中的作用。
-- Gal and Ghahramani, Dropout as a Bayesian Approximation, ICML 2016：MC Dropout 可估计模型不确定性；当前检测端的 epistemic uncertainty 和 predictive entropy 可参考该思路。
-- Liu et al., Energy-based Out-of-distribution Detection, NeurIPS 2020：Energy 分数可用于 OOD 检测和训练约束；当前 selective energy 和 weighted energy loss 主要参考这个方向。
-- Hendrycks et al., Deep Anomaly Detection with Outlier Exposure, ICLR 2019：辅助异常样本可以降低模型对异常输入的置信度；但 mixed pool 不保证全是异常，因此需要 weighted selective loss，而不是全量 OE。
-- Sohn et al., FixMatch, NeurIPS 2020：伪标签样本应该按可靠程度筛选或加权；这里对应对 candidate_weight 使用不同 loss 强度。
-
-建议主要修改文件：
-
-- novel_discovery/losses.py
-- 可新增 novel_discovery/uncertainty_kd.py
-- 可新增 tests/test_uncertainty_kd.py
-
-尽量不要修改：
-
-- novel_discovery/pipeline.py 的训练主循环
-- train.py 的参数入口
-- README.md 的实验结论部分
-
-建议测试内容：
-
-- mean_normalized 权重平均值接近 1；
-- clamp 后权重在指定范围内；
-- weighted energy loss 在空 outlier 输入时返回 0；
-- weighted energy loss 可以正常反向传播；
-- 样本权重越高，对最终 loss 的影响越大；
-- 旧的 energy_margin_loss 和 distillation_loss 原接口仍然可用。
-
-### 两部分如何衔接
-
-同学 1 输出 candidate_weight；同学 2 提供 weighted_energy_margin_loss。最终主流程可以变成：mixed discovery sample 先根据风险、邻域和 EMA/student 一致性计算 candidate_weight，再根据 candidate_weight 计算 weighted selective energy，最后训练学生模型。
-
-这个衔接正好对应当前最大问题链条：未知检测不可靠导致候选池污染，错误候选又以同等权重参与训练，进一步损伤已知分类和未知检测。因此，下一步不是继续单纯调小 alpha 或 ratio，而是把“候选是否可靠”和“候选以多大强度参与训练”拆开处理。
 
 ## 推荐实验协议
 
