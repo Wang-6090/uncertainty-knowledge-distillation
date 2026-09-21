@@ -1,0 +1,31 @@
+# Data and large artifacts
+data/
+runs/
+.torch_cache/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+.venv_cuda/
+venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local archives or temp outputs
+analysis/archive_old/
+*.pth
+*.pt
+*.ckpt
+*.npy
+
+# Local downloaded datasets
+CIFAR-100-dataset-main/
+

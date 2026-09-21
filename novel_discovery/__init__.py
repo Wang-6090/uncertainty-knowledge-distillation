@@ -1,0 +1,2 @@
+"""Novel class discovery package."""
+

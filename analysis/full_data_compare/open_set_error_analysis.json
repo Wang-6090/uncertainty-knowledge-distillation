@@ -1,0 +1,202 @@
+[
+  {
+    "run_dir": "runs\\cifar_full_data_entropy_proto",
+    "score_mode": "entropy_proto",
+    "config": {
+      "command": "discover",
+      "dataset": "cifar100",
+      "data_root": ".\\data",
+      "split_path": ".\\splits_cifar100_60_40.json",
+      "num_known": 60,
+      "seed": 42,
+      "image_size": 64,
+      "batch_size": 32,
+      "num_workers": 0,
+      "backbone": "resnet18",
+      "pretrained": true,
+      "proj_dim": 128,
+      "dropout": 0.2,
+      "download": false,
+      "device": "auto",
+      "work_dir": ".\\runs\\cifar_full_data_entropy_proto",
+      "limit_train": 0,
+      "limit_val": 0,
+      "limit_test": 0,
+      "student_ckpt": ".\\runs\\cifar_full_data_train\\student.pt",
+      "num_novel": 40,
+      "threshold_percentile": 95.0,
+      "mc_samples": 4,
+      "score_mode": "entropy_proto",
+      "open_val_ratio": 0.0,
+      "auto_calibrate_score": false
+    },
+    "metrics": {
+      "auroc": 0.6147647291666667,
+      "fpr95": 0.8323333333333334,
+      "known_ratio": 0.9428,
+      "known_class_correct": 2754,
+      "known_class_wrong": 2935,
+      "known_class_accuracy_after_accept": 0.4840921075760239,
+      "known_class_accuracy_all_known": 0.459,
+      "known_correct": 5689,
+      "known_rejected": 311,
+      "unknown_correct_reject": 261,
+      "unknown_false_accept": 3739,
+      "total": 10000,
+      "known_accept_rate": 0.9481666666666667,
+      "unknown_reject_rate": 0.06525,
+      "cluster_acc": 0.17307692307692307,
+      "cluster_nmi": 0.4860270376979542,
+      "cluster_ari": 0.035846584801742784
+    },
+    "score_summary": {
+      "known": {
+        "count": 6000,
+        "mean": 1.3481097609975066,
+        "std": 0.9117774098252142,
+        "p25": 0.5195923000574112,
+        "median": 1.2850353717803955,
+        "p75": 2.096921682357788
+      },
+      "unknown": {
+        "count": 4000,
+        "mean": 1.6997559182518163,
+        "std": 0.8173905790714758,
+        "p25": 1.0685701966285706,
+        "median": 1.7845651507377625,
+        "p75": 2.3486013412475586
+      }
+    },
+    "class_summary": {
+      "known_total": 6000,
+      "unknown_total": 4000,
+      "known_rejected": 311,
+      "unknown_false_accept": 3739,
+      "known_class_correct": 0,
+      "known_class_accuracy_after_accept": 0.4840921075760239,
+      "known_class_accuracy_all_known": 0.459
+    },
+    "top_known_reject_classes": [
+      {
+        "raw_label": 42,
+        "name": "leopard",
+        "count": 100,
+        "accuracy": 0.0,
+        "reject_rate": 0.17
+      },
+      {
+        "raw_label": 44,
+        "name": "lizard",
+        "count": 100,
+        "accuracy": 0.0,
+        "reject_rate": 0.15
+      },
+      {
+        "raw_label": 65,
+        "name": "rabbit",
+        "count": 100,
+        "accuracy": 0.0,
+        "reject_rate": 0.14
+      },
+      {
+        "raw_label": 33,
+        "name": "forest",
+        "count": 100,
+        "accuracy": 0.0,
+        "reject_rate": 0.12
+      },
+      {
+        "raw_label": 38,
+        "name": "kangaroo",
+        "count": 100,
+        "accuracy": 0.0,
+        "reject_rate": 0.12
+      },
+      {
+        "raw_label": 26,
+        "name": "crab",
+        "count": 100,
+        "accuracy": 0.0,
+        "reject_rate": 0.11
+      },
+      {
+        "raw_label": 45,
+        "name": "lobster",
+        "count": 100,
+        "accuracy": 0.0,
+        "reject_rate": 0.11
+      },
+      {
+        "raw_label": 80,
+        "name": "squirrel",
+        "count": 100,
+        "accuracy": 0.0,
+        "reject_rate": 0.11
+      }
+    ],
+    "top_novel_false_accept_classes": [
+      {
+        "raw_label": 17,
+        "name": "castle",
+        "count": 100,
+        "false_accept_rate": 0.99,
+        "correct_reject_rate": 0.01
+      },
+      {
+        "raw_label": 86,
+        "name": "telephone",
+        "count": 100,
+        "false_accept_rate": 0.99,
+        "correct_reject_rate": 0.01
+      },
+      {
+        "raw_label": 71,
+        "name": "sea",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 53,
+        "name": "orange",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 35,
+        "name": "girl",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 90,
+        "name": "train",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 89,
+        "name": "tractor",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      },
+      {
+        "raw_label": 13,
+        "name": "bus",
+        "count": 100,
+        "false_accept_rate": 0.98,
+        "correct_reject_rate": 0.02
+      }
+    ],
+    "known_classes": [],
+    "novel_classes": [],
+    "pred_cluster_summary": {
+      "non_negative": 572,
+      "unique_clusters": 40
+    }
+  }
+]

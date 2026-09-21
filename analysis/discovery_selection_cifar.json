@@ -1,0 +1,173 @@
+{
+  "protocol": {
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "methods": [
+      "hard",
+      "soft"
+    ]
+  },
+  "methods": {
+    "hard": {
+      "runs": [
+        "ds2_cifar_s42_hard_detect_auto",
+        "ds2_cifar_s43_hard_detect_auto",
+        "ds2_cifar_s44_hard_detect_auto"
+      ],
+      "metrics": {
+        "auroc": {
+          "mean": 0.47800079411607915,
+          "std": 0.02497776391937043,
+          "count": 3
+        },
+        "aupr": {
+          "mean": 0.4022427863298496,
+          "std": 0.03016002601218899,
+          "count": 3
+        },
+        "fpr95": {
+          "mean": 0.946517169299859,
+          "std": 0.014470210705660411,
+          "count": 3
+        },
+        "oscr": {
+          "mean": 0.028866102262636303,
+          "std": 0.002774691098816331,
+          "count": 3
+        },
+        "known_class_accuracy_all_known": {
+          "mean": 0.04776588594178171,
+          "std": 0.0054954997328571205,
+          "count": 3
+        },
+        "known_accept_rate": {
+          "mean": 0.9434492233375434,
+          "std": 0.004838041057750122,
+          "count": 3
+        },
+        "unknown_reject_rate": {
+          "mean": 0.0726933782718782,
+          "std": 0.043591195877286895,
+          "count": 3
+        },
+        "cluster_candidate_purity": {
+          "mean": 0.4247252747252747,
+          "std": 0.15359771934818134,
+          "count": 3
+        },
+        "cluster_candidate_unknown_recall": {
+          "mean": 1.0,
+          "std": 0.0,
+          "count": 3
+        },
+        "cluster_nmi": {
+          "mean": 0.465010122996687,
+          "std": 0.2877227485783025,
+          "count": 3
+        },
+        "cluster_ari": {
+          "mean": 0.008425177430311346,
+          "std": 0.012072343407953427,
+          "count": 3
+        },
+        "cluster_unknown_only_nmi": {
+          "mean": 0.5202079593608072,
+          "std": 0.2949358468770653,
+          "count": 3
+        },
+        "cluster_unknown_only_ari": {
+          "mean": 0.020929303431577836,
+          "std": 0.060801423616908885,
+          "count": 3
+        },
+        "silhouette": {
+          "mean": 0.006292574440768324,
+          "std": 0.00947631553373223,
+          "count": 3
+        }
+      }
+    },
+    "soft": {
+      "runs": [
+        "ds2_cifar_s42_soft_detect_auto",
+        "ds2_cifar_s43_soft_detect_auto",
+        "ds2_cifar_s44_soft_detect_auto"
+      ],
+      "metrics": {
+        "auroc": {
+          "mean": 0.4763407761411509,
+          "std": 0.01765883442927815,
+          "count": 3
+        },
+        "aupr": {
+          "mean": 0.3808612191718361,
+          "std": 0.02174595529338751,
+          "count": 3
+        },
+        "fpr95": {
+          "mean": 0.950930960875121,
+          "std": 0.017257795690091133,
+          "count": 3
+        },
+        "oscr": {
+          "mean": 0.033983487537892265,
+          "std": 0.0070240235758692255,
+          "count": 3
+        },
+        "known_class_accuracy_all_known": {
+          "mean": 0.05554100467548583,
+          "std": 0.012811520393240275,
+          "count": 3
+        },
+        "known_accept_rate": {
+          "mean": 0.9425101376055308,
+          "std": 0.01576684984300538,
+          "count": 3
+        },
+        "unknown_reject_rate": {
+          "mean": 0.03516851954323658,
+          "std": 0.018138811448912263,
+          "count": 3
+        },
+        "cluster_candidate_purity": {
+          "mean": 0.28319935892620135,
+          "std": 0.10850039132749188,
+          "count": 3
+        },
+        "cluster_candidate_unknown_recall": {
+          "mean": 1.0,
+          "std": 0.0,
+          "count": 3
+        },
+        "cluster_nmi": {
+          "mean": 0.5377997778514629,
+          "std": 0.29457754972026323,
+          "count": 3
+        },
+        "cluster_ari": {
+          "mean": -0.01613542047043622,
+          "std": 0.002483267979927796,
+          "count": 3
+        },
+        "cluster_unknown_only_nmi": {
+          "mean": 0.6911200887638748,
+          "std": 0.10218436519026378,
+          "count": 3
+        },
+        "cluster_unknown_only_ari": {
+          "mean": -0.01998572448251249,
+          "std": 0.03461629022978484,
+          "count": 3
+        },
+        "silhouette": {
+          "mean": 2.7246706076529865e-08,
+          "std": 1.8302496643298832e-08,
+          "count": 3
+        }
+      }
+    }
+  }
+}
