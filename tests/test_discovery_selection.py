@@ -8,6 +8,7 @@ from novel_discovery.discovery_selection import (
     evaluate_selection,
     filter_by_neighbor_agreement,
     knn_agreement,
+    relation_affinity,
     risk_score,
     select_candidates,
 )
@@ -52,6 +53,12 @@ class DiscoverySelectionTest(unittest.TestCase):
         report = evaluate_selection([False, False, True, True], [0.1, 0.2, 0.8, 0.9], mask)
         self.assertAlmostEqual(report["candidate_purity"], 0.0)
         self.assertAlmostEqual(report["unknown_reject_rate"], 0.0)
+
+    def test_relation_affinity_is_row_normalized_and_bounded(self):
+        affinity = relation_affinity(np.eye(4), k=10)
+        self.assertEqual(affinity.shape, (4, 4))
+        np.testing.assert_allclose(affinity.sum(axis=1), np.ones(4))
+        self.assertTrue(np.all(np.diag(affinity) == 0.0))
 
 
 if __name__ == "__main__":

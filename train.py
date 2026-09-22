@@ -323,6 +323,8 @@ def parse_args(argv=None):
     )
     p.add_argument("--cluster-no-whiten", action="store_true")
     p.add_argument("--cluster-n-init", type=int, default=10)
+    p.add_argument("--cluster-max-k", type=int, default=None,
+                   help="Maximum K considered by auto-K; defaults to num-novel for compatibility.")
     p.add_argument("--cluster-stability-repeats", type=int, default=5)
     p.add_argument(
         "--skip-clustering",
@@ -1242,6 +1244,7 @@ def discover(args):
         cluster_whiten=not args.cluster_no_whiten,
         cluster_n_init=args.cluster_n_init,
         cluster_stability_repeats=args.cluster_stability_repeats,
+        cluster_max_k=args.cluster_max_k,
         candidate_purify=args.candidate_purify,
         candidate_keep_ratio=args.candidate_keep_ratio,
         enable_clustering=not args.skip_clustering,

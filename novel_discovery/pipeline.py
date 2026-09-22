@@ -1658,6 +1658,7 @@ def run_discovery(
     cluster_whiten: bool = True,
     cluster_n_init: int = 10,
     cluster_stability_repeats: int = 5,
+    cluster_max_k: int | None = None,
     candidate_purify: str = "none",
     candidate_keep_ratio: float = 1.0,
     enable_clustering: bool = True,
@@ -1864,7 +1865,7 @@ def run_discovery(
         if cluster_k != "oracle":
             selected_cluster_k, cluster_diagnostics = evaluate_cluster_candidates(
                 novel_features,
-                max_clusters=num_novel,
+                max_clusters=(int(cluster_max_k) if cluster_max_k is not None else num_novel),
                 method=cluster_method,
                 selection=cluster_selection,
                 n_init=cluster_n_init,

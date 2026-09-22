@@ -94,13 +94,14 @@ def knn_agreement(mask: Iterable[bool], features: np.ndarray, k: int = 5) -> np.
 
 
 def auto_k(features: np.ndarray, k_values: Iterable[int] | None = None,
+           max_k: int = 20,
            random_state: int = 0, n_init: int = 10) -> tuple[int | None, list[dict]]:
     """Choose K by silhouette, handling tiny/degenerate candidate pools."""
     x = np.asarray(features, dtype=np.float64)
     n = x.shape[0] if x.ndim == 2 else 0
     if n < 3:
         return (1 if n else None), []
-    candidates = list(k_values or range(2, min(10, n - 1) + 1))
+    candidates = list(k_values or range(2, min(max(int(max_k), 2), n - 1) + 1))
     diagnostics: list[dict] = []
     best_k, best_value = None, -np.inf
     for k in candidates:
@@ -138,6 +139,32 @@ def filter_by_neighbor_agreement(mask: Iterable[bool], features: np.ndarray,
     mask = np.asarray(mask, dtype=bool)
     agreement = knn_agreement(mask, features, k=k)
     return mask & (agreement >= float(np.clip(min_agreement, 0.0, 1.0)))
+
+
+def relation_affinity(features: np.ndarray, k: int = 5, temperature: float = 0.2) -> np.ndarray:
+    """Build a sparse AutoNovel-style sample relation matrix.
+
+    The matrix contains cosine-similarity weights only for each sample's k
+    nearest neighbours, is row-normalized, and uses no labels.  It can be
+    consumed by downstream relation/graph clustering ablations.
+    """
+    x = np.asarray(features, dtype=np.float64)
+    if x.ndim != 2:
+        raise ValueError("features must be a 2D array")
+    n = x.shape[0]
+    affinity = np.zeros((n, n), dtype=np.float64)
+    if n <= 1 or k <= 0:
+        return affinity
+    normalized = x / np.maximum(np.linalg.norm(x, axis=1, keepdims=True), 1e-12)
+    similarity = normalized @ normalized.T
+    np.fill_diagonal(similarity, -np.inf)
+    effective_k = min(int(k), n - 1)
+    neighbours = np.argpartition(-similarity, kth=effective_k - 1, axis=1)[:, :effective_k]
+    temperature = max(float(temperature), 1e-6)
+    for row, indices in enumerate(neighbours):
+        values = np.exp(np.clip(similarity[row, indices] / temperature, -60.0, 60.0))
+        affinity[row, indices] = values / max(values.sum(), 1e-12)
+    return affinity
 
 
 def evaluate_selection(y_unknown: Iterable[bool], score: Iterable[float],
