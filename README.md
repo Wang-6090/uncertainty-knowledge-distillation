@@ -33,6 +33,7 @@
 - `ImageFolder` 既支持单目录数据，也支持 `root/train`、`root/test` 双目录数据；双目录模式会自动使用训练目录划分 train/val/discovery pool，测试目录作为开放测试集。
 - 支持固定已知类 / 未知类划分，例如 `splits_cifar100_60_40.json`。
 - 支持训练集、验证集、开放测试集和 discovery pool。
+- `--open-val-ratio` 会从训练划分中单独保留已知/未知 open-validation 样本，用于选择 OOD 分数；最终测试集不参与选择。
 - 支持数据增强、归一化、样本数量限制和 `--device auto` 自动选择 CUDA 或 CPU。
 - 默认将 torchvision 预训练权重缓存到项目下的 `.torch_cache`。
 
@@ -645,7 +646,7 @@ python aggregate_multiseed.py --root .\runs `
 ## Latest local validation update (2026-09-20)
 
 - The discovery pipeline now reuses the final candidate clustering result when writing per-sample assignments. This removes a duplicate PCA/KMeans pass without changing metric definitions.
-- A full open-validation run used 20% of the CIFAR-100 open test pool for score selection and evaluated the remaining 8,000 images. Automatic score selection chose `unified_novel_mass`: AUROC `0.6743`, AUPR `0.5607`, FPR95 `0.8115`, known accuracy `0.4892`, and unknown reject rate `0.1474`.
+- Historical note (protocol corrected below): this run used 20% of the CIFAR-100 open test pool for score selection. Its reported test metrics are not a clean held-out estimate and must not be used as a final generalization claim.
 - On the same checkpoint, `projection_pca` was the strongest tested clustering representation. In a 2,000-image comparison, unknown-only ARI was `0.1639`, compared with `0.1405` for `feature_pca`, `0.0945` for `novel_pca`, and `0.0727` for `unified_pca`. On the full open-validation run, `projection_pca` reached unknown-only ARI `0.0990`, versus `0.0781` for `unified_pca`.
 - With `projection_pca` fixed, KMeans still exceeded Agglomerative clustering in the 2,000-image comparison (`0.1639` vs. `0.1242` unknown-only ARI), so KMeans remains the default clustering baseline.
 - The command-line default for `--cluster-feature` is now `projection_pca`. This is a provisional single-seed choice and must be checked with multiple seeds before being treated as a final method conclusion.
@@ -690,3 +691,135 @@ python train.py discover --dataset cifar100 --candidate-purify uncertainty_conse
 ```
 
 候选纯化实验应至少同时查看 AUROC、FPR95、known accuracy、unknown reject rate、candidate purity 和 candidate unknown recall；如果只是候选数量减少而纯度或聚类 NMI/ARI没有稳定提升，就不应继续把它作为主线方法。
+
+## 本轮新增：ReAct 特征裁剪检测基线（2026-09-26）
+
+当前未知检测的核心问题仍是已知/未知分数分布重叠。代码新增可选 `--react-percentile` 和 `--score-mode react_energy`，参考 Sun et al., *ReAct: Out-of-distribution Detection With Rectified Activations*（NeurIPS 2021）的做法：
+
+1. 只用已知训练集提取特征，按指定分位点估计一个激活上限；
+2. 对验证集、测试集和 open-validation 样本的特征做上限裁剪；
+3. 使用裁剪后的特征重新通过已训练分类器，计算 Energy 分数；
+4. 仍然用已知验证集确定阈值，不使用测试集未知标签拟合裁剪值或阈值。
+
+该方法不重新训练模型，适合作为低成本未知检测消融。默认 `--react-percentile 0`，不会改变历史实验。建议先比较：
+
+```powershell
+python train.py discover --dataset cifar100 --data-root .\data `
+  --num-known 60 --seed 42 --split-path .\splits_cifar100_60_40.json `
+  --student-ckpt .\runs\cifar_full_pretrained_joint_e5\student.pt `
+  --score-mode react_energy --react-percentile 99.5 `
+  --limit-val 300 --limit-test 1000 --skip-clustering `
+  --work-dir .\runs\react_energy_smoke --device cpu
+```
+
+需要与原始 `energy` 在相同 checkpoint、相同数据子集、相同 MC 设置下比较 AUROC、AUPR、FPR95、known accuracy 和 unknown reject rate。ReAct 只改善检测分数，不应直接宣称改善蒸馏或新类聚类；若检测分数改善但候选池聚类没有改善，下一步仍应处理候选污染和未知特征结构。
+
+相关依据还包括 Liu et al., *Energy-based Out-of-Distribution Detection*（NeurIPS 2020），其核心是用能量而非最大 softmax 概率进行 OOD 排序；ReAct 的裁剪步骤用于抑制已知类别特征中的异常高响应。两者结合适合作为当前项目的检测侧基线，但不是对不确定性知识蒸馏本身有效性的证明。
+
+本地小规模 smoke test（同一 checkpoint、128 张测试样本、120 张验证样本、2 次 MC 采样）中，原始 Energy 的 AUROC 为 `0.4884`、FPR95 为 `0.9398`；ReAct-99.5% Energy 的 AUROC 为 `0.4916`、FPR95 仍为 `0.9398`。这只是代码和评估路径验证，提升极小且不是正式结论；正式实验需要固定完整数据规模并至少运行多个 seed。
+
+## 本轮新增：组合分数标准化（2026-09-26）
+
+原有 `full` 分数直接相加熵、认知不确定性、偶然不确定性和原型距离。这些量的数值尺度不同，可能导致某一个分量主导未知检测排序，因而不能公平体现各模块的贡献。现新增可选 `--score-mode normalized_full`：
+
+- 只使用已知验证集估计每个分量的均值和标准差；
+- 对 entropy、epistemic、aleatoric 和 prototype distance 分别做 z-score；
+- 再按现有权重组合，默认权重仍为 `(0.5, 0.3, 0.2)`，原型距离保持单独加入；
+- 不使用测试集未知标签拟合标准化参数，避免评估泄漏；
+- 默认分数模式不变，因此不会破坏历史实验的可复现性。
+
+示例：
+
+```powershell
+python train.py discover --dataset cifar100 --score-mode normalized_full `
+  --student-ckpt .\runs\cifar_full_pretrained_joint_e5\student.pt `
+  --limit-val 300 --limit-test 1000 --skip-clustering `
+  --work-dir .\runs\normalized_full_smoke --device cpu
+```
+
+该方法解决的是组合分数的尺度不一致问题，不等同于已经解决未知检测或证明蒸馏有效。应在同一 checkpoint、数据划分和 MC 设置下，与 `full`、`entropy_proto`、`energy` 一起比较 AUROC、FPR95、AUPR、known accuracy 和 unknown reject rate。
+
+本地轻量对比（CIFAR-100，60/40 划分，固定已有 checkpoint，验证集 120、测试集 128、MC=2、CPU、跳过聚类）如下：
+
+| score mode | AUROC | AUPR | FPR95 | known accuracy | unknown reject rate |
+|---|---:|---:|---:|---:|---:|
+| `full` | 0.4597 | 0.3194 | 0.9398 | 0.4337 | 0.0444 |
+| `entropy_proto` | 0.4576 | 0.3181 | 0.9157 | 0.4337 | 0.0444 |
+| `normalized_full` | 0.5012 | 0.3481 | 0.9036 | 0.4578 | 0.0444 |
+
+在这次小样本测试中，标准化组合分数相对两个基线有改善，但未知拒绝率没有改善，且样本量太小，不能作为正式结论。下一步仍应在完整测试集和多个随机种子上确认；若收益不稳定，应优先改进训练得到的特征空间，而不是继续堆叠检测分数。
+
+## 本轮修正：open-validation 与测试集隔离（2026-09-26）
+
+审查发现旧实现的 `--open-val-ratio` 从开放测试集拆出一部分，用于自动选择 OOD 分数，再在剩余测试样本上报告结果。虽然未直接按测试标签调阈值，但 score-mode 的选择仍接触测试分布，会使最终测试估计偏乐观。现已改为：已知 open-validation 样本从训练划分中的已知验证子集保留，未知 open-validation 样本从训练划分中的 novel pool 保留；这些样本从相应的 validation / discovery pool 中扣除。CIFAR-100 的官方 test split 完整保留作最终评估。单元测试验证了 calibration、open-validation、discovery pool 和 test 的样本 ID 互不重叠。
+
+GPU smoke（固定旧 checkpoint，`open-val-ratio=0.2`、自动快速评分选择、验证/测试各受限为 128）中，自动选择 `novel_msp`，open-validation AUROC `0.6013`；独立测试 AUROC `0.5569`、FPR95 `0.9157`、unknown reject rate `0.1333`。本次数据量很小，仅证明新协议能运行。旧版从测试集挑选评分模式的结果（包括此前记录的 `0.6743`）不是严格 held-out 指标，不能作为最终性能结论；应按新协议重新跑正式实验。
+
+## 本轮尝试：纯未知池的特征原型排斥（2026-09-26）
+
+当前已有 Energy separation 和未知置信度约束，但它们主要作用在分类 logits 上；为直接检验“未知样本靠近已知特征中心”是否是检测失败原因，新增可选 `--alpha-discovery-feature-margin` 与 `--discovery-feature-margin`。做法是将 discovery 特征和已知分类器权重归一化，计算其与最近已知原型的余弦相似度，并惩罚超过 margin 的样本：
+
+```text
+L_feature_unknown = mean(relu(max_c cosine(z_unknown, w_c) - margin))
+```
+
+该损失只允许用于 `--discovery-pool-mode unknown`，不允许用于 mixed pool；默认权重为 0，不改变旧实验。实现是基于类原型/角度间隔的实验性特征排斥，不是对某篇论文算法的原样复现。相关方法背景可参考：Khosla et al., *Supervised Contrastive Learning*（NeurIPS 2020）的类内/类间对比表征思路；Hendrycks et al., *Deep Anomaly Detection with Outlier Exposure*（ICLR 2019）的辅助异常样本训练协议；Liu et al., *Energy-based Out-of-Distribution Detection*（NeurIPS 2020）的已知/异常分离目标。本文新增项需要单独消融，不能据此宣称复现了这些论文。
+
+小规模 GPU smoke 对比（CIFAR-100，512 张已知训练样本、512 张纯未知 discovery 样本、1 epoch、同一教师权重和 seed；测试 128 张，Energy 检测、跳过聚类）中，基线 AUROC/FPR95 为 `0.4750/0.9759`，加特征排斥后为 `0.4043/0.9157`；unknown reject rate 分别为 `0.0667/0.0444`。known accuracy 只有约 `0.084/0.048`。因此目前不能说该方法有效：它降低了 FPR95，但 AUROC 和未知拒绝率变差，而且 1 epoch/小样本导致分类能力太弱，结果只用于确认代码可训练，不足以定论。**不要将该损失作为默认配置。**
+
+后续判断顺序：先用相同 seed、完整已知训练数据和足够 epoch 做 baseline / feature-margin 配对实验，再至少用 3 个 seed 比较 AUROC、AUPR、FPR95、known accuracy、unknown reject rate 及已知/未知特征到最近原型的距离分布。若检测收益仍不稳定或损害已知分类，应放弃该项；优先回到更可靠的预训练特征和训练协议，再评估 Energy、Mahalanobis 与特征表征学习的独立贡献。
+
+## 本轮继续尝试：KNN-OOD、open-validation 阈值和 Gaussian NLL（2026-09-26）
+
+在上一版协议修复基础上，本轮尝试三种不同方向：
+
+1. **KNN-OOD**：参考 Sun et al., *Out-of-Distribution Detection with Deep Nearest Neighbors*（ICML 2022），以已知训练样本的特征库为参考，按 k 近邻余弦距离评分。新增 `--knn-ood`、`--knn-k`、`--knn-bank-size`、`--knn-feature features|proj`。当前小规模同 checkpoint 测试中，projection KNN AUROC `0.4744`、FPR95 `1.0000`；backbone feature KNN AUROC `0.3360`、FPR95 `1.0000`。不支持将 KNN 作为当前模型的改进方案，说明当前表示空间的局部近邻距离也不可靠。
+2. **open-validation 阈值工作点**：新增 `--threshold-policy open_balanced|open_f1`，仅用独立 open-validation 选择工作阈值。Energy + `open_balanced` 在小测试上的未知拒绝率达到 `0.7778`，但已知接受率仅 `0.2651`，AUROC 仍为 `0.4843`。这验证提高拒绝率可以靠牺牲已知覆盖率做到，但没有改善排序能力；默认仍使用已知验证阈值。该策略要求 `--open-val-ratio > 0`，只能作为已知 open-validation 标签可得时的 operating-point 校准，不是纯无监督部署方案。
+3. **Gaussian NLL**：参考 Mukhoti et al., *Deep Deterministic Uncertainty: A Simple Baseline*（ECCV 2020）的类条件高斯密度思想，新增对角 Gaussian negative log-likelihood：用已知训练类均值、方差，计算到最近已知类的 NLL，加入 `--score-mode gaussian_nll` 及 `normalized_entropy_gaussian_nll`。同一 checkpoint、checkpoint 内已有 Gaussian 统计量（该 checkpoint 训练配置使用完整已知训练集）、128 张独立测试子集时，Gaussian NLL AUROC `0.6046`、AUPR `0.4456`、FPR95 `0.8554`、unknown reject rate `0.0667`；Energy 对照为 AUROC `0.4843`、AUPR `0.3392`、FPR95 `0.9398`、unknown reject rate `0.0889`。这是本轮最有希望的排序基线，但测试集只有 128 张，且单个 seed，必须用完整测试集和至少 3 seeds 复验，暂不能宣称有效。
+
+因此本轮的判断是：KNN 和直接特征排斥未显示收益；open-validation 阈值能调工作点但会改变已知/未知错误权衡；Gaussian NLL 是当前最值得正式复验的方向。下一步优先固定 `gaussian_nll` 与 Energy / Mahalanobis 对照，完整训练特征建高斯统计量、保持测试集不参与选分数和选阈值，并报告多 seed 均值与标准差。若 Gaussian NLL 复验失败，再考虑更稳健的协方差估计（shrinkage / low-rank）或增强 backbone 预训练与分类精度，不继续盲加损失。
+
+## 本轮后续验证：完整集对照与其他评分器（2026-09-26）
+
+为避免只看 128 张 smoke 子集，本轮在 CIFAR-100 全部 10,000 张开放测试样本上，用同一 `cifar_full_pretrained_joint_e5/student.pt`、60/40 类别划分、`open-val-ratio=0.2`、MC=2 和 known-validation 95 分位阈值复核 Gaussian NLL 与 Energy：
+
+| scorer | AUROC | AUPR | FPR95 | known accuracy | unknown reject rate |
+|---|---:|---:|---:|---:|---:|
+| Gaussian NLL | 0.6379 | 0.4963 | 0.8557 | 0.4863 | 0.0675 |
+| Energy | 0.6422 | 0.5185 | 0.8310 | 0.4912 | 0.1090 |
+| logit margin | 0.5954 | 0.4629 | 0.8508 | 0.4868 | 0.0858 |
+
+结论：全量测试上 Energy 略优于 Gaussian NLL，后者未能验证为改进；logit margin 也低于 Energy。三个检测器的 unknown reject rate 都不高，当前阈值仍偏重已知接受率。另加了 `max_logit`、`logit_margin` 两种 logits 基线；小样本中 max-logit 接近随机，logit-margin 有些信号，但全量结果没有超过 Energy。
+
+本轮还实现了 KNN-OOD（参考 Sun et al., *Out-of-Distribution Detection with Deep Nearest Neighbors*, ICML 2022）和 VIM-style 主子空间残差（参考 Ming et al., * აკეთ?* VIM: Out-of-Distribution with Virtual-logit Matching, CVPR 2023）。KNN 在 projection 与 backbone features 上的 smoke AUROC 分别为 `0.4744`、`0.3360`；VIM residual AUROC `0.4744`。它们在此 checkpoint 上都没有效果，不进入推荐主配置。Gaussian NLL 是 DDU 类条件密度建模启发的对角高斯基线，不是对 DDU 完整方法的复现。
+
+全量 `auto` 候选扫描在高维 Mahalanobis 候选上运行数分钟并占用约 2.5 GB 内存，已中止；单个评分器全量评估均顺利完成。后续不要用昂贵的 auto 扫描代替严谨比较；先固定 Energy / Gaussian NLL / logit margin 三个候选，再在至少 3 个 seed 上做完整评估。要提高未知拒绝率而保持已知覆盖，必须改善分数排序/表征，而不是单纯移动阈值；`open_balanced` 的 smoke test 拒绝了 77.8% 未知，但只接受 26.5% 已知且 AUROC 不变，展示了这项权衡。
+
+继续检查题目核心的不确定性分支：新增 `head_uncertainty` 和 `margin_uncertainty` 检测评分，前者直接使用训练出的 uncertainty head，后者结合 logit margin。全量 CIFAR-100 测试中，`head_uncertainty` AUROC `0.5073`、FPR95 `0.9465`、unknown reject rate `0.0660`；`margin_uncertainty` AUROC `0.5903`、FPR95 `0.8530`、unknown reject rate `0.0713`。这说明当前 auxiliary uncertainty head 单独检测未知的能力弱；margin+head 略有信号但没有超过 Energy。结论是不能声称当前不确定性分支已解决未知检测，后续应重新审视 uncertainty target 是否只学到已知分类置信度/错误，而不是未知概率。
+
+## 本轮尝试：纯未知池监督不确定性分离（2026-09-26）
+
+为验证上述问题，新增 `--alpha-discovery-uncertainty-separation`。在纯未知 discovery pool 上，将已知训练样本的 uncertainty 目标设为 0，将 discovery 未知样本目标设为 1，使用 BCE 直接训练 uncertainty head；mixed pool 禁止使用该损失，默认权重为 0。
+
+同一教师模型、CIFAR-100、seed=42、512 known-train、512 pure-unknown discovery、1 epoch 的 GPU smoke 对比，使用 `head_uncertainty` 检测：普通 discovery-energy baseline 的 AUROC/FPR95/unknown reject rate 为 `0.4731/0.9759/0.0000`；加入 uncertainty separation 后为 `0.5264/0.9759/0.1111`。说明该损失确实能让 uncertainty head 对未知样本产生一些区分信号，但已知分类准确率仍很低，且 FPR95 没有改善；当前只能作为受控实验方向，不能作为最终改进结论，也不能用于真实 mixed unlabeled 场景。
+
+下一步应使用完整训练数据、足够 epoch 和至少 3 个 seed 复验，并同时报告 uncertainty head 的已知/未知分布、AUROC、FPR95、known accuracy。若 separation 持续提高未知拒绝却损害已知分类，应降低其权重或采用 warmup/ramp；若仍不稳定，应停止把 uncertainty head 当作独立未知检测器，改为只作为蒸馏权重和组合评分的辅助信号。
+## 本轮尝试：Outlier Exposure 均匀 logits 约束（2026-09-26）
+
+为直接降低纯未知样本被某个已知类别高置信接收的问题，新增可选参数 `--alpha-discovery-uniform`。该损失参考 Hendrycks et al., *Deep Anomaly Detection with Outlier Exposure*（ICLR 2019）的异常暴露思想，但这里只实现了其中的均匀预测约束：对纯未知 discovery 样本的已知分类 logits，令 softmax 输出接近所有已知类别上的均匀分布。
+
+实现的目标是：未知样本不应强烈偏向任何一个已知类别。该损失与 Energy 间隔、uncertainty separation 分开统计，因此可以单独做消融；只允许用于 `--discovery-pool-mode unknown`，默认权重为 0，不改变历史实验。
+
+小规模 GPU 对照使用相同 CIFAR-100 60/40 划分、seed=42、512 个已知训练样本、512 个纯未知 discovery 样本、120 个验证样本、128 个测试样本、3 epoch、Energy 检测：
+
+| 方法 | AUROC | FPR95 | known acc（验证集） | unknown reject rate |
+| --- | ---: | ---: | ---: | ---: |
+| Energy baseline | 0.409 | 0.976 | 0.308 | 0.022 |
+| Energy + uncertainty separation（直接启用） | 0.506 | 0.940 | 0.233 | 0.067 |
+| Energy + uncertainty separation（warmup/ramp） | 0.440 | 0.964 | 0.292 | 0.089 |
+| Energy + uniform logits | **0.531** | **0.916** | 0.275 | 0.022 |
+
+这次结果说明 uniform-logit 约束在该 smoke 配置下改善了未知/已知分数排序和 FPR95，优于本轮的 uncertainty separation 及其 warmup/ramp 版本；但阈值下 unknown reject rate 没有提升，验证集分类准确率也略有下降。因此它只能作为有希望的可选训练机制，不能据此宣称未知检测问题已经解决。下一步应在更大训练规模、完整测试集和至少 3 个随机种子上复核，并同时尝试降低权重或对该损失做渐进调度，观察能否保留 AUROC/FPR95 收益而减少已知分类损失。
+补充的中等规模复核使用 1200 个已知训练样本、1200 个纯未知 discovery 样本、300 个验证样本、1000 个测试样本和 5 epoch。Energy baseline 的最佳验证 known_acc 为 `0.360`，uniform 版本为 `0.343`；在 1000 张测试子集上，baseline/uniform 的 AUROC 分别为 `0.497/0.534`，FPR95 分别为 `0.957/0.949`，unknown reject rate 分别为 `0.082/0.046`。因此 uniform 的排序收益在更大子集上仍保留，但默认 known-only 阈值下的拒绝率没有提升。对 uniform 使用独立 open-validation 的 `open_balanced` 阈值后，unknown reject rate 为 `0.240`、known accept rate 为 `0.794`，说明阈值工作点仍是独立问题。
+
+新增 `--discovery-uniform-warmup-epochs` 和 `--discovery-uniform-ramp-epochs` 做训练时机消融。在 512/512/128、3 epoch smoke 中，warmup=1、ramp=2 的 uniform 版本 AUROC `0.501`、FPR95 `0.940`、unknown reject rate `0.044`，低于直接启用 uniform 的 AUROC `0.531`。因此 warmup/ramp 暂不推荐作为 uniform 的默认配置；后续应优先搜索较小 uniform 权重，并在多 seed 上确认排序收益是否稳定。

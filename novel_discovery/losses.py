@@ -222,6 +222,34 @@ def prototype_alignment_loss(features: torch.Tensor, labels: torch.Tensor, proto
     return 1.0 - (feats * proto).sum(dim=-1).mean()
 
 
+def unknown_feature_margin_loss(
+    features: torch.Tensor,
+    known_prototypes: torch.Tensor,
+    similarity_margin: float = 0.2,
+    sample_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Push unlabeled unknown features away from the nearest known prototype.
+
+    This is intended for a protocol-defined pure-unknown pool or a filtered
+    candidate subset, not arbitrary mixed unlabeled batches.
+    """
+    if features.numel() == 0 or known_prototypes.numel() == 0:
+        return features.new_tensor(0.0)
+    feature = F.normalize(features, dim=-1)
+    prototypes = F.normalize(known_prototypes, dim=-1)
+    nearest_similarity = (feature @ prototypes.T).max(dim=-1).values
+    per_sample = F.relu(nearest_similarity - float(similarity_margin))
+    if sample_weight is None:
+        return per_sample.mean()
+    weight = sample_weight.reshape(-1).to(per_sample).clamp_min(0.0)
+    if weight.numel() != per_sample.numel():
+        raise ValueError("sample_weight must match the feature batch size.")
+    denominator = weight.sum()
+    if denominator <= 0:
+        return per_sample.sum() * 0.0
+    return (per_sample * weight).sum() / denominator
+
+
 def proxy_contrastive_loss(
     features: torch.Tensor,
     labels: torch.Tensor,
@@ -283,6 +311,46 @@ def discovery_unknown_loss(
     if denominator <= 0:
         return per_sample.sum() * 0.0
     return (per_sample * weight).sum() / denominator
+
+
+def outlier_exposure_uniform_loss(
+    logits: torch.Tensor,
+    sample_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Match a pure outlier batch to a uniform known-class distribution.
+
+    This is the classification-logit part of Outlier Exposure: novel samples
+    should not receive a concentrated probability on any known class.  It is
+    intentionally separate from ``discovery_unknown_loss`` so experiments can
+    distinguish uniform-logit exposure from uncertainty-head supervision.
+    """
+    if logits.numel() == 0:
+        return logits.new_tensor(0.0)
+    log_probs = F.log_softmax(logits, dim=-1)
+    per_sample = -log_probs.mean(dim=-1)
+    if sample_weight is None:
+        return per_sample.mean()
+    weight = sample_weight.reshape(-1).to(per_sample).clamp_min(0.0)
+    if weight.numel() != per_sample.numel():
+        raise ValueError("sample_weight must match the logits batch size.")
+    denominator = weight.sum()
+    if denominator <= 0:
+        return per_sample.sum() * 0.0
+    return (per_sample * weight).sum() / denominator
+
+
+def uncertainty_separation_loss(
+    known_uncertainty: torch.Tensor,
+    unknown_uncertainty: torch.Tensor,
+) -> torch.Tensor:
+    """Train the uncertainty head as a known-vs-unknown binary score."""
+    if known_uncertainty.numel() == 0 or unknown_uncertainty.numel() == 0:
+        return known_uncertainty.new_tensor(0.0)
+    values = torch.cat([known_uncertainty, unknown_uncertainty], dim=0).clamp(1e-6, 1.0 - 1e-6)
+    targets = torch.cat(
+        [torch.zeros_like(known_uncertainty), torch.ones_like(unknown_uncertainty)], dim=0
+    )
+    return F.binary_cross_entropy(values, targets)
 
 
 def discovery_consistency_loss(

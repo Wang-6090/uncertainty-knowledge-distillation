@@ -20,6 +20,7 @@ from novel_discovery.pipeline import (
     build_loader,
     calibrate_threshold,
     calibrate_class_thresholds,
+    calibrate_open_threshold,
     collect_diagonal_gaussian_stats,
     collect_prototypes,
     fit_score_normalization,
@@ -30,6 +31,11 @@ from novel_discovery.pipeline import (
     calibration_diagnostics,
     fit_temperature,
     run_discovery,
+    collect_activation_clip_value,
+    collect_knn_feature_bank,
+    attach_knn_distances,
+    collect_vim_stats,
+    attach_vim_residual,
     train_one_epoch_student,
     train_one_epoch_teacher,
     uncertainty_error_diagnostics,
@@ -123,6 +129,54 @@ def parse_args(argv=None):
         type=float,
         default=0.0,
         help="Apply energy-margin separation between known samples and a pure unknown discovery pool.",
+    )
+    p.add_argument(
+        "--alpha-discovery-uniform",
+        type=float,
+        default=0.0,
+        help="Apply Outlier Exposure-style uniform known-class logits to a pure unknown discovery pool.",
+    )
+    p.add_argument(
+        "--discovery-uniform-warmup-epochs",
+        type=int,
+        default=0,
+        help="Keep uniform-logit Outlier Exposure disabled for the first N student epochs.",
+    )
+    p.add_argument(
+        "--discovery-uniform-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp uniform-logit Outlier Exposure after its warmup period.",
+    )
+    p.add_argument(
+        "--alpha-discovery-feature-margin",
+        type=float,
+        default=0.0,
+        help="Push pure-unknown discovery features away from the nearest known classifier prototype.",
+    )
+    p.add_argument(
+        "--discovery-feature-margin",
+        type=float,
+        default=0.2,
+        help="Maximum cosine similarity allowed between a discovery feature and its nearest known prototype.",
+    )
+    p.add_argument(
+        "--alpha-discovery-uncertainty-separation",
+        type=float,
+        default=0.0,
+        help="Train the uncertainty head to separate known samples from a pure-unknown discovery pool.",
+    )
+    p.add_argument(
+        "--uncertainty-separation-warmup-epochs",
+        type=int,
+        default=0,
+        help="Keep uncertainty separation disabled for the first N student epochs.",
+    )
+    p.add_argument(
+        "--uncertainty-separation-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp uncertainty separation after its warmup period.",
     )
     p.add_argument(
         "--alpha-discovery-selective-unknown",
@@ -331,9 +385,9 @@ def parse_args(argv=None):
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument(
         "--threshold-policy",
-        choices=["global", "class_conditional"],
+        choices=["global", "class_conditional", "open_balanced", "open_f1"],
         default="global",
-        help="Use one known-only threshold or one threshold per predicted known class.",
+        help="Use a known-only threshold, class thresholds, or an open-validation operating point.",
     )
     p.add_argument("--threshold-min-class-samples", type=int, default=5)
     p.add_argument(
@@ -353,19 +407,32 @@ def parse_args(argv=None):
             "auto",
             "full",
             "max_softmax",
+            "max_logit",
+            "logit_margin",
             "novel_msp",
             "novel_entropy",
             "unified_novel_mass",
             "classwise_unified_novel_mass",
             "odin_msp",
             "energy",
+            "react_energy",
+            "knn_distance",
+            "normalized_entropy_knn",
+            "gaussian_nll",
+            "normalized_entropy_gaussian_nll",
+            "vim_residual",
+            "head_uncertainty",
+            "margin_uncertainty",
             "entropy_only",
             "proto_only",
             "entropy_proto",
+            "normalized_full",
             "normalized_entropy_proto",
             "entropy_epistemic",
             "entropy_aleatoric",
             "expected_entropy",
+            "head_uncertainty",
+            "margin_uncertainty",
             "epistemic",
             "mahalanobis",
             "mahalanobis_diag",
@@ -378,7 +445,12 @@ def parse_args(argv=None):
             "normalized_entropy_mahalanobis_shared",
         ],
     )
-    p.add_argument("--open-val-ratio", type=float, default=0.0)
+    p.add_argument(
+        "--open-val-ratio",
+        type=float,
+        default=0.0,
+        help="Reserve train-split known and novel samples for score selection; never splits the final test set.",
+    )
     p.add_argument("--auto-calibrate-score", action="store_true")
     p.add_argument(
         "--auto-score-fast",
@@ -397,6 +469,18 @@ def parse_args(argv=None):
         default=1000.0,
         help="Temperature used by ODIN-style MSP scoring.",
     )
+    p.add_argument(
+        "--react-percentile",
+        type=float,
+        default=0.0,
+        help="Enable ReAct feature clipping using this known-training activation percentile.",
+    )
+    p.add_argument("--knn-ood", action="store_true", help="Enable KNN distance OOD scoring from known training projections.")
+    p.add_argument("--knn-k", type=int, default=10, help="Number of known training neighbors for KNN-OOD.")
+    p.add_argument("--knn-feature", choices=["features", "proj"], default="features", help="Embedding used by KNN-OOD: backbone feature or projection head.")
+    p.add_argument("--knn-bank-size", type=int, default=0, help="Optional maximum known training vectors in the KNN bank; 0 uses all.")
+    p.add_argument("--vim-ood", action="store_true", help="Enable VIM-style principal-subspace residual scoring.")
+    p.add_argument("--vim-rank", type=int, default=64, help="Known feature principal-subspace rank for VIM-OOD.")
 
     p = sub.add_parser("inspect_data")
     add_common(p)
@@ -628,6 +712,50 @@ def _score_needs_shared_mahalanobis(score_mode: str, auto_calibrate: bool = Fals
         "mahalanobis",
         "entropy_mahalanobis",
         "normalized_entropy_mahalanobis",
+        "gaussian_nll",
+        "normalized_entropy_gaussian_nll",
+    }
+
+
+def _calibrate_discovery_threshold(
+    args,
+    scores_val,
+    outputs_val,
+    scores_open_val,
+    outputs_open_val,
+    num_classes,
+):
+    if args.threshold_policy in {"open_balanced", "open_f1"}:
+        if scores_open_val is None or outputs_open_val is None:
+            raise ValueError(
+                "open threshold policies require --open-val-ratio greater than 0"
+            )
+        objective = "unknown_f1" if args.threshold_policy == "open_f1" else "balanced_accuracy"
+        threshold, diagnostics = calibrate_open_threshold(
+            scores_open_val,
+            np.asarray(outputs_open_val["is_known"], dtype=bool),
+            objective=objective,
+        )
+        return threshold, {
+            "type": f"open_val_{objective}",
+            "percentile": None,
+            "min_class_samples": None,
+            **diagnostics,
+        }
+    if args.threshold_policy == "class_conditional":
+        threshold = calibrate_class_thresholds(
+            scores_val,
+            outputs_val["logits"].argmax(axis=1),
+            num_classes,
+            percentile=args.threshold_percentile,
+            min_samples=args.threshold_min_class_samples,
+        )
+    else:
+        threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
+    return threshold, {
+        "type": f"known_val_{args.threshold_policy}",
+        "percentile": args.threshold_percentile,
+        "min_class_samples": args.threshold_min_class_samples,
     }
 
 
@@ -736,6 +864,9 @@ def fit_student(args):
     uses_discovery_regularizer = (
         args.alpha_discovery_unknown > 0.0
         or args.alpha_discovery_energy > 0.0
+        or args.alpha_discovery_uniform > 0.0
+        or args.alpha_discovery_feature_margin > 0.0
+        or args.alpha_discovery_uncertainty_separation > 0.0
         or args.alpha_discovery_selective_unknown > 0.0
         or args.alpha_discovery_selective_energy > 0.0
         or args.joint_discovery
@@ -744,10 +875,14 @@ def fit_student(args):
         raise ValueError("Discovery regularizers require --discovery-pool.")
     if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
         if args.discovery_pool_mode == "mixed" and (
-            args.alpha_discovery_unknown > 0.0 or args.alpha_discovery_energy > 0.0
+            args.alpha_discovery_unknown > 0.0
+            or args.alpha_discovery_energy > 0.0
+            or args.alpha_discovery_uniform > 0.0
+            or args.alpha_discovery_feature_margin > 0.0
+            or args.alpha_discovery_uncertainty_separation > 0.0
         ):
             raise ValueError(
-                "alpha-discovery-unknown/energy requires --discovery-pool-mode unknown."
+                "discovery unknown/energy/uniform/feature-margin/uncertainty-separation losses require --discovery-pool-mode unknown."
             )
         discovery_loader = build_loader(
             TwoViewDataset(bundle.discovery_pool),
@@ -835,6 +970,16 @@ def fit_student(args):
             warmup_epochs=args.discovery_selective_warmup_epochs,
             ramp_epochs=args.discovery_selective_ramp_epochs,
         )
+        uncertainty_separation_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.uncertainty_separation_warmup_epochs,
+            ramp_epochs=args.uncertainty_separation_ramp_epochs,
+        )
+        discovery_uniform_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.discovery_uniform_warmup_epochs,
+            ramp_epochs=args.discovery_uniform_ramp_epochs,
+        )
         stats = train_one_epoch_student(
             student,
             teacher,
@@ -861,6 +1006,13 @@ def fit_student(args):
             alpha_discovery=args.alpha_discovery,
             alpha_discovery_unknown=args.alpha_discovery_unknown,
             alpha_discovery_energy=args.alpha_discovery_energy,
+            alpha_discovery_uniform=args.alpha_discovery_uniform * discovery_uniform_weight,
+            alpha_discovery_feature_margin=args.alpha_discovery_feature_margin,
+            discovery_feature_margin=args.discovery_feature_margin,
+            alpha_discovery_uncertainty_separation=(
+                args.alpha_discovery_uncertainty_separation
+                * uncertainty_separation_weight
+            ),
             alpha_discovery_selective_unknown=args.alpha_discovery_selective_unknown * selective_weight,
             alpha_discovery_selective_energy=args.alpha_discovery_selective_energy * selective_weight,
             discovery_select_ratio=args.discovery_select_ratio,
@@ -903,6 +1055,8 @@ def fit_student(args):
             joint_candidate_weight_floor=args.joint_candidate_weight_floor,
         )
         stats["discovery_selective_weight"] = selective_weight
+        stats["uncertainty_separation_weight"] = uncertainty_separation_weight
+        stats["discovery_uniform_weight"] = discovery_uniform_weight
         val_stats = evaluate_classification(student, val_loader, device)
         print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
         if val_stats["known_acc"] > best_acc:
@@ -986,6 +1140,30 @@ def discover(args):
     ).to(device)
     ckpt_path = resolve_input_checkpoint(args.student_ckpt, args.work_dir, "student.pt")
     ckpt = load_checkpoint(model, ckpt_path, device)
+    react_clip_value = None
+    if args.react_percentile > 0.0:
+        train_stats_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        react_clip_value = collect_activation_clip_value(
+            model, train_stats_loader, device, args.react_percentile
+        )
+        print(f"react activation cap: percentile={args.react_percentile:.2f}, value={react_clip_value:.6f}")
+    knn_bank = None
+    if args.knn_ood:
+        train_feature_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        knn_bank = collect_knn_feature_bank(
+            model,
+            train_feature_loader,
+            device,
+            max_samples=args.knn_bank_size,
+            seed=args.seed,
+            feature_key=args.knn_feature,
+        )
+        print(f"knn feature bank: {len(knn_bank)} vectors, k={args.knn_k}")
+    vim_stats = None
+    if args.vim_ood:
+        train_feature_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        vim_stats = collect_vim_stats(model, train_feature_loader, device, rank=args.vim_rank)
+        print(f"vim principal subspace: rank={len(vim_stats['components'])}")
     novel_head = None
     novel_head_state = None
     novel_head_temperature = 1.0
@@ -1015,6 +1193,7 @@ def discover(args):
         mc_samples=args.mc_samples,
         odin_epsilon=args.odin_epsilon,
         odin_temperature=args.odin_temperature,
+        react_clip_value=react_clip_value,
     )
     outputs_val = extract_outputs(
         model,
@@ -1023,6 +1202,7 @@ def discover(args):
         mc_samples=args.mc_samples,
         odin_epsilon=args.odin_epsilon,
         odin_temperature=args.odin_temperature,
+        react_clip_value=react_clip_value,
     )
     if novel_head is not None:
         outputs_test = attach_novel_outputs(
@@ -1040,6 +1220,7 @@ def discover(args):
             mc_samples=args.mc_samples,
             odin_epsilon=args.odin_epsilon,
             odin_temperature=args.odin_temperature,
+            react_clip_value=react_clip_value,
         )
         if open_val_loader is not None
         else None
@@ -1048,6 +1229,16 @@ def discover(args):
         outputs_open_val = attach_novel_outputs(
             outputs_open_val, novel_head, device, known_temperature=novel_known_temperature
         )
+    if knn_bank is not None:
+        attach_knn_distances(outputs_test, knn_bank, k=args.knn_k, feature_key=args.knn_feature)
+        attach_knn_distances(outputs_val, knn_bank, k=args.knn_k, feature_key=args.knn_feature)
+        if outputs_open_val is not None:
+            attach_knn_distances(outputs_open_val, knn_bank, k=args.knn_k, feature_key=args.knn_feature)
+    if vim_stats is not None:
+        attach_vim_residual(outputs_test, vim_stats)
+        attach_vim_residual(outputs_val, vim_stats)
+        if outputs_open_val is not None:
+            attach_vim_residual(outputs_open_val, vim_stats)
     temperature = fit_temperature(outputs_val) if args.temperature_calibration else 1.0
     if args.temperature_calibration:
         outputs_test = apply_temperature(outputs_test, temperature)
@@ -1100,6 +1291,11 @@ def discover(args):
             "temperature": float(args.odin_temperature),
             "enabled": bool(args.odin_epsilon > 0.0),
         },
+        "react": {
+            "percentile": float(args.react_percentile),
+            "enabled": bool(react_clip_value is not None),
+            "clip_value": None if react_clip_value is None else float(react_clip_value),
+        },
         "reliability": calibration_diagnostics(
             outputs_val["probs"], outputs_val["labels"], args.calibration_bins
         ),
@@ -1113,8 +1309,11 @@ def discover(args):
             "entropy_only",
             "proto_only",
             "max_softmax",
+            "max_logit",
+            "logit_margin",
             "odin_msp",
             "energy",
+            "normalized_full",
             "normalized_entropy_proto",
             "entropy_epistemic",
             "expected_entropy",
@@ -1125,6 +1324,8 @@ def discover(args):
             "entropy_mahalanobis_shared",
             "normalized_entropy_mahalanobis",
             "normalized_entropy_mahalanobis_shared",
+            "gaussian_nll",
+            "normalized_entropy_gaussian_nll",
         ]
         if args.auto_score_fast:
             candidate_modes = [
@@ -1133,11 +1334,22 @@ def discover(args):
                 "entropy_only",
                 "proto_only",
                 "max_softmax",
+                "max_logit",
+                "logit_margin",
                 "energy",
+                "normalized_full",
                 "normalized_entropy_proto",
                 "entropy_epistemic",
                 "expected_entropy",
+                "gaussian_nll",
+                "normalized_entropy_gaussian_nll",
             ]
+        if args.react_percentile > 0.0:
+            candidate_modes.append("react_energy")
+        if args.knn_ood:
+            candidate_modes.extend(["knn_distance", "normalized_entropy_knn"])
+        if args.vim_ood:
+            candidate_modes.append("vim_residual")
         if novel_head is not None:
             # Let unified joint checkpoints compete with legacy OOD scores
             # during open-validation calibration.
@@ -1164,28 +1376,31 @@ def discover(args):
             normalization=score_normalization,
             gaussian_stats=gaussian_stats,
         )
-        if args.threshold_policy == "class_conditional":
-            threshold = calibrate_class_thresholds(
-                scores_val,
-                outputs_val["logits"].argmax(axis=1),
-                len(bundle.known_classes),
-                percentile=args.threshold_percentile,
-                min_samples=args.threshold_min_class_samples,
+        scores_open_val = None
+        if outputs_open_val is not None:
+            scores_open_val, _ = compute_open_score(
+                outputs_open_val,
+                prototypes=proto,
+                score_mode=selected_score_mode,
+                normalization=score_normalization,
+                gaussian_stats=gaussian_stats,
             )
-        else:
-            threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
+        threshold, threshold_policy_report = _calibrate_discovery_threshold(
+            args,
+            scores_val,
+            outputs_val,
+            scores_open_val,
+            outputs_open_val,
+            len(bundle.known_classes),
+        )
         calibration_report.update(
             {
                 "selected": selected,
                 "candidates": all_candidates,
                 "open_val_size": int(len(outputs_open_val["labels"])),
                 "open_val_unknown_size": int(np.sum(np.asarray(outputs_open_val["is_known"], dtype=bool) == 0)),
-                "threshold_policy": {
-                    "type": f"known_val_{args.threshold_policy}",
-                    "percentile": args.threshold_percentile,
-                    "min_class_samples": args.threshold_min_class_samples,
-                },
-                "known_val_threshold": (
+                "threshold_policy": threshold_policy_report,
+                "calibrated_threshold": (
                     threshold.tolist() if isinstance(threshold, np.ndarray) else float(threshold)
                 ),
             }
@@ -1200,24 +1415,27 @@ def discover(args):
             normalization=score_normalization,
             gaussian_stats=gaussian_stats,
         )
-        if args.threshold_policy == "class_conditional":
-            threshold = calibrate_class_thresholds(
-                scores_val,
-                outputs_val["logits"].argmax(axis=1),
-                len(bundle.known_classes),
-                percentile=args.threshold_percentile,
-                min_samples=args.threshold_min_class_samples,
+        scores_open_val = None
+        if outputs_open_val is not None:
+            scores_open_val, _ = compute_open_score(
+                outputs_open_val,
+                prototypes=proto,
+                score_mode=selected_score_mode,
+                normalization=score_normalization,
+                gaussian_stats=gaussian_stats,
             )
-        else:
-            threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
+        threshold, threshold_policy_report = _calibrate_discovery_threshold(
+            args,
+            scores_val,
+            outputs_val,
+            scores_open_val,
+            outputs_open_val,
+            len(bundle.known_classes),
+        )
         calibration_report.update(
             {
-                "threshold_policy": {
-                    "type": f"known_val_{args.threshold_policy}",
-                    "percentile": args.threshold_percentile,
-                    "min_class_samples": args.threshold_min_class_samples,
-                },
-                "known_val_threshold": (
+                "threshold_policy": threshold_policy_report,
+                "calibrated_threshold": (
                     threshold.tolist() if isinstance(threshold, np.ndarray) else float(threshold)
                 ),
             }
@@ -1266,6 +1484,9 @@ def discover(args):
         "proto_dist": detail["proto_dist"].tolist(),
         "mahalanobis": detail["mahalanobis"].tolist(),
         "odin_msp": detail["odin_msp"].tolist(),
+        "react_energy": detail["react_energy"].tolist(),
+        "knn_distance": detail["knn_distance"].tolist(),
+        "vim_residual": detail["vim_residual"].tolist(),
         "pred_known": detail["pred_known"].astype(int).tolist(),
         "true_known": detail["true_known"].astype(int).tolist(),
         "pred_class": detail["pred_class"].tolist(),
@@ -1291,7 +1512,7 @@ def discover(args):
             {
                 "selected_score_mode": selected["score_mode"],
                 "auroc": selected["auroc"],
-                "known_val_threshold": calibration_report["known_val_threshold"],
+                "calibrated_threshold": calibration_report["calibrated_threshold"],
                 "threshold_policy": calibration_report["threshold_policy"]["type"],
             },
         )

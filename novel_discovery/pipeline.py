@@ -29,6 +29,9 @@ from .losses import (
     supervised_contrastive_loss,
     uncertainty_alignment_loss,
     weighted_energy_margin_loss,
+    unknown_feature_margin_loss,
+    uncertainty_separation_loss,
+    outlier_exposure_uniform_loss,
 )
 from .joint_discovery import combine_known_novel_logits, joint_discovery_loss
 from .metrics import (
@@ -430,6 +433,10 @@ def train_one_epoch_student(
     alpha_discovery: float = 0.0,
     alpha_discovery_unknown: float = 0.0,
     alpha_discovery_energy: float = 0.0,
+    alpha_discovery_uniform: float = 0.0,
+    alpha_discovery_feature_margin: float = 0.0,
+    discovery_feature_margin: float = 0.2,
+    alpha_discovery_uncertainty_separation: float = 0.0,
     alpha_discovery_selective_unknown: float = 0.0,
     alpha_discovery_selective_energy: float = 0.0,
     discovery_select_ratio: float = 0.25,
@@ -481,6 +488,9 @@ def train_one_epoch_student(
     discovery_meter = AverageMeter()
     discovery_unknown_meter = AverageMeter()
     discovery_energy_meter = AverageMeter()
+    discovery_uniform_meter = AverageMeter()
+    discovery_feature_margin_meter = AverageMeter()
+    discovery_uncertainty_separation_meter = AverageMeter()
     discovery_selective_unknown_meter = AverageMeter()
     discovery_selective_energy_meter = AverageMeter()
     discovery_selected_meter = AverageMeter()
@@ -541,6 +551,9 @@ def train_one_epoch_student(
         loss_discovery = s_out["logits"].new_tensor(0.0)
         loss_discovery_unknown = s_out["logits"].new_tensor(0.0)
         loss_discovery_energy = s_out["logits"].new_tensor(0.0)
+        loss_discovery_uniform = s_out["logits"].new_tensor(0.0)
+        loss_discovery_feature_margin = s_out["logits"].new_tensor(0.0)
+        loss_discovery_uncertainty_separation = s_out["logits"].new_tensor(0.0)
         loss_discovery_selective_unknown = s_out["logits"].new_tensor(0.0)
         loss_discovery_selective_energy = s_out["logits"].new_tensor(0.0)
         loss_joint_discovery = s_out["logits"].new_tensor(0.0)
@@ -569,6 +582,8 @@ def train_one_epoch_student(
             alpha_discovery > 0.0
             or alpha_discovery_unknown > 0.0
             or alpha_discovery_energy > 0.0
+            or alpha_discovery_uniform > 0.0
+            or alpha_discovery_feature_margin > 0.0
             or alpha_discovery_selective_unknown > 0.0
             or alpha_discovery_selective_energy > 0.0
             or alpha_joint_discovery > 0.0
@@ -708,6 +723,33 @@ def train_one_epoch_student(
                         temperature=energy_temperature,
                     )
                 )
+            if alpha_discovery_uniform > 0.0:
+                loss_discovery_uniform = 0.5 * (
+                    outlier_exposure_uniform_loss(first_out["logits"])
+                    + outlier_exposure_uniform_loss(second_out["logits"])
+                )
+            if alpha_discovery_feature_margin > 0.0:
+                loss_discovery_feature_margin = 0.5 * (
+                    unknown_feature_margin_loss(
+                        first_out["features"],
+                        student.classifier.weight,
+                        similarity_margin=discovery_feature_margin,
+                    )
+                    + unknown_feature_margin_loss(
+                        second_out["features"],
+                        student.classifier.weight,
+                        similarity_margin=discovery_feature_margin,
+                    )
+                )
+            if alpha_discovery_uncertainty_separation > 0.0:
+                loss_discovery_uncertainty_separation = 0.5 * (
+                    uncertainty_separation_loss(
+                        s_out["uncertainty"], first_out["uncertainty"]
+                    )
+                    + uncertainty_separation_loss(
+                        s_out["uncertainty"], second_out["uncertainty"]
+                    )
+                )
             if alpha_discovery_selective_unknown > 0.0 or alpha_discovery_selective_energy > 0.0:
                 if discovery_selection_model is None:
                     first_selection_out = first_out
@@ -839,6 +881,9 @@ def train_one_epoch_student(
             + alpha_discovery * loss_discovery
             + alpha_discovery_unknown * loss_discovery_unknown
             + alpha_discovery_energy * loss_discovery_energy
+            + alpha_discovery_uniform * loss_discovery_uniform
+            + alpha_discovery_feature_margin * loss_discovery_feature_margin
+            + alpha_discovery_uncertainty_separation * loss_discovery_uncertainty_separation
             + alpha_discovery_selective_unknown * loss_discovery_selective_unknown
             + alpha_discovery_selective_energy * loss_discovery_selective_energy
             + alpha_joint_discovery * loss_joint_discovery
@@ -861,6 +906,11 @@ def train_one_epoch_student(
         discovery_meter.update(loss_discovery.item(), images.size(0))
         discovery_unknown_meter.update(loss_discovery_unknown.item(), images.size(0))
         discovery_energy_meter.update(loss_discovery_energy.item(), images.size(0))
+        discovery_uniform_meter.update(loss_discovery_uniform.item(), images.size(0))
+        discovery_feature_margin_meter.update(loss_discovery_feature_margin.item(), images.size(0))
+        discovery_uncertainty_separation_meter.update(
+            loss_discovery_uncertainty_separation.item(), images.size(0)
+        )
         discovery_selective_unknown_meter.update(loss_discovery_selective_unknown.item(), images.size(0))
         discovery_selective_energy_meter.update(loss_discovery_selective_energy.item(), images.size(0))
         discovery_selected_meter.update(discovery_selected_ratio, images.size(0))
@@ -887,6 +937,9 @@ def train_one_epoch_student(
         "discovery": discovery_meter.avg,
         "discovery_unknown": discovery_unknown_meter.avg,
         "discovery_energy": discovery_energy_meter.avg,
+        "discovery_uniform": discovery_uniform_meter.avg,
+        "discovery_feature_margin": discovery_feature_margin_meter.avg,
+        "discovery_uncertainty_separation": discovery_uncertainty_separation_meter.avg,
         "discovery_selective_unknown": discovery_selective_unknown_meter.avg,
         "discovery_selective_energy": discovery_selective_energy_meter.avg,
         "discovery_selected_ratio": discovery_selected_meter.avg,
@@ -971,6 +1024,7 @@ def extract_outputs(
     mc_samples: int = 8,
     odin_epsilon: float = 0.0,
     odin_temperature: float = 1000.0,
+    react_clip_value: float | None = None,
 ):
     model.eval()
     all_logits = []
@@ -984,6 +1038,7 @@ def extract_outputs(
     all_projections = []
     all_odin_msp = []
     all_odin_logits = []
+    all_react_energy = []
     all_labels = []
     all_raw = []
     all_known = []
@@ -1002,6 +1057,14 @@ def extract_outputs(
         all_head_uncertainty.append(mc["head_uncertainty"].cpu())
         all_features.append(out["features"].cpu())
         all_projections.append(out["proj"].cpu())
+        if react_clip_value is not None:
+            clipped_features = out["features"].clamp(max=float(react_clip_value))
+            react_logits = F.linear(
+                clipped_features,
+                model.classifier.weight,
+                model.classifier.bias,
+            )
+            all_react_energy.append(-torch.logsumexp(react_logits, dim=-1).detach().cpu())
         if odin_epsilon > 0.0:
             odin_msp, odin_logits = _odin_batch_score(
                 model,
@@ -1031,6 +1094,115 @@ def extract_outputs(
     if all_odin_msp:
         outputs["odin_msp"] = torch.cat(all_odin_msp).numpy()
         outputs["odin_logits"] = torch.cat(all_odin_logits).numpy()
+    if all_react_energy:
+        outputs["react_energy"] = torch.cat(all_react_energy).numpy()
+    return outputs
+
+
+@torch.no_grad()
+def collect_activation_clip_value(model, loader, device, percentile: float) -> float:
+    """Estimate a ReAct activation cap from known training features only."""
+    values = []
+    for batch in tqdm(loader, desc="react-stats", leave=False):
+        images = batch[0].to(device)
+        features = model(images)["features"].detach().flatten().cpu()
+        values.append(features)
+    if not values:
+        return float("inf")
+    joined = torch.cat(values).numpy()
+    return float(np.percentile(joined, float(np.clip(percentile, 0.0, 100.0))))
+
+
+@torch.no_grad()
+def collect_knn_feature_bank(
+    model,
+    loader,
+    device,
+    max_samples: int = 0,
+    seed: int = 0,
+    feature_key: str = "features",
+):
+    """Collect normalized known-training vectors for KNN-OOD."""
+    model.eval()
+    bank = []
+    for batch in tqdm(loader, desc="knn-bank", leave=False):
+        images, labels, *_ = batch
+        known = labels >= 0
+        if not torch.any(known):
+            continue
+        images = images[known].to(device)
+        if feature_key not in {"features", "proj"}:
+            raise ValueError("KNN feature_key must be 'features' or 'proj'.")
+        bank.append(F.normalize(model(images)[feature_key], dim=-1).cpu())
+    if not bank:
+        raise ValueError("KNN-OOD requires at least one known training feature.")
+    bank = torch.cat(bank, dim=0)
+    if max_samples > 0 and len(bank) > max_samples:
+        generator = torch.Generator().manual_seed(int(seed))
+        indices = torch.randperm(len(bank), generator=generator)[:max_samples]
+        bank = bank[indices]
+    return bank.numpy()
+
+
+def attach_knn_distances(
+    outputs: Dict[str, np.ndarray],
+    feature_bank: np.ndarray,
+    k: int = 10,
+    feature_key: str = "features",
+):
+    """Attach mean cosine distance to the k nearest known-training features."""
+    output_key = "features" if feature_key == "features" else "projections"
+    if feature_key not in {"features", "proj"} or output_key not in outputs:
+        raise ValueError("KNN-OOD requires matching extracted features or projections.")
+    if k <= 0:
+        raise ValueError("KNN-OOD k must be positive.")
+    bank = np.array(feature_bank, dtype=np.float32, copy=True)
+    bank /= np.clip(np.linalg.norm(bank, axis=1, keepdims=True), 1e-8, None)
+    queries = np.array(outputs[output_key], dtype=np.float32, copy=True)
+    queries /= np.clip(np.linalg.norm(queries, axis=1, keepdims=True), 1e-8, None)
+    neighbor_count = min(int(k), len(bank))
+    distances = np.empty(len(queries), dtype=np.float32)
+    batch_size = 256
+    for start in range(0, len(queries), batch_size):
+        similarities = queries[start : start + batch_size] @ bank.T
+        nearest = np.partition(similarities, -neighbor_count, axis=1)[:, -neighbor_count:]
+        distances[start : start + batch_size] = 1.0 - nearest.mean(axis=1)
+    outputs["knn_distance"] = distances
+    return outputs
+
+
+@torch.no_grad()
+def collect_vim_stats(model, loader, device, rank: int = 64):
+    """Fit a VIM-style known feature principal subspace from train data only."""
+    model.eval()
+    features = []
+    for batch in tqdm(loader, desc="vim-stats", leave=False):
+        images, labels, *_ = batch
+        known = labels >= 0
+        if not torch.any(known):
+            continue
+        images = images[known].to(device)
+        features.append(model(images)["features"].cpu())
+    if not features:
+        raise ValueError("VIM requires at least one known training feature.")
+    features = torch.cat(features, dim=0).numpy().astype(np.float32)
+    center = features.mean(axis=0)
+    centered = features - center
+    max_rank = min(centered.shape[0] - 1, centered.shape[1])
+    rank = max(1, min(int(rank), max_rank))
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    components = vh[:rank].astype(np.float32)
+    return {"center": center.astype(np.float32), "components": components}
+
+
+def attach_vim_residual(outputs: Dict[str, np.ndarray], vim_stats: Dict[str, np.ndarray]):
+    """Attach distance from the known-training principal feature subspace."""
+    features = np.asarray(outputs["features"], dtype=np.float32)
+    center = np.asarray(vim_stats["center"], dtype=np.float32)
+    components = np.asarray(vim_stats["components"], dtype=np.float32)
+    centered = features - center
+    projected = centered @ components.T @ components
+    outputs["vim_residual"] = np.linalg.norm(centered - projected, axis=1)
     return outputs
 
 
@@ -1199,6 +1371,19 @@ def compute_mahalanobis_distance(
     return distances.min(axis=1)
 
 
+def compute_gaussian_nll(features: np.ndarray, gaussian_stats: Dict[str, np.ndarray]) -> np.ndarray:
+    """Class-conditional diagonal Gaussian negative log-likelihood.
+
+    This is a DDU-style density score: unlike plain Mahalanobis distance it
+    also includes each class covariance's log-volume term.
+    """
+    feat = np.asarray(features, dtype=float)[:, None, :]
+    means = np.asarray(gaussian_stats["means"], dtype=float)[None, :, :]
+    variances = np.clip(np.asarray(gaussian_stats["variances"], dtype=float)[None, :, :], 1e-6, None)
+    nll = 0.5 * (((feat - means) ** 2) / variances + np.log(2.0 * np.pi * variances))
+    return nll.mean(axis=-1).min(axis=1)
+
+
 def compute_open_score(
     outputs: Dict[str, np.ndarray],
     prototypes: np.ndarray | None = None,
@@ -1234,13 +1419,40 @@ def compute_open_score(
         mahalanobis = compute_mahalanobis_distance(
             outputs["features"], gaussian_stats, covariance=mahalanobis_mode
         )
+    gaussian_nll = None
+    gaussian_nll_score_modes = {"gaussian_nll", "normalized_entropy_gaussian_nll"}
+    if gaussian_stats is not None and score_mode in gaussian_nll_score_modes:
+        gaussian_nll = compute_gaussian_nll(outputs["features"], gaussian_stats)
 
     if score_mode == "full":
         score = weights[0] * entropy + weights[1] * epistemic + weights[2] * aleatoric
         if proto_dist is not None:
             score = score + proto_dist
+    elif score_mode == "normalized_full":
+        if normalization is None:
+            raise ValueError("normalized_full requires known-validation normalization")
+
+        def zscore(values, key):
+            if key not in normalization:
+                raise ValueError(f"normalized_full requires normalization for {key}")
+            stats = normalization[key]
+            return (values - stats["mean"]) / max(float(stats["std"]), 1e-6)
+
+        score = (
+            weights[0] * zscore(entropy, "entropy")
+            + weights[1] * zscore(epistemic, "epistemic")
+            + weights[2] * zscore(aleatoric, "aleatoric")
+        )
+        if proto_dist is not None:
+            score = score + zscore(proto_dist, "proto_dist")
     elif score_mode == "max_softmax":
         score = 1.0 - outputs["probs"].max(axis=1)
+    elif score_mode == "max_logit":
+        score = -np.asarray(outputs["logits"], dtype=float).max(axis=1)
+    elif score_mode == "logit_margin":
+        logits = np.asarray(outputs["logits"], dtype=float)
+        top2 = np.sort(np.partition(logits, -2, axis=1)[:, -2:], axis=1)
+        score = -(top2[:, 1] - top2[:, 0])
     elif score_mode == "novel_msp":
         if "novel_probs" not in outputs:
             raise ValueError("novel_msp score requires --novel-head-ckpt")
@@ -1277,6 +1489,38 @@ def compute_open_score(
         logits = outputs["logits"]
         temperature = 1.0
         score = -temperature * np.logaddexp.reduce(logits / temperature, axis=1)
+    elif score_mode == "react_energy":
+        if "react_energy" not in outputs:
+            raise ValueError("react_energy requires --react-percentile greater than 0")
+        score = np.asarray(outputs["react_energy"], dtype=float)
+    elif score_mode == "knn_distance":
+        if "knn_distance" not in outputs:
+            raise ValueError("knn_distance requires --knn-ood")
+        score = np.asarray(outputs["knn_distance"], dtype=float)
+    elif score_mode == "normalized_entropy_knn":
+        if "knn_distance" not in outputs or normalization is None:
+            raise ValueError("normalized_entropy_knn requires --knn-ood and known-validation normalization")
+        score = (
+            (entropy - normalization["entropy"]["mean"]) / normalization["entropy"]["std"]
+            + (outputs["knn_distance"] - normalization["knn_distance"]["mean"])
+            / normalization["knn_distance"]["std"]
+        )
+    elif score_mode == "gaussian_nll":
+        if gaussian_nll is None:
+            raise ValueError("gaussian_nll requires known-training Gaussian statistics")
+        score = gaussian_nll
+    elif score_mode == "normalized_entropy_gaussian_nll":
+        if gaussian_nll is None or normalization is None:
+            raise ValueError("normalized_entropy_gaussian_nll requires statistics")
+        score = (
+            (entropy - normalization["entropy"]["mean"]) / normalization["entropy"]["std"]
+            + (gaussian_nll - normalization["gaussian_nll"]["mean"])
+            / normalization["gaussian_nll"]["std"]
+        )
+    elif score_mode == "vim_residual":
+        if "vim_residual" not in outputs:
+            raise ValueError("vim_residual requires --vim-ood")
+        score = np.asarray(outputs["vim_residual"], dtype=float)
     elif score_mode == "entropy_only":
         score = entropy
     elif score_mode == "proto_only":
@@ -1305,6 +1549,14 @@ def compute_open_score(
         score = outputs.get("expected_entropy", aleatoric)
     elif score_mode == "epistemic":
         score = epistemic
+    elif score_mode == "head_uncertainty":
+        score = np.asarray(outputs["head_uncertainty"], dtype=float)
+    elif score_mode == "margin_uncertainty":
+        logits = np.asarray(outputs["logits"], dtype=float)
+        top2 = np.sort(np.partition(logits, -2, axis=1)[:, -2:], axis=1)
+        margin_risk = -(top2[:, 1] - top2[:, 0])
+        head = np.asarray(outputs["head_uncertainty"], dtype=float)
+        score = margin_risk + head
     elif score_mode in {"mahalanobis", "mahalanobis_diag", "mahalanobis_shared"}:
         if mahalanobis is None:
             raise ValueError("mahalanobis score requires gaussian statistics")
@@ -1351,6 +1603,12 @@ def fit_score_normalization(
         return {"mean": float(np.mean(values)), "std": max(std, 1e-6)}
 
     result = {"entropy": stats(entropy)}
+    result["epistemic"] = stats(outputs_known.get("epistemic", np.zeros_like(entropy)))
+    result["aleatoric"] = stats(outputs_known.get("aleatoric", np.zeros_like(entropy)))
+    if "knn_distance" in outputs_known:
+        result["knn_distance"] = stats(outputs_known["knn_distance"])
+    if "vim_residual" in outputs_known:
+        result["vim_residual"] = stats(outputs_known["vim_residual"])
     if prototypes is not None:
         _, proto_dist = compute_open_score(
             outputs_known,
@@ -1367,6 +1625,7 @@ def fit_score_normalization(
             result["mahalanobis_shared"] = stats(
                 compute_mahalanobis_distance(outputs_known["features"], gaussian_stats, covariance="shared")
             )
+        result["gaussian_nll"] = stats(compute_gaussian_nll(outputs_known["features"], gaussian_stats))
     if "unified_novel_mass" in outputs_known and "logits" in outputs_known:
         raw_score = np.asarray(outputs_known["unified_novel_mass"], dtype=float)
         predicted_class = np.asarray(outputs_known["logits"]).argmax(axis=1)
@@ -1394,6 +1653,54 @@ def fit_score_normalization(
 
 def calibrate_threshold(scores_known: np.ndarray, percentile: float = 95.0) -> float:
     return float(np.percentile(scores_known, percentile))
+
+
+def calibrate_open_threshold(
+    scores: np.ndarray,
+    is_known: np.ndarray,
+    objective: str = "balanced_accuracy",
+) -> tuple[float, dict]:
+    """Choose an operating threshold on a labeled open-validation split.
+
+    Lower scores are accepted as known. This is an explicit validation-only
+    operating-point calibration and must not be used as a replacement for
+    AUROC, which is threshold-independent.
+    """
+    if objective not in {"balanced_accuracy", "unknown_f1"}:
+        raise ValueError(f"Unsupported open threshold objective: {objective}")
+    scores = np.asarray(scores, dtype=float)
+    is_known = np.asarray(is_known, dtype=bool)
+    if scores.ndim != 1 or scores.shape != is_known.shape:
+        raise ValueError("scores and is_known must be matching 1-D arrays")
+    if not np.any(is_known) or np.all(is_known):
+        raise ValueError("Open threshold calibration requires known and unknown samples")
+    candidates = np.unique(scores)
+    candidates = np.concatenate(
+        [np.array([np.nextafter(candidates[0], -np.inf)]), candidates, np.array([np.nextafter(candidates[-1], np.inf)])]
+    )
+    best = None
+    for threshold in candidates:
+        pred_known = scores <= threshold
+        known_accept = float(np.mean(pred_known[is_known]))
+        unknown_reject = float(np.mean(~pred_known[~is_known]))
+        if objective == "balanced_accuracy":
+            value = 0.5 * (known_accept + unknown_reject)
+        else:
+            predicted_unknown = ~pred_known
+            true_unknown = ~is_known
+            tp = float(np.sum(predicted_unknown & true_unknown))
+            precision = tp / max(float(predicted_unknown.sum()), 1.0)
+            recall = tp / max(float(true_unknown.sum()), 1.0)
+            value = 2.0 * precision * recall / max(precision + recall, 1e-12)
+        candidate = (value, known_accept, unknown_reject, float(threshold))
+        if best is None or candidate > best:
+            best = candidate
+    _, known_accept, unknown_reject, threshold = best
+    return threshold, {
+        "objective": objective,
+        "known_accept_rate": known_accept,
+        "unknown_reject_rate": unknown_reject,
+    }
 
 
 def calibrate_class_thresholds(
@@ -1760,6 +2067,9 @@ def run_discovery(
             "proto_dist": proto_dist,
             "mahalanobis": mahalanobis,
             "odin_msp": np.asarray(outputs.get("odin_msp", np.zeros_like(score)), dtype=float),
+            "react_energy": np.asarray(outputs.get("react_energy", np.zeros_like(score)), dtype=float),
+            "knn_distance": np.asarray(outputs.get("knn_distance", np.zeros_like(score)), dtype=float),
+            "vim_residual": np.asarray(outputs.get("vim_residual", np.zeros_like(score)), dtype=float),
             "pred_known": pred_known,
             "true_known": known_mask,
             "pred_class": pred_class,
@@ -1939,6 +2249,9 @@ def run_discovery(
         "proto_dist": proto_dist,
         "mahalanobis": mahalanobis,
         "odin_msp": np.asarray(outputs.get("odin_msp", np.zeros_like(score)), dtype=float),
+        "react_energy": np.asarray(outputs.get("react_energy", np.zeros_like(score)), dtype=float),
+        "knn_distance": np.asarray(outputs.get("knn_distance", np.zeros_like(score)), dtype=float),
+        "vim_residual": np.asarray(outputs.get("vim_residual", np.zeros_like(score)), dtype=float),
         "pred_known": pred_known,
         "true_known": known_mask,
         "pred_class": pred_class,

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
-from torch.utils.data import Dataset, Subset
+from torch.utils.data import ConcatDataset, Dataset, Subset
 from torchvision import datasets, transforms
 
 from .utils import load_json, save_json, split_list
@@ -239,6 +239,36 @@ def split_dataset(dataset: Dataset, ratio: float, seed: int):
     return first, second
 
 
+def build_open_validation_and_discovery(
+    known_train: Dataset,
+    known_val: Dataset,
+    unknown_pool: Dataset,
+    open_val_ratio: float,
+    seed: int,
+    discovery_pool_mode: str,
+):
+    """Reserve training-split samples for open validation, never from test.
+
+    The known validation set is divided between threshold calibration and
+    open-score selection. Novel training samples are divided between
+    open-score selection and the unlabeled discovery pool.
+    """
+    if discovery_pool_mode not in {"unknown", "mixed"}:
+        raise ValueError(f"Unsupported discovery pool mode: {discovery_pool_mode}")
+    if open_val_ratio > 0.0:
+        open_known, known_val = split_dataset(known_val, open_val_ratio, seed)
+        open_unknown, unknown_pool = split_dataset(unknown_pool, open_val_ratio, seed + 1)
+        open_val = ConcatDataset([open_known, open_unknown])
+    else:
+        open_val = None
+
+    if discovery_pool_mode == "unknown":
+        discovery_pool = unknown_pool
+    else:
+        discovery_pool = ConcatDataset([known_train, unknown_pool])
+    return known_val, open_val, discovery_pool
+
+
 def build_data_bundle(
     dataset_name: str,
     root: str,
@@ -268,12 +298,19 @@ def build_data_bundle(
         train_indices, val_indices = split_known_indices(len(train_full), val_ratio=0.1, seed=seed)
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
+        unknown_pool = unknown_subset(pool_full)
+        val_set, open_val, discovery_pool = build_open_validation_and_discovery(
+            train_set,
+            val_set,
+            unknown_pool,
+            open_val_ratio,
+            seed,
+            discovery_pool_mode,
+        )
         train_set = limit_dataset(train_set, limit_train, seed)
         val_set = limit_dataset(val_set, limit_val, seed)
-        open_val, test_open = split_dataset(test_open, open_val_ratio, seed)
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
-        discovery_pool = unknown_subset(pool_full) if discovery_pool_mode == "unknown" else pool_full
         return DataBundle(
             train=train_set,
             val=val_set,
@@ -303,12 +340,19 @@ def build_data_bundle(
         train_indices, val_indices = split_known_indices(len(train_full), val_ratio=0.1, seed=seed)
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
+        unknown_pool = unknown_subset(pool_full)
+        val_set, open_val, discovery_pool = build_open_validation_and_discovery(
+            train_set,
+            val_set,
+            unknown_pool,
+            open_val_ratio,
+            seed,
+            discovery_pool_mode,
+        )
         train_set = limit_dataset(train_set, limit_train, seed)
         val_set = limit_dataset(val_set, limit_val, seed)
-        open_val, test_open = split_dataset(test_open, open_val_ratio, seed)
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
-        discovery_pool = unknown_subset(pool_full) if discovery_pool_mode == "unknown" else pool_full
         return DataBundle(
             train=train_set,
             val=val_set,
@@ -328,12 +372,20 @@ def build_data_bundle(
         pool_full = OpenSetFakeData(1000, known_classes, image_size, transform=train_tf, include_unknown=True, random_offset=30000)
         test_open = OpenSetFakeData(1000, known_classes, image_size, transform=test_tf, include_unknown=True, random_offset=20000)
         train_set, _ = split_known_dataset(train_full, val_ratio=0.1, seed=seed)
-        train_set = limit_dataset(train_set, limit_train, seed)
         val_set = limit_dataset(val_full, limit_val, seed)
-        open_val, test_open = split_dataset(test_open, open_val_ratio, seed)
+        unknown_pool = unknown_subset(pool_full)
+        val_set, open_val, discovery_pool = build_open_validation_and_discovery(
+            train_set,
+            val_set,
+            unknown_pool,
+            open_val_ratio,
+            seed,
+            discovery_pool_mode,
+        )
+        train_set = limit_dataset(train_set, limit_train, seed)
+        val_set = limit_dataset(val_set, limit_val, seed)
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
-        discovery_pool = unknown_subset(pool_full) if discovery_pool_mode == "unknown" else pool_full
         return DataBundle(
             train=train_set,
             val=val_set,
