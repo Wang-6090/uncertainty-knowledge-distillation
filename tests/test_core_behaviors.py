@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from novel_discovery.losses import (
     discovery_unknown_loss,
+    angular_margin_loss,
+    proxy_anchor_loss,
+    reciprocal_point_loss,
     energy_margin_loss,
     per_sample_energy_margin_loss,
     proxy_contrastive_loss,
@@ -23,28 +27,48 @@ from novel_discovery.losses import (
     uncertainty_separation_loss,
     outlier_exposure_uniform_loss,
 )
-from novel_discovery.data import build_open_validation_and_discovery
+from novel_discovery.data import build_data_bundle, build_open_validation_and_discovery
 from novel_discovery.pipeline import (
     calibration_diagnostics,
     attach_knn_distances,
     attach_vim_residual,
     compute_mahalanobis_distance,
     compute_gaussian_nll,
+    compute_openmax_score,
+    compute_reciprocal_score,
+    compute_relative_mahalanobis_distance,
+    calibrate_coverage_threshold,
     compute_open_score,
     compute_discovery_candidate_weights,
+    evaluate_cluster_candidates,
     filter_discovery_candidates_by_neighbors,
     fit_score_normalization,
     run_discovery,
     calibrate_class_thresholds,
     calibrate_open_threshold,
     purify_candidate_mask,
+    candidate_purification_score,
+    evaluate_candidate_purification,
     select_discovery_candidates,
     update_ema_model,
+    synthesize_virtual_outliers,
+    synthesize_gaussian_virtual_outliers,
 )
 from train import parse_args, scheduled_weight
 
 
 class CommandLineTest(unittest.TestCase):
+    def test_teacher_proxy_anchor_arguments_are_available(self):
+        args = parse_args(["train_teacher"])
+        self.assertEqual(args.alpha_proxy_anchor, 0.0)
+        self.assertEqual(args.proxy_anchor_alpha, 32.0)
+        self.assertEqual(args.proxy_anchor_margin, 0.1)
+
+    def test_imagefolder_requires_separate_train_and_test_roots(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(ValueError):
+                build_data_bundle("imagefolder", root, 1, 0, 32)
+
     def test_discover_arguments_stay_in_sync_with_runtime(self):
         args = parse_args(
             [
@@ -56,6 +80,8 @@ class CommandLineTest(unittest.TestCase):
                 "--score-mode", "odin_msp",
                 "--odin-epsilon", "0.001",
                 "--odin-temperature", "1000",
+                "--max-auto-clusters", "48",
+                "--threshold-policy", "open_known_coverage",
                 "--react-percentile", "99.5",
             ]
         )
@@ -68,6 +94,8 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(args.score_mode, "odin_msp")
         self.assertAlmostEqual(args.odin_epsilon, 0.001)
         self.assertAlmostEqual(args.odin_temperature, 1000.0)
+        self.assertEqual(args.max_auto_clusters, 48)
+        self.assertEqual(args.threshold_policy, "open_known_coverage")
         self.assertAlmostEqual(args.react_percentile, 99.5)
 
     def test_open_validation_is_reserved_from_train_splits_not_test(self):
@@ -182,6 +210,54 @@ class CommandLineTest(unittest.TestCase):
 
 
 class LossBehaviorTest(unittest.TestCase):
+    def test_angular_margin_loss_is_finite_and_has_gradient(self):
+        features = torch.randn(6, 4, requires_grad=True)
+        weights = torch.randn(3, 4, requires_grad=True)
+        labels = torch.tensor([0, 1, 2, 0, 1, 2])
+        loss = angular_margin_loss(features, labels, weights, margin=0.2, scale=16.0)
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNotNone(features.grad)
+        self.assertIsNotNone(weights.grad)
+
+    def test_openmax_score_is_finite_and_increases_for_far_features(self):
+        stats = {
+            "means": np.array([[0.0, 0.0], [3.0, 3.0]], dtype=np.float32),
+            "weibull_shapes": np.array([2.0, 2.0], dtype=np.float32),
+            "weibull_locations": np.array([0.0, 0.0], dtype=np.float32),
+            "weibull_scales": np.array([1.0, 1.0], dtype=np.float32),
+        }
+        near = compute_openmax_score(np.array([[0.1, 0.1]], dtype=np.float32), stats)
+        far = compute_openmax_score(np.array([[10.0, 10.0]], dtype=np.float32), stats)
+        self.assertTrue(np.isfinite(near).all())
+        self.assertTrue(np.isfinite(far).all())
+        self.assertGreater(float(far[0]), float(near[0]))
+
+    def test_proxy_anchor_loss_is_finite_and_has_gradient(self):
+        features = torch.randn(8, 4, requires_grad=True)
+        proxies = torch.randn(4, 4, requires_grad=True)
+        labels = torch.tensor([0, 1, 2, 3, 0, 1, 2, 3])
+        loss = proxy_anchor_loss(features, labels, proxies)
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNotNone(features.grad)
+        self.assertIsNotNone(proxies.grad)
+
+    def test_reciprocal_point_loss_and_score_are_finite_and_differentiable(self):
+        known = torch.randn(6, 4, requires_grad=True)
+        unknown = torch.randn(5, 4, requires_grad=True)
+        prototypes = torch.randn(3, 4, requires_grad=True)
+        points = torch.nn.Parameter(torch.randn(2, 4))
+        loss = reciprocal_point_loss(known, unknown, prototypes, points)
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNotNone(points.grad)
+        scores = compute_reciprocal_score(
+            np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+            np.array([[1.0, 0.0]], dtype=np.float32),
+        )
+        self.assertTrue(np.allclose(scores, [1.0, 0.0]))
+
     def test_uncertainty_weights_can_be_clipped(self):
         values = uncertainty_weights(
             torch.tensor([0.0, 2.0]),
@@ -199,6 +275,38 @@ class LossBehaviorTest(unittest.TestCase):
 
         self.assertTrue(torch.isfinite(loss))
         self.assertIsNotNone(known.grad)
+
+    def test_vos_virtual_outliers_are_finite_and_outside_known_proxy_cone(self):
+        torch.manual_seed(7)
+        features = torch.tensor(
+            [[2.0, 0.0], [0.0, 2.0]], requires_grad=True
+        )
+        labels = torch.tensor([0, 1])
+        proxies = torch.tensor([[1.0, 0.0], [0.0, 1.0]], requires_grad=True)
+        virtual = synthesize_virtual_outliers(
+            features, labels, proxies, tail_scale=2.0, noise_scale=0.0
+        )
+        self.assertEqual(tuple(virtual.shape), tuple(features.shape))
+        self.assertTrue(torch.isfinite(virtual).all())
+        cosine = torch.nn.functional.cosine_similarity(
+            virtual.detach(), proxies.detach()[labels], dim=-1
+        )
+        self.assertTrue(torch.all(cosine < 0.8))
+        virtual.sum().backward()
+        self.assertIsNotNone(features.grad)
+        self.assertIsNotNone(proxies.grad)
+
+    def test_gaussian_vos_uses_class_statistics_and_keeps_shape(self):
+        torch.manual_seed(11)
+        labels = torch.tensor([0, 1, 0, 1])
+        means = torch.tensor([[1.0, 0.0], [0.0, 2.0]])
+        variances = torch.tensor([[0.25, 0.25], [0.04, 0.04]])
+        virtual = synthesize_gaussian_virtual_outliers(
+            labels, means, variances, tail_scale=2.0
+        )
+        self.assertEqual(tuple(virtual.shape), (4, 2))
+        self.assertTrue(torch.isfinite(virtual).all())
+        self.assertGreater(torch.norm(virtual[1] - means[1]).item(), 0.0)
 
     def test_weighted_energy_margin_loss_has_per_sample_behavior(self):
         known = torch.tensor([[3.0, 0.0], [2.0, 0.0]], requires_grad=True)
@@ -310,6 +418,20 @@ class LossBehaviorTest(unittest.TestCase):
 
 
 class ScoreBehaviorTest(unittest.TestCase):
+    def test_relative_mahalanobis_uses_class_minus_background_density(self):
+        stats = {
+            "means": np.array([[0.0, 0.0], [4.0, 0.0]], dtype=np.float32),
+            "variances": np.ones((2, 2), dtype=np.float32),
+            "precision": np.eye(2, dtype=np.float32),
+            "global_mean": np.array([2.0, 0.0], dtype=np.float32),
+            "global_precision": np.eye(2, dtype=np.float32),
+        }
+        scores = compute_relative_mahalanobis_distance(
+            np.array([[0.1, 0.0], [2.0, 0.0]], dtype=np.float32), stats
+        )
+        self.assertTrue(np.all(np.isfinite(scores)))
+        self.assertGreater(scores[1], scores[0])
+
     def test_score_normalization_does_not_require_prototypes_for_entropy_stats(self):
         outputs = {
             "entropy": np.array([0.1, 0.2, 0.3]),
@@ -582,7 +704,52 @@ class ScoreBehaviorTest(unittest.TestCase):
         self.assertGreater(weights[mask].max().item(), weights[mask].min().item())
 
 
+class AutoClusterSelectionTest(unittest.TestCase):
+    def test_auto_k_search_respects_bounds_above_twenty(self):
+        rng = np.random.default_rng(123)
+        centers = rng.normal(size=(22, 4)) * 5.0
+        features = np.concatenate(
+            [center + rng.normal(scale=0.05, size=(4, 4)) for center in centers],
+            axis=0,
+        ).astype(np.float32)
+        _, diagnostics = evaluate_cluster_candidates(
+            features,
+            max_clusters=22,
+            selection="silhouette",
+            n_init=1,
+            stability_repeats=1,
+        )
+        self.assertEqual(diagnostics[-1]["k"], 22)
+
+    def test_auto_k_gmm_bic_returns_model_selection_diagnostics(self):
+        rng = np.random.default_rng(321)
+        features = np.concatenate(
+            [rng.normal(loc=center, scale=0.2, size=(30, 3)) for center in (-3.0, 3.0)],
+            axis=0,
+        ).astype(np.float32)
+        selected, diagnostics = evaluate_cluster_candidates(
+            features,
+            max_clusters=4,
+            selection="gmm_bic",
+            n_init=1,
+            stability_repeats=1,
+        )
+        self.assertGreaterEqual(selected, 2)
+        self.assertTrue(all("gmm_bic" in row for row in diagnostics))
+
+
 class CalibrationTest(unittest.TestCase):
+    def test_open_threshold_maximizes_unknown_rejection_at_known_coverage(self):
+        scores = np.array([0.1, 0.2, 0.7, 0.8, 0.3, 0.4, 0.5, 0.9])
+        is_known = np.array([True, True, True, True, False, False, False, False])
+        threshold, report = calibrate_open_threshold(
+            scores, is_known, "known_coverage", target_known_coverage=0.75
+        )
+        self.assertAlmostEqual(report["known_accept_rate"], 0.75)
+        self.assertAlmostEqual(report["unknown_reject_rate"], 0.25)
+        self.assertAlmostEqual(report["target_known_coverage"], 0.75)
+        self.assertAlmostEqual(threshold, 0.7)
+
     def test_open_threshold_balances_known_acceptance_and_unknown_rejection(self):
         scores = np.array([0.1, 0.2, 0.3, 0.8, 0.9, 1.0])
         is_known = np.array([True, True, True, False, False, False])
@@ -591,6 +758,18 @@ class CalibrationTest(unittest.TestCase):
         self.assertLess(threshold, 0.8)
         self.assertAlmostEqual(report["known_accept_rate"], 1.0)
         self.assertAlmostEqual(report["unknown_reject_rate"], 1.0)
+
+    def test_known_coverage_threshold_uses_known_scores_only(self):
+        scores = np.array([0.1, 0.2, 0.3, 0.8, 0.9])
+        threshold, report = calibrate_coverage_threshold(scores, target_known_coverage=0.8)
+        self.assertGreaterEqual(threshold, 0.3)
+        self.assertLess(threshold, 0.9)
+        self.assertAlmostEqual(report["target_known_coverage"], 0.8)
+        self.assertGreaterEqual(report["known_accept_rate"], 0.8)
+
+    def test_known_coverage_threshold_rejects_invalid_target(self):
+        with self.assertRaises(ValueError):
+            calibrate_coverage_threshold(np.array([0.1, 0.2]), target_known_coverage=0.0)
 
     def test_class_conditional_thresholds_fallback_for_small_classes(self):
         thresholds = calibrate_class_thresholds(
@@ -628,6 +807,29 @@ class CalibrationTest(unittest.TestCase):
 
 
 class DiscoveryReportTest(unittest.TestCase):
+    def test_labeled_knn_support_downranks_known_class_consensus(self):
+        outputs = {
+            "features": np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        }
+        bank = {
+            "features": np.array([[1.0, 0.0], [0.99, 0.01], [0.0, 1.0]], dtype=np.float32),
+            "labels": np.array([0, 0, 1]),
+        }
+        attach_knn_distances(outputs, bank, k=2)
+        self.assertGreater(outputs["knn_class_support"][0], outputs["knn_class_support"][1])
+        score = candidate_purification_score(outputs, "knn_support")
+        self.assertGreater(score[1], score[0])
+
+    def test_open_validation_purification_metrics(self):
+        outputs = {"is_known": np.array([True, False, False, True])}
+        report = evaluate_candidate_purification(
+            outputs,
+            np.array([True, True, True, False]),
+            np.array([False, True, True, False]),
+        )
+        self.assertAlmostEqual(report["before"]["known_contamination"], 1 / 3)
+        self.assertAlmostEqual(report["after"]["unknown_precision"], 1.0)
+
     def test_candidate_purification_keeps_highest_risk_only(self):
         outputs = {
             "entropy": np.array([0.1, 0.5, 0.9, 0.2]),

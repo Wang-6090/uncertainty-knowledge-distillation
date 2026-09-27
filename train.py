@@ -21,6 +21,7 @@ from novel_discovery.pipeline import (
     calibrate_threshold,
     calibrate_class_thresholds,
     calibrate_open_threshold,
+    calibrate_coverage_threshold,
     collect_diagonal_gaussian_stats,
     collect_prototypes,
     fit_score_normalization,
@@ -34,6 +35,8 @@ from novel_discovery.pipeline import (
     collect_activation_clip_value,
     collect_knn_feature_bank,
     attach_knn_distances,
+    purify_candidate_mask,
+    evaluate_candidate_purification,
     collect_vim_stats,
     attach_vim_residual,
     train_one_epoch_student,
@@ -80,8 +83,17 @@ def parse_args(argv=None):
     p.add_argument("--alpha-proto", type=float, default=0.0)
     p.add_argument("--alpha-proxy", type=float, default=0.0)
     p.add_argument("--proxy-temperature", type=float, default=0.1)
+    p.add_argument("--alpha-proxy-anchor", type=float, default=0.0)
+    p.add_argument("--proxy-anchor-alpha", type=float, default=32.0)
+    p.add_argument("--proxy-anchor-margin", type=float, default=0.1)
     p.add_argument("--alpha-pseudo", type=float, default=0.0)
     p.add_argument("--alpha-energy", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-angular", type=float, default=0.0,
+        help="Weight an ArcFace-style additive angular-margin loss for known classes.",
+    )
+    p.add_argument("--angular-margin", type=float, default=0.2)
+    p.add_argument("--angular-scale", type=float, default=16.0)
     p.add_argument("--energy-margin", type=float, default=1.0)
     p.add_argument("--energy-temperature", type=float, default=1.0)
     # Keep the validated baseline as the default; ``strong`` remains an
@@ -104,8 +116,43 @@ def parse_args(argv=None):
     p.add_argument("--alpha-proto", type=float, default=0.0)
     p.add_argument("--alpha-proxy", type=float, default=0.0)
     p.add_argument("--proxy-temperature", type=float, default=0.1)
+    p.add_argument("--alpha-proxy-anchor", type=float, default=0.0)
+    p.add_argument("--proxy-anchor-alpha", type=float, default=32.0)
+    p.add_argument("--proxy-anchor-margin", type=float, default=0.1)
+    p.add_argument(
+        "--reciprocal-points", type=int, default=0,
+        help="Number of learnable ARPL-inspired reciprocal points (0 disables them).",
+    )
+    p.add_argument("--alpha-reciprocal", type=float, default=0.0)
+    p.add_argument("--reciprocal-margin", type=float, default=0.2)
     p.add_argument("--alpha-pseudo", type=float, default=0.0)
     p.add_argument("--alpha-energy", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-vos", type=float, default=0.0,
+        help="Weight VOS-inspired virtual-outlier Energy/uniform separation during student training.",
+    )
+    p.add_argument(
+        "--vos-mode", choices=["gaussian", "batch_center"], default="gaussian",
+        help="Virtual-outlier generator: class-conditional Gaussian tails or online batch centers.",
+    )
+    p.add_argument(
+        "--vos-tail-scale", type=float, default=1.5,
+        help="Radial scale of the synthetic low-density feature direction.",
+    )
+    p.add_argument(
+        "--vos-noise-scale", type=float, default=0.25,
+        help="Orthogonal noise scale used for virtual outlier synthesis.",
+    )
+    p.add_argument(
+        "--vos-uniform-weight", type=float, default=0.25,
+        help="Relative uniform-logit weight inside the VOS loss.",
+    )
+    p.add_argument(
+        "--alpha-angular", type=float, default=0.0,
+        help="Weight an ArcFace-style additive angular-margin loss for known classes.",
+    )
+    p.add_argument("--angular-margin", type=float, default=0.2)
+    p.add_argument("--angular-scale", type=float, default=16.0)
     p.add_argument("--energy-margin", type=float, default=1.0)
     p.add_argument("--energy-temperature", type=float, default=1.0)
     p.add_argument("--pseudo-mode", choices=["legacy", "strong"], default="legacy")
@@ -364,9 +411,15 @@ def parse_args(argv=None):
     )
     p.add_argument(
         "--cluster-selection",
-        choices=["silhouette", "composite", "stability"],
+        choices=["silhouette", "composite", "stability", "gmm_bic"],
         default="silhouette",
-        help="K selection criterion: silhouette, composite internal metrics, or stability.",
+        help="K selection criterion: silhouette, composite metrics, stability, or diagonal-GMM BIC.",
+    )
+    p.add_argument(
+        "--max-auto-clusters",
+        type=int,
+        default=50,
+        help="Upper bound for unlabeled auto-K search; independent of the evaluation-only --num-novel.",
     )
     p.add_argument("--cluster-pca-dim", type=int, default=32)
     p.add_argument(
@@ -385,14 +438,20 @@ def parse_args(argv=None):
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument(
         "--threshold-policy",
-        choices=["global", "class_conditional", "open_balanced", "open_f1"],
+        choices=["global", "class_conditional", "known_coverage", "open_balanced", "open_f1", "open_known_coverage"],
         default="global",
-        help="Use a known-only threshold, class thresholds, or an open-validation operating point.",
+        help="Use a known-only threshold, matched known coverage, class thresholds, or an open-validation operating point.",
+    )
+    p.add_argument(
+        "--target-known-coverage",
+        type=float,
+        default=0.95,
+        help="Target known acceptance rate for --threshold-policy known_coverage.",
     )
     p.add_argument("--threshold-min-class-samples", type=int, default=5)
     p.add_argument(
         "--candidate-purify",
-        choices=["none", "open_score", "entropy", "head_uncertainty", "uncertainty_consensus"],
+        choices=["none", "open_score", "entropy", "head_uncertainty", "uncertainty_consensus", "knn_support", "open_knn_support"],
         default="none",
         help="Purify rejected candidates only before clustering; detection metrics are unchanged.",
     )
@@ -419,7 +478,11 @@ def parse_args(argv=None):
             "knn_distance",
             "normalized_entropy_knn",
             "gaussian_nll",
+            "openmax",
+            "reciprocal",
             "normalized_entropy_gaussian_nll",
+            "relative_mahalanobis",
+            "normalized_entropy_relative_mahalanobis",
             "vim_residual",
             "head_uncertainty",
             "margin_uncertainty",
@@ -712,8 +775,12 @@ def _score_needs_shared_mahalanobis(score_mode: str, auto_calibrate: bool = Fals
         "mahalanobis",
         "entropy_mahalanobis",
         "normalized_entropy_mahalanobis",
+        "relative_mahalanobis",
+        "normalized_entropy_relative_mahalanobis",
         "gaussian_nll",
         "normalized_entropy_gaussian_nll",
+        "relative_mahalanobis",
+        "normalized_entropy_relative_mahalanobis",
     }
 
 
@@ -725,19 +792,34 @@ def _calibrate_discovery_threshold(
     outputs_open_val,
     num_classes,
 ):
-    if args.threshold_policy in {"open_balanced", "open_f1"}:
+    if args.threshold_policy in {"open_balanced", "open_f1", "open_known_coverage"}:
         if scores_open_val is None or outputs_open_val is None:
             raise ValueError(
                 "open threshold policies require --open-val-ratio greater than 0"
             )
-        objective = "unknown_f1" if args.threshold_policy == "open_f1" else "balanced_accuracy"
+        objective = {
+            "open_f1": "unknown_f1",
+            "open_known_coverage": "known_coverage",
+        }.get(args.threshold_policy, "balanced_accuracy")
         threshold, diagnostics = calibrate_open_threshold(
             scores_open_val,
             np.asarray(outputs_open_val["is_known"], dtype=bool),
             objective=objective,
+            target_known_coverage=args.target_known_coverage,
         )
         return threshold, {
             "type": f"open_val_{objective}",
+            "percentile": None,
+            "min_class_samples": None,
+            **diagnostics,
+        }
+    if args.threshold_policy == "known_coverage":
+        threshold, diagnostics = calibrate_coverage_threshold(
+            scores_val,
+            target_known_coverage=args.target_known_coverage,
+        )
+        return threshold, {
+            "type": "known_val_known_coverage",
             "percentile": None,
             "min_class_samples": None,
             **diagnostics,
@@ -791,6 +873,7 @@ def fit_teacher(args):
     best_acc = -1.0
     best_state = None
     best_epoch = 0
+    history = []
     for epoch in range(args.epochs):
         stats = train_one_epoch_teacher(
             model,
@@ -808,8 +891,15 @@ def fit_teacher(args):
             energy_margin=args.energy_margin,
             energy_temperature=args.energy_temperature,
             proxy_temperature=args.proxy_temperature,
+            alpha_angular=args.alpha_angular,
+            angular_margin=args.angular_margin,
+            angular_scale=args.angular_scale,
+            alpha_proxy_anchor=args.alpha_proxy_anchor,
+            proxy_anchor_alpha=args.proxy_anchor_alpha,
+            proxy_anchor_margin=args.proxy_anchor_margin,
         )
         val_stats = evaluate_classification(model, val_loader, device)
+        history.append({"epoch": epoch + 1, "train": stats, "validation": val_stats})
         print(f"[teacher][{epoch+1}/{args.epochs}] {stats} {val_stats}")
         if val_stats["known_acc"] > best_acc:
             best_acc = val_stats["known_acc"]
@@ -819,6 +909,7 @@ def fit_teacher(args):
         model.load_state_dict(best_state)
     run_dir = ensure_dir(args.work_dir)
     save_json(run_dir / "config.json", {**vars(args), "best_epoch": best_epoch, "best_val_known_acc": best_acc})
+    save_json(run_dir / "train_history.json", history)
     proto_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
     prototypes = collect_prototypes(model, proto_loader, device, len(bundle.known_classes)).cpu()
     gaussian_stats = collect_diagonal_gaussian_stats(
@@ -840,6 +931,14 @@ def fit_teacher(args):
 
 
 def fit_student(args):
+    if args.alpha_reciprocal > 0.0 and args.reciprocal_points <= 0:
+        raise ValueError("--alpha-reciprocal requires --reciprocal-points greater than zero")
+    if args.alpha_reciprocal > 0.0 and (
+        not args.discovery_pool or args.discovery_pool_mode != "unknown"
+    ):
+        raise ValueError(
+            "reciprocal-point discovery loss requires --discovery-pool with a pure unknown pool"
+        )
     set_seed(args.seed)
     bundle = build_data_bundle(
         args.dataset,
@@ -921,14 +1020,40 @@ def fit_student(args):
             parameter.requires_grad_(False)
     teacher_ckpt = resolve_input_checkpoint(args.teacher_ckpt, args.work_dir, "teacher.pt")
     load_checkpoint(teacher, teacher_ckpt, device)
+    vos_gaussian_stats = None
+
+    def refresh_vos_gaussian_stats():
+        raw_stats = collect_diagonal_gaussian_stats(
+            student,
+            build_loader(bundle.train, args.batch_size, False, args.num_workers),
+            device,
+            len(bundle.known_classes),
+            include_shared_covariance=False,
+        )
+        return {
+            "means": torch.as_tensor(raw_stats["means"], dtype=torch.float32, device=device),
+            "variances": torch.as_tensor(raw_stats["variances"], dtype=torch.float32, device=device),
+        }
+
+    if args.alpha_vos > 0.0 and args.vos_mode == "gaussian":
+        vos_gaussian_stats = refresh_vos_gaussian_stats()
+        print("initialized VOS class-conditional Gaussian statistics")
     trainable_parameters = list(student.parameters())
     if novel_head is not None:
         trainable_parameters += list(novel_head.parameters())
+    reciprocal_points = None
+    if args.reciprocal_points > 0:
+        reciprocal_points = torch.nn.Parameter(
+            torch.randn(args.reciprocal_points, student.encoder.out_dim, device=device) * 0.02
+        )
+        trainable_parameters.append(reciprocal_points)
     optim = torch.optim.AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
     best_acc = -1.0
     best_state = None
     best_novel_head_state = None
+    best_reciprocal_state = None
     best_epoch = 0
+    history = []
     prototype_init_stats = None
     prototype_warmup = max(int(args.joint_prototype_warmup_epochs), 0)
     if (
@@ -994,6 +1119,12 @@ def fit_student(args):
             alpha_proxy=args.alpha_proxy,
             alpha_pseudo=args.alpha_pseudo,
             alpha_energy=args.alpha_energy,
+            alpha_vos=args.alpha_vos,
+            vos_mode=args.vos_mode,
+            vos_gaussian_stats=vos_gaussian_stats,
+            vos_tail_scale=args.vos_tail_scale,
+            vos_noise_scale=args.vos_noise_scale,
+            vos_uniform_weight=args.vos_uniform_weight,
             pseudo_mode=args.pseudo_mode,
             pseudo_feature_noise=args.pseudo_feature_noise,
             uncertainty_target_mode=args.uncertainty_target_mode,
@@ -1022,6 +1153,15 @@ def fit_student(args):
             energy_margin=args.energy_margin,
             energy_temperature=args.energy_temperature,
             proxy_temperature=args.proxy_temperature,
+            alpha_angular=args.alpha_angular,
+            angular_margin=args.angular_margin,
+            angular_scale=args.angular_scale,
+            alpha_proxy_anchor=args.alpha_proxy_anchor,
+            proxy_anchor_alpha=args.proxy_anchor_alpha,
+            proxy_anchor_margin=args.proxy_anchor_margin,
+            reciprocal_points=reciprocal_points,
+            alpha_reciprocal=args.alpha_reciprocal,
+            reciprocal_margin=args.reciprocal_margin,
             discovery_selection_model=discovery_selection_model,
             discovery_ema_decay=args.discovery_ema_decay,
             discovery_neighbor_filter=args.discovery_neighbor_filter,
@@ -1057,7 +1197,14 @@ def fit_student(args):
         stats["discovery_selective_weight"] = selective_weight
         stats["uncertainty_separation_weight"] = uncertainty_separation_weight
         stats["discovery_uniform_weight"] = discovery_uniform_weight
+        if (
+            args.alpha_vos > 0.0
+            and args.vos_mode == "gaussian"
+            and epoch + 1 < args.epochs
+        ):
+            vos_gaussian_stats = refresh_vos_gaussian_stats()
         val_stats = evaluate_classification(student, val_loader, device)
+        history.append({"epoch": epoch + 1, "train": stats, "validation": val_stats})
         print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
         if val_stats["known_acc"] > best_acc:
             best_acc = val_stats["known_acc"]
@@ -1065,11 +1212,16 @@ def fit_student(args):
             best_novel_head_state = (
                 copy.deepcopy(novel_head.state_dict()) if novel_head is not None else None
             )
+            best_reciprocal_state = (
+                reciprocal_points.detach().clone() if reciprocal_points is not None else None
+            )
             best_epoch = epoch + 1
     if best_state is not None:
         student.load_state_dict(best_state)
     if novel_head is not None and best_novel_head_state is not None:
         novel_head.load_state_dict(best_novel_head_state)
+    if reciprocal_points is not None and best_reciprocal_state is not None:
+        reciprocal_points.data.copy_(best_reciprocal_state)
     run_dir = ensure_dir(args.work_dir)
     save_json(
         run_dir / "config.json",
@@ -1078,8 +1230,14 @@ def fit_student(args):
             "best_epoch": best_epoch,
             "best_val_known_acc": best_acc,
             "prototype_init_stats": prototype_init_stats,
+            "discovery_pool_semantics": (
+                "oracle_filtered_novel_only (training class labels select the pool)"
+                if args.discovery_pool_mode == "unknown"
+                else "unlabeled_mixed_known_and_novel"
+            ),
         },
     )
+    save_json(run_dir / "train_history.json", history)
     proto_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
     prototypes = collect_prototypes(student, proto_loader, device, len(bundle.known_classes)).cpu()
     gaussian_stats = collect_diagonal_gaussian_stats(
@@ -1095,6 +1253,9 @@ def fit_student(args):
             "prototypes": prototypes,
             "gaussian_stats": gaussian_stats,
             "joint_novel_head": novel_head.state_dict() if novel_head is not None else None,
+            "reciprocal_points": (
+                reciprocal_points.detach().cpu() if reciprocal_points is not None else None
+            ),
         },
     )
     if novel_head is not None:
@@ -1158,7 +1319,7 @@ def discover(args):
             seed=args.seed,
             feature_key=args.knn_feature,
         )
-        print(f"knn feature bank: {len(knn_bank)} vectors, k={args.knn_k}")
+        print(f"knn feature bank: {len(knn_bank['features'])} vectors, k={args.knn_k}")
     vim_stats = None
     if args.vim_ood:
         train_feature_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
@@ -1254,14 +1415,47 @@ def discover(args):
             key: value.detach().cpu().numpy() if torch.is_tensor(value) else np.asarray(value)
             for key, value in gaussian_stats.items()
         }
+    reciprocal_points = ckpt.get("reciprocal_points")
+    if reciprocal_points is not None:
+        gaussian_stats = {} if gaussian_stats is None else gaussian_stats
+        gaussian_stats["reciprocal_points"] = (
+            reciprocal_points.detach().cpu().numpy()
+            if torch.is_tensor(reciprocal_points)
+            else np.asarray(reciprocal_points)
+        )
     if args.auto_score_fast and (args.score_mode == "auto" or args.auto_calibrate_score):
         # Fast calibration does not compare Mahalanobis scores, so avoid
         # loading or fitting their high-dimensional statistics.
         gaussian_stats = None
     if (
         not args.auto_score_fast
-        and (gaussian_stats is None or "precision" not in gaussian_stats)
+        and (
+            gaussian_stats is None
+            or "precision" not in gaussian_stats
+            or (
+                args.score_mode in {"relative_mahalanobis", "normalized_entropy_relative_mahalanobis"}
+                and "global_variances" not in gaussian_stats
+            )
+        )
         and _score_needs_shared_mahalanobis(args.score_mode, args.auto_calibrate_score)
+    ):
+        stats_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        gaussian_stats = collect_diagonal_gaussian_stats(
+            model,
+            stats_loader,
+            device,
+            len(bundle.known_classes),
+            include_shared_covariance=args.score_mode not in {
+                "relative_mahalanobis",
+                "normalized_entropy_relative_mahalanobis",
+            },
+        )
+    if args.score_mode == "reciprocal" and (
+        gaussian_stats is None or "reciprocal_points" not in gaussian_stats
+    ):
+        raise ValueError("--score-mode reciprocal requires a checkpoint trained with --reciprocal-points")
+    if args.score_mode == "openmax" and (
+        gaussian_stats is None or "weibull_shapes" not in gaussian_stats
     ):
         stats_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
         gaussian_stats = collect_diagonal_gaussian_stats(
@@ -1441,6 +1635,37 @@ def discover(args):
             }
         )
 
+    # Assess candidate-pool purification on the reserved open-validation split.
+    # This uses its known/unknown identity labels for diagnostics only; it does
+    # not change the purifier mode/ratio or use final test labels for selection.
+    if outputs_open_val is not None:
+        open_val_score, _ = compute_open_score(
+            outputs_open_val,
+            prototypes=proto,
+            score_mode=selected_score_mode,
+            normalization=score_normalization,
+            gaussian_stats=gaussian_stats,
+        )
+        open_val_pred_class = outputs_open_val["logits"].argmax(axis=1)
+        threshold_array = np.asarray(threshold)
+        if threshold_array.ndim == 0:
+            open_val_pred_known = open_val_score <= float(threshold_array)
+        else:
+            open_val_pred_known = open_val_score <= threshold_array[
+                np.clip(open_val_pred_class, 0, len(threshold_array) - 1)
+            ]
+        open_val_candidates = ~open_val_pred_known
+        open_val_purified, _ = purify_candidate_mask(
+            outputs_open_val,
+            open_val_candidates,
+            mode=args.candidate_purify,
+            keep_ratio=args.candidate_keep_ratio,
+            open_score=open_val_score,
+        )
+        calibration_report["candidate_purification_open_val"] = evaluate_candidate_purification(
+            outputs_open_val, open_val_candidates, open_val_purified
+        )
+
     result, scores_test, pred_known, detail = run_discovery(
         outputs_test,
         threshold,
@@ -1458,12 +1683,34 @@ def discover(args):
         cluster_whiten=not args.cluster_no_whiten,
         cluster_n_init=args.cluster_n_init,
         cluster_stability_repeats=args.cluster_stability_repeats,
+        max_auto_clusters=args.max_auto_clusters,
         candidate_purify=args.candidate_purify,
         candidate_keep_ratio=args.candidate_keep_ratio,
         enable_clustering=not args.skip_clustering,
     )
+    # ``threshold_type`` describes the shape of the threshold (global versus
+    # class-conditional).  Keep the calibration policy separately so a scalar
+    # threshold calibrated for a fixed known coverage is not mistaken for the
+    # historical global-percentile policy.
+    policy_report = calibration_report.get("threshold_policy", {})
+    result["threshold_policy"] = policy_report.get("type", args.threshold_policy)
+    if "target_known_coverage" in policy_report:
+        result["target_known_coverage"] = float(policy_report["target_known_coverage"])
+        result["calibration_known_accept_rate"] = float(
+            policy_report.get("known_accept_rate", float("nan"))
+        )
     run_dir = ensure_dir(args.work_dir)
-    save_json(run_dir / "config.json", vars(args))
+    save_json(
+        run_dir / "config.json",
+        {
+            **vars(args),
+            "discovery_pool_semantics": (
+                "oracle_filtered_novel_only (training class labels select the pool)"
+                if args.discovery_pool_mode == "unknown"
+                else "unlabeled_mixed_known_and_novel"
+            ),
+        },
+    )
     torch.save(
         {
             "known_classes": list(bundle.known_classes),

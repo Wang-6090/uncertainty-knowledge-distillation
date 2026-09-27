@@ -271,6 +271,134 @@ def proxy_contrastive_loss(
     return F.cross_entropy(logits, labels[valid])
 
 
+def proxy_anchor_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    proxies: torch.Tensor,
+    alpha: float = 32.0,
+    margin: float = 0.1,
+) -> torch.Tensor:
+    """Proxy Anchor loss for proxy-based metric learning.
+
+    The formulation follows Kim et al., *Proxy Anchor Loss for Deep Metric
+    Learning* (CVPR 2020). It aggregates positive and negative examples per
+    proxy, which is useful when a batch contains few examples from many
+    classes. This is an optional representation-learning loss, not a direct
+    unknown detector.
+    """
+    valid = labels >= 0
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    alpha = float(alpha)
+    margin = float(margin)
+    if alpha <= 0.0 or margin < 0.0:
+        raise ValueError("proxy-anchor alpha must be positive and margin non-negative")
+    feats = F.normalize(features[valid], dim=-1)
+    proxy = F.normalize(proxies, dim=-1)
+    similarity = feats @ proxy.T
+    labels = labels[valid].long()
+    positive = F.one_hot(labels, num_classes=proxy.size(0)).to(dtype=torch.bool)
+    present = positive.any(dim=0)
+    if not present.any():
+        return features.new_tensor(0.0)
+    similarity = similarity[:, present]
+    positive = positive[:, present]
+    negative = ~positive
+
+    positive_logits = -alpha * (similarity - margin)
+    positive_logits = positive_logits.masked_fill(~positive, float("-inf"))
+    positive_term = F.softplus(torch.logsumexp(positive_logits, dim=0)).mean()
+
+    negative_logits = alpha * (similarity + margin)
+    negative_logits = negative_logits.masked_fill(~negative, float("-inf"))
+    valid_negative = negative.any(dim=0)
+    if valid_negative.any():
+        negative_term = F.softplus(
+            torch.logsumexp(negative_logits[:, valid_negative], dim=0)
+        ).mean()
+    else:
+        negative_term = similarity.new_tensor(0.0)
+    return positive_term + negative_term
+
+
+def reciprocal_point_loss(
+    known_features: torch.Tensor,
+    unknown_features: torch.Tensor,
+    known_prototypes: torch.Tensor,
+    reciprocal_points: torch.Tensor,
+    margin: float = 0.2,
+) -> torch.Tensor:
+    """ARPL-inspired reciprocal-point objective.
+
+    Known features are repelled from learned reciprocal points. Discovery
+    features are attracted to their nearest reciprocal point and repelled from
+    known class prototypes. The objective is deliberately exposed as an
+    auxiliary loss: it is an ARPL-inspired adaptation for this project's
+    pure-unknown discovery pool, not a claim of reproducing full ARPL.
+    """
+    if known_features.numel() == 0 or unknown_features.numel() == 0:
+        return known_features.new_tensor(0.0)
+    if reciprocal_points.numel() == 0 or known_prototypes.numel() == 0:
+        return known_features.new_tensor(0.0)
+    margin = float(margin)
+    if margin < 0.0 or margin >= 1.0:
+        raise ValueError("reciprocal margin must be in [0, 1)")
+    known = F.normalize(known_features, dim=-1)
+    unknown = F.normalize(unknown_features, dim=-1)
+    prototypes = F.normalize(known_prototypes, dim=-1)
+    points = F.normalize(reciprocal_points, dim=-1)
+
+    known_point_similarity = (known @ points.T).max(dim=-1).values
+    repel_known = F.relu(known_point_similarity - margin).mean()
+    unknown_point_similarity = (unknown @ points.T).max(dim=-1).values
+    attract_unknown = (1.0 - unknown_point_similarity).mean()
+    unknown_known_similarity = (unknown @ prototypes.T).max(dim=-1).values
+    repel_unknown_known = F.relu(unknown_known_similarity - margin).mean()
+
+    if points.size(0) > 1:
+        pairwise = points @ points.T
+        mask = ~torch.eye(points.size(0), dtype=torch.bool, device=points.device)
+        diversify = F.relu(pairwise[mask] - margin).mean()
+    else:
+        diversify = points.new_tensor(0.0)
+    return repel_known + attract_unknown + repel_unknown_known + 0.1 * diversify
+
+
+def angular_margin_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    classifier_weight: torch.Tensor,
+    margin: float = 0.2,
+    scale: float = 16.0,
+) -> torch.Tensor:
+    """ArcFace-style auxiliary loss for tighter known-class features.
+
+    This follows the additive angular-margin idea of Deng et al. (CVPR
+    2019), but is kept as an auxiliary loss so the ordinary inference logits
+    and historical default training remain unchanged.
+    """
+    valid = labels >= 0
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    margin = float(margin)
+    scale = float(scale)
+    if margin < 0.0 or margin >= 1.0:
+        raise ValueError("angular margin must be in [0, 1)")
+    if scale <= 0.0:
+        raise ValueError("angular scale must be positive")
+    feats = F.normalize(features[valid], dim=-1)
+    weights = F.normalize(classifier_weight, dim=-1)
+    cosine = (feats @ weights.T).clamp(-1.0 + 1e-7, 1.0 - 1e-7)
+    target = labels[valid].long()
+    sine = torch.sqrt((1.0 - cosine.square()).clamp_min(1e-7))
+    margin_tensor = cosine.new_tensor(margin)
+    phi = cosine * torch.cos(margin_tensor) - sine * torch.sin(margin_tensor)
+    logits = cosine.clone()
+    rows = torch.arange(target.numel(), device=target.device)
+    logits[rows, target] = phi[rows, target]
+    return F.cross_entropy(logits * scale, target)
+
+
 def pseudo_unknown_loss(logits: torch.Tensor, uncertainty: torch.Tensor) -> torch.Tensor:
     if logits.numel() == 0:
         return logits.new_tensor(0.0)

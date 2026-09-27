@@ -4,6 +4,7 @@ from typing import Dict
 
 import numpy as np
 import torch
+from scipy.stats import weibull_min
 from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.decomposition import PCA
 from sklearn.metrics import (
@@ -12,6 +13,8 @@ from sklearn.metrics import (
     normalized_mutual_info_score,
     silhouette_score,
 )
+from sklearn.mixture import GaussianMixture
+from threadpoolctl import threadpool_limits
 from torch.utils.data import DataLoader
 from torch.nn import functional as F
 from tqdm import tqdm
@@ -22,9 +25,12 @@ from .losses import (
     discovery_view_loss,
     distillation_loss,
     energy_margin_loss,
+    angular_margin_loss,
     feature_distillation_loss,
     pseudo_unknown_loss,
     proxy_contrastive_loss,
+    proxy_anchor_loss,
+    reciprocal_point_loss,
     prototype_alignment_loss,
     supervised_contrastive_loss,
     uncertainty_alignment_loss,
@@ -99,6 +105,90 @@ def pseudo_forward_from_features(model, features: torch.Tensor, stochastic: bool
     logits = model.classifier(features)
     uncertainty = torch.sigmoid(model.uncertainty_head(features)).squeeze(-1)
     return logits, uncertainty
+
+
+def synthesize_virtual_outliers(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    classifier_weight: torch.Tensor,
+    tail_scale: float = 1.5,
+    noise_scale: float = 0.25,
+) -> torch.Tensor:
+    """Generate VOS-inspired low-density feature candidates.
+
+    This lightweight approximation estimates class centers from the current
+    known batch and extrapolates a sample toward a low-density tail direction.
+    The classifier weight is only a fallback for a degenerate class center. A
+    small random orthogonal perturbation prevents collapse to one direction.
+    It is not a reproduction of the full VOS algorithm.
+    """
+    if features.numel() == 0:
+        return features.new_empty(features.shape)
+    if labels.numel() != features.size(0):
+        raise ValueError("labels must have one entry per feature")
+    if classifier_weight.ndim != 2 or classifier_weight.size(1) != features.size(1):
+        raise ValueError("classifier_weight must have shape [num_classes, feature_dim]")
+    if labels.min().item() < 0 or labels.max().item() >= classifier_weight.size(0):
+        raise ValueError("labels contain an invalid classifier index")
+
+    feature_norm = features.norm(dim=-1, keepdim=True).detach().clamp_min(1e-4)
+    class_means = features.new_zeros(classifier_weight.size(0), features.size(1))
+    class_means.index_add_(0, labels, features)
+    counts = torch.bincount(labels, minlength=classifier_weight.size(0)).to(features)
+    class_means = class_means / counts.clamp_min(1.0).unsqueeze(-1)
+    batch_proxies = class_means[labels]
+    fallback_proxies = classifier_weight[labels]
+    use_fallback = batch_proxies.norm(dim=-1, keepdim=True) < 1e-6
+    proxies = torch.where(use_fallback, fallback_proxies, batch_proxies)
+    proxies = F.normalize(proxies, dim=-1)
+    normalized_features = F.normalize(features, dim=-1)
+    centered = features - class_means[labels].detach()
+    residual = F.normalize(centered, dim=-1)
+    residual_norm = centered.norm(dim=-1, keepdim=True)
+    residual = torch.where(residual_norm > 1e-6, residual, normalized_features)
+    projection = (residual * proxies).sum(dim=-1, keepdim=True)
+    residual = residual - projection * proxies
+    noise = torch.randn_like(normalized_features)
+    noise = noise - (noise * proxies).sum(dim=-1, keepdim=True) * proxies
+    candidate_direction = residual + float(noise_scale) * noise
+    candidate_norm = candidate_direction.norm(dim=-1, keepdim=True)
+    fallback_direction = F.normalize(noise, dim=-1)
+    direction = torch.where(
+        candidate_norm > 1e-6,
+        F.normalize(candidate_direction, dim=-1),
+        fallback_direction,
+    )
+    base = class_means[labels].detach()
+    base = torch.where(use_fallback, fallback_proxies, base)
+    base_norm = base.norm(dim=-1, keepdim=True).clamp_min(1e-4)
+    return base + float(tail_scale) * base_norm * direction
+
+
+def synthesize_gaussian_virtual_outliers(
+    labels: torch.Tensor,
+    means: torch.Tensor,
+    variances: torch.Tensor,
+    tail_scale: float = 2.0,
+) -> torch.Tensor:
+    """Sample class-conditional low-likelihood feature tails.
+
+    ``means`` and ``variances`` are estimated from known training features and
+    treated as fixed statistics for the current epoch. A normalized random
+    direction is scaled by the class-wise diagonal standard deviation and a
+    tail multiplier, which avoids the very large norm produced by sampling an
+    unnormalized 512-dimensional Gaussian vector. This is a lightweight
+    VOS-style approximation, not a full VOS implementation.
+    """
+    if means.ndim != 2 or variances.shape != means.shape:
+        raise ValueError("means and variances must have shape [num_classes, feature_dim]")
+    if labels.numel() == 0:
+        return means.new_empty((0, means.size(1)))
+    if labels.min().item() < 0 or labels.max().item() >= means.size(0):
+        raise ValueError("labels contain an invalid Gaussian class index")
+    class_mean = means[labels]
+    class_std = variances[labels].clamp_min(1e-6).sqrt()
+    direction = F.normalize(torch.randn_like(class_mean), dim=-1)
+    return class_mean + float(tail_scale) * direction * class_std
 
 
 def _rank_normalize(score: torch.Tensor) -> torch.Tensor:
@@ -351,6 +441,15 @@ def train_one_epoch_teacher(
     energy_margin: float = 1.0,
     energy_temperature: float = 1.0,
     proxy_temperature: float = 0.1,
+    alpha_angular: float = 0.0,
+    angular_margin: float = 0.2,
+    angular_scale: float = 16.0,
+    alpha_proxy_anchor: float = 0.0,
+    proxy_anchor_alpha: float = 32.0,
+    proxy_anchor_margin: float = 0.1,
+    reciprocal_points=None,
+    alpha_reciprocal: float = 0.0,
+    reciprocal_margin: float = 0.2,
 ):
     model.train()
     ce_meter = AverageMeter()
@@ -359,6 +458,9 @@ def train_one_epoch_teacher(
     proxy_meter = AverageMeter()
     pseudo_meter = AverageMeter()
     energy_meter = AverageMeter()
+    angular_meter = AverageMeter()
+    proxy_anchor_meter = AverageMeter()
+    reciprocal_meter = AverageMeter()
     for batch in tqdm(loader, desc="teacher-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
         images = images.to(device)
@@ -380,6 +482,15 @@ def train_one_epoch_teacher(
         loss_energy = energy_margin_loss(
             out["logits"], pseudo_logits, margin=energy_margin, temperature=energy_temperature
         )
+        loss_angular = angular_margin_loss(
+            out["features"], labels, model.classifier.weight,
+            margin=angular_margin, scale=angular_scale,
+        )
+        loss_proxy_anchor = proxy_anchor_loss(
+            out["features"], labels, model.classifier.weight,
+            alpha=proxy_anchor_alpha, margin=proxy_anchor_margin,
+        )
+        loss_reciprocal = out["logits"].new_tensor(0.0)
         loss = (
             loss_ce
             + alpha_unc * loss_unc
@@ -387,6 +498,9 @@ def train_one_epoch_teacher(
             + alpha_proxy * loss_proxy
             + alpha_pseudo * loss_pseudo
             + alpha_energy * loss_energy
+            + alpha_angular * loss_angular
+            + alpha_proxy_anchor * loss_proxy_anchor
+            + alpha_reciprocal * loss_reciprocal
         )
         optimizer.zero_grad()
         loss.backward()
@@ -397,6 +511,9 @@ def train_one_epoch_teacher(
         proxy_meter.update(loss_proxy.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
         energy_meter.update(loss_energy.item(), images.size(0))
+        angular_meter.update(loss_angular.item(), images.size(0))
+        proxy_anchor_meter.update(loss_proxy_anchor.item(), images.size(0))
+        reciprocal_meter.update(loss_reciprocal.item(), images.size(0))
     return {
         "ce": ce_meter.avg,
         "unc": unc_meter.avg,
@@ -404,6 +521,9 @@ def train_one_epoch_teacher(
         "proxy": proxy_meter.avg,
         "pseudo": pseudo_meter.avg,
         "energy": energy_meter.avg,
+        "angular": angular_meter.avg,
+        "proxy_anchor": proxy_anchor_meter.avg,
+        "reciprocal": reciprocal_meter.avg,
     }
 
 
@@ -421,6 +541,12 @@ def train_one_epoch_student(
     alpha_proxy: float = 0.0,
     alpha_pseudo: float = 0.0,
     alpha_energy: float = 0.0,
+    alpha_vos: float = 0.0,
+    vos_mode: str = "gaussian",
+    vos_gaussian_stats: Dict[str, torch.Tensor] | None = None,
+    vos_tail_scale: float = 1.5,
+    vos_noise_scale: float = 0.25,
+    vos_uniform_weight: float = 0.25,
     pseudo_mode: str = "strong",
     pseudo_feature_noise: float = 0.05,
     uncertainty_target_mode: str = "confidence",
@@ -439,6 +565,15 @@ def train_one_epoch_student(
     alpha_discovery_uncertainty_separation: float = 0.0,
     alpha_discovery_selective_unknown: float = 0.0,
     alpha_discovery_selective_energy: float = 0.0,
+    alpha_angular: float = 0.0,
+    angular_margin: float = 0.2,
+    angular_scale: float = 16.0,
+    alpha_proxy_anchor: float = 0.0,
+    proxy_anchor_alpha: float = 32.0,
+    proxy_anchor_margin: float = 0.1,
+    reciprocal_points=None,
+    alpha_reciprocal: float = 0.0,
+    reciprocal_margin: float = 0.2,
     discovery_select_ratio: float = 0.25,
     discovery_select_mode: str = "entropy_uncertainty",
     discovery_loss_mode: str = "nt_xent",
@@ -485,6 +620,7 @@ def train_one_epoch_student(
     proxy_meter = AverageMeter()
     pseudo_meter = AverageMeter()
     energy_meter = AverageMeter()
+    vos_meter = AverageMeter()
     discovery_meter = AverageMeter()
     discovery_unknown_meter = AverageMeter()
     discovery_energy_meter = AverageMeter()
@@ -493,6 +629,9 @@ def train_one_epoch_student(
     discovery_uncertainty_separation_meter = AverageMeter()
     discovery_selective_unknown_meter = AverageMeter()
     discovery_selective_energy_meter = AverageMeter()
+    angular_meter = AverageMeter()
+    proxy_anchor_meter = AverageMeter()
+    reciprocal_meter = AverageMeter()
     discovery_selected_meter = AverageMeter()
     discovery_raw_selected_meter = AverageMeter()
     discovery_neighbor_agreement_meter = AverageMeter()
@@ -548,6 +687,50 @@ def train_one_epoch_student(
         loss_energy = energy_margin_loss(
             s_out["logits"], pseudo_logits, margin=energy_margin, temperature=energy_temperature
         )
+        loss_vos = s_out["logits"].new_tensor(0.0)
+        if alpha_vos > 0.0:
+            if vos_mode == "gaussian" and vos_gaussian_stats is not None:
+                virtual_features = synthesize_gaussian_virtual_outliers(
+                    labels,
+                    vos_gaussian_stats["means"],
+                    vos_gaussian_stats["variances"],
+                    tail_scale=vos_tail_scale,
+                )
+            elif vos_mode == "batch_center":
+                virtual_features = synthesize_virtual_outliers(
+                    s_out["features"],
+                    labels,
+                    student.classifier.weight,
+                    tail_scale=vos_tail_scale,
+                    noise_scale=vos_noise_scale,
+                )
+            else:
+                raise ValueError(
+                    "Gaussian VOS requires vos_gaussian_stats; use batch_center "
+                    "for the online fallback."
+                )
+            virtual_logits, _ = pseudo_forward_from_features(
+                student, virtual_features, stochastic=True
+            )
+            loss_vos = energy_margin_loss(
+                s_out["logits"],
+                virtual_logits,
+                margin=energy_margin,
+                temperature=energy_temperature,
+            )
+            if vos_uniform_weight > 0.0:
+                loss_vos = loss_vos + float(vos_uniform_weight) * outlier_exposure_uniform_loss(
+                    virtual_logits
+                )
+        loss_angular = angular_margin_loss(
+            s_out["features"], labels, student.classifier.weight,
+            margin=angular_margin, scale=angular_scale,
+        )
+        loss_proxy_anchor = proxy_anchor_loss(
+            s_out["features"], labels, student.classifier.weight,
+            alpha=proxy_anchor_alpha, margin=proxy_anchor_margin,
+        )
+        loss_reciprocal = s_out["logits"].new_tensor(0.0)
         loss_discovery = s_out["logits"].new_tensor(0.0)
         loss_discovery_unknown = s_out["logits"].new_tensor(0.0)
         loss_discovery_energy = s_out["logits"].new_tensor(0.0)
@@ -586,6 +769,7 @@ def train_one_epoch_student(
             or alpha_discovery_feature_margin > 0.0
             or alpha_discovery_selective_unknown > 0.0
             or alpha_discovery_selective_energy > 0.0
+            or alpha_reciprocal > 0.0
             or alpha_joint_discovery > 0.0
         ):
             try:
@@ -598,6 +782,19 @@ def train_one_epoch_student(
             second_view = second_view.to(device)
             first_out = student(first_view)
             second_out = student(second_view)
+            if reciprocal_points is not None and alpha_reciprocal > 0.0:
+                loss_reciprocal = 0.5 * (
+                    reciprocal_point_loss(
+                        s_out["features"], first_out["features"],
+                        student.classifier.weight, reciprocal_points,
+                        margin=reciprocal_margin,
+                    )
+                    + reciprocal_point_loss(
+                        s_out["features"], second_out["features"],
+                        student.classifier.weight, reciprocal_points,
+                        margin=reciprocal_margin,
+                    )
+                )
             joint_mask = None
             if joint_candidate_gating and alpha_joint_discovery > 0.0:
                 if discovery_selection_model is None:
@@ -878,6 +1075,7 @@ def train_one_epoch_student(
             + alpha_proxy * loss_proxy
             + alpha_pseudo * loss_pseudo
             + alpha_energy * loss_energy
+            + alpha_vos * loss_vos
             + alpha_discovery * loss_discovery
             + alpha_discovery_unknown * loss_discovery_unknown
             + alpha_discovery_energy * loss_discovery_energy
@@ -886,6 +1084,9 @@ def train_one_epoch_student(
             + alpha_discovery_uncertainty_separation * loss_discovery_uncertainty_separation
             + alpha_discovery_selective_unknown * loss_discovery_selective_unknown
             + alpha_discovery_selective_energy * loss_discovery_selective_energy
+            + alpha_angular * loss_angular
+            + alpha_proxy_anchor * loss_proxy_anchor
+            + alpha_reciprocal * loss_reciprocal
             + alpha_joint_discovery * loss_joint_discovery
             + alpha_joint_known_ce * loss_joint_known_ce
         )
@@ -903,6 +1104,7 @@ def train_one_epoch_student(
         proxy_meter.update(loss_proxy.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
         energy_meter.update(loss_energy.item(), images.size(0))
+        vos_meter.update(loss_vos.item(), images.size(0))
         discovery_meter.update(loss_discovery.item(), images.size(0))
         discovery_unknown_meter.update(loss_discovery_unknown.item(), images.size(0))
         discovery_energy_meter.update(loss_discovery_energy.item(), images.size(0))
@@ -913,6 +1115,9 @@ def train_one_epoch_student(
         )
         discovery_selective_unknown_meter.update(loss_discovery_selective_unknown.item(), images.size(0))
         discovery_selective_energy_meter.update(loss_discovery_selective_energy.item(), images.size(0))
+        angular_meter.update(loss_angular.item(), images.size(0))
+        proxy_anchor_meter.update(loss_proxy_anchor.item(), images.size(0))
+        reciprocal_meter.update(loss_reciprocal.item(), images.size(0))
         discovery_selected_meter.update(discovery_selected_ratio, images.size(0))
         discovery_raw_selected_meter.update(discovery_raw_selected_ratio, images.size(0))
         discovery_neighbor_agreement_meter.update(discovery_neighbor_agreement, images.size(0))
@@ -934,6 +1139,7 @@ def train_one_epoch_student(
         "proxy": proxy_meter.avg,
         "pseudo": pseudo_meter.avg,
         "energy": energy_meter.avg,
+        "vos": vos_meter.avg,
         "discovery": discovery_meter.avg,
         "discovery_unknown": discovery_unknown_meter.avg,
         "discovery_energy": discovery_energy_meter.avg,
@@ -942,6 +1148,9 @@ def train_one_epoch_student(
         "discovery_uncertainty_separation": discovery_uncertainty_separation_meter.avg,
         "discovery_selective_unknown": discovery_selective_unknown_meter.avg,
         "discovery_selective_energy": discovery_selective_energy_meter.avg,
+        "angular": angular_meter.avg,
+        "proxy_anchor": proxy_anchor_meter.avg,
+        "reciprocal": reciprocal_meter.avg,
         "discovery_selected_ratio": discovery_selected_meter.avg,
         "discovery_raw_selected_ratio": discovery_raw_selected_meter.avg,
         "discovery_neighbor_agreement": discovery_neighbor_agreement_meter.avg,
@@ -1125,6 +1334,7 @@ def collect_knn_feature_bank(
     """Collect normalized known-training vectors for KNN-OOD."""
     model.eval()
     bank = []
+    bank_labels = []
     for batch in tqdm(loader, desc="knn-bank", leave=False):
         images, labels, *_ = batch
         known = labels >= 0
@@ -1134,14 +1344,17 @@ def collect_knn_feature_bank(
         if feature_key not in {"features", "proj"}:
             raise ValueError("KNN feature_key must be 'features' or 'proj'.")
         bank.append(F.normalize(model(images)[feature_key], dim=-1).cpu())
+        bank_labels.append(labels[known].detach().cpu().long())
     if not bank:
         raise ValueError("KNN-OOD requires at least one known training feature.")
     bank = torch.cat(bank, dim=0)
+    labels = torch.cat(bank_labels, dim=0)
     if max_samples > 0 and len(bank) > max_samples:
         generator = torch.Generator().manual_seed(int(seed))
         indices = torch.randperm(len(bank), generator=generator)[:max_samples]
         bank = bank[indices]
-    return bank.numpy()
+        labels = labels[indices]
+    return {"features": bank.numpy(), "labels": labels.numpy()}
 
 
 def attach_knn_distances(
@@ -1156,18 +1369,40 @@ def attach_knn_distances(
         raise ValueError("KNN-OOD requires matching extracted features or projections.")
     if k <= 0:
         raise ValueError("KNN-OOD k must be positive.")
-    bank = np.array(feature_bank, dtype=np.float32, copy=True)
+    bank_labels = None
+    if isinstance(feature_bank, dict):
+        bank_labels = np.asarray(feature_bank["labels"], dtype=np.int64)
+        bank = np.array(feature_bank["features"], dtype=np.float32, copy=True)
+        if len(bank_labels) != len(bank):
+            raise ValueError("KNN feature bank labels must match its feature count.")
+    else:  # Backwards compatibility for callers with an unlabeled feature bank.
+        bank = np.array(feature_bank, dtype=np.float32, copy=True)
     bank /= np.clip(np.linalg.norm(bank, axis=1, keepdims=True), 1e-8, None)
     queries = np.array(outputs[output_key], dtype=np.float32, copy=True)
     queries /= np.clip(np.linalg.norm(queries, axis=1, keepdims=True), 1e-8, None)
     neighbor_count = min(int(k), len(bank))
     distances = np.empty(len(queries), dtype=np.float32)
+    support = np.empty(len(queries), dtype=np.float32) if bank_labels is not None else None
     batch_size = 256
     for start in range(0, len(queries), batch_size):
         similarities = queries[start : start + batch_size] @ bank.T
-        nearest = np.partition(similarities, -neighbor_count, axis=1)[:, -neighbor_count:]
+        nearest_indices = np.argpartition(similarities, -neighbor_count, axis=1)[:, -neighbor_count:]
+        nearest = np.take_along_axis(similarities, nearest_indices, axis=1)
         distances[start : start + batch_size] = 1.0 - nearest.mean(axis=1)
+        if bank_labels is not None:
+            neighbor_labels = bank_labels[nearest_indices]
+            # Similarity-weighted class votes reduce sensitivity to a single
+            # accidental neighbor while retaining the known class identity.
+            weights = np.exp((nearest - nearest.max(axis=1, keepdims=True)) / 0.07)
+            class_support = np.zeros((len(nearest), int(bank_labels.max()) + 1), dtype=np.float32)
+            rows = np.arange(len(nearest))[:, None]
+            np.add.at(class_support, (rows, neighbor_labels), weights)
+            support[start : start + batch_size] = class_support.max(axis=1) / np.clip(
+                weights.sum(axis=1), 1e-12, None
+            )
     outputs["knn_distance"] = distances
+    if support is not None:
+        outputs["knn_class_support"] = support
     return outputs
 
 
@@ -1300,7 +1535,9 @@ def compute_prototype_distance(features: np.ndarray, prototypes: np.ndarray) -> 
     return 1.0 - sim.max(axis=1)
 
 
-def collect_diagonal_gaussian_stats(model, loader, device, num_classes: int):
+def collect_diagonal_gaussian_stats(
+    model, loader, device, num_classes: int, include_shared_covariance: bool = True
+):
     """Collect class means plus diagonal and shared-covariance statistics."""
     model.eval()
     features_by_class = [[] for _ in range(num_classes)]
@@ -1330,24 +1567,68 @@ def collect_diagonal_gaussian_stats(model, loader, device, num_classes: int):
     means = np.asarray(means, dtype=np.float32)
     variances = np.asarray(variances, dtype=np.float32)
 
+    # OpenMax-style EVT calibration: fit a Weibull model to the largest
+    # distances of each known class from its mean activation vector. This is
+    # used only when ``score_mode=openmax`` and does not alter training.
+    weibull_shapes = []
+    weibull_scales = []
+    weibull_locations = []
+    for class_index, items in enumerate(features_by_class):
+        values = np.asarray(items, dtype=np.float32)
+        if len(values) < 2:
+            distances = np.array([1.0, 1.0], dtype=np.float64)
+        else:
+            distances = np.linalg.norm(values - means[class_index], axis=1).astype(np.float64)
+        tail_size = min(len(distances), max(5, int(np.ceil(0.2 * len(distances)))))
+        tail = np.sort(distances)[-tail_size:]
+        tail = np.clip(tail, 1e-6, None)
+        try:
+            shape, location, scale = weibull_min.fit(tail, floc=0.0)
+            if not np.isfinite(shape) or not np.isfinite(scale) or scale <= 0.0:
+                raise ValueError("invalid Weibull fit")
+        except Exception:
+            shape, location, scale = 1.0, 0.0, float(max(np.mean(tail), 1e-3))
+        weibull_shapes.append(float(shape))
+        weibull_locations.append(float(location))
+        weibull_scales.append(float(scale))
+
     centered = []
     for class_index, items in enumerate(features_by_class):
         if items:
             centered.append(np.asarray(items, dtype=np.float32) - means[class_index])
     centered_features = np.concatenate(centered, axis=0) if centered else global_features - global_features.mean(axis=0)
     feature_dim = centered_features.shape[1]
-    if len(centered_features) <= 1:
-        covariance = np.diag(global_var)
-    else:
-        covariance = (centered_features.T @ centered_features) / max(len(centered_features) - 1, 1)
-    # A small diagonal shrinkage keeps the shared covariance stable and much
-    # faster than iterative covariance estimators during repeated experiments.
+    precision = None
     shrinkage = 0.1
-    diagonal = np.diag(np.diag(covariance))
-    covariance = (1.0 - shrinkage) * covariance + shrinkage * diagonal
-    covariance = covariance + np.eye(feature_dim, dtype=np.float32) * 1e-3
-    precision = np.linalg.pinv(covariance).astype(np.float32)
-    return {"means": means, "variances": variances, "precision": precision}
+    if include_shared_covariance:
+        if len(centered_features) <= 1:
+            covariance = np.diag(global_var)
+        else:
+            covariance = (centered_features.T @ centered_features) / max(len(centered_features) - 1, 1)
+        diagonal = np.diag(np.diag(covariance))
+        covariance = (1.0 - shrinkage) * covariance + shrinkage * diagonal
+        covariance = covariance + np.eye(feature_dim, dtype=np.float32) * 1e-3
+        with threadpool_limits(limits=1):
+            precision = np.linalg.pinv(covariance).astype(np.float32)
+    # Use the law of total variance with equal class priors to estimate the
+    # background distribution diagonally. This avoids a second dense inverse
+    # and is appropriate for the class-balanced CIFAR protocol.
+    global_mean = means.mean(axis=0).astype(np.float32)
+    global_variances = (
+        np.mean(variances + (means - global_mean[None, :]) ** 2, axis=0) + 1e-2
+    ).astype(np.float32)
+    result = {
+        "means": means,
+        "variances": variances,
+        "global_mean": global_mean,
+        "global_variances": global_variances,
+        "weibull_shapes": np.asarray(weibull_shapes, dtype=np.float32),
+        "weibull_locations": np.asarray(weibull_locations, dtype=np.float32),
+        "weibull_scales": np.asarray(weibull_scales, dtype=np.float32),
+    }
+    if precision is not None:
+        result["precision"] = precision
+    return result
 
 
 def compute_mahalanobis_distance(
@@ -1371,6 +1652,43 @@ def compute_mahalanobis_distance(
     return distances.min(axis=1)
 
 
+def compute_relative_mahalanobis_distance(
+    features: np.ndarray,
+    gaussian_stats: Dict[str, np.ndarray],
+) -> np.ndarray:
+    """Class-conditional Mahalanobis distance relative to the global feature density.
+
+    This follows the relative-Mahalanobis idea: subtract the distance to a
+    background/global feature distribution, reducing the bias toward regions
+    that are globally low-density but not specifically associated with any
+    known class.
+    """
+    required = ("means", "variances")
+    if any(key not in gaussian_stats for key in required):
+        raise ValueError("relative Mahalanobis requires class and global Gaussian statistics")
+    features = np.asarray(features, dtype=float)
+    if "precision" in gaussian_stats:
+        class_distance = compute_mahalanobis_distance(features, gaussian_stats, covariance="shared")
+    else:
+        class_distance = compute_mahalanobis_distance(features, gaussian_stats, covariance="diag")
+    means = np.asarray(gaussian_stats["means"], dtype=float)
+    variances = np.asarray(gaussian_stats["variances"], dtype=float)
+    global_mean = np.asarray(
+        gaussian_stats.get("global_mean", means.mean(axis=0)), dtype=float
+    )
+    global_variances = gaussian_stats.get("global_variances")
+    if global_variances is None:
+        global_variances = np.mean(
+            variances + (means - global_mean[None, :]) ** 2, axis=0
+        ) + 1e-2
+    centered = features - global_mean[None, :]
+    background_distance = np.mean(
+        (centered**2) / np.clip(np.asarray(global_variances, dtype=float)[None, :], 1e-6, None),
+        axis=1,
+    )
+    return class_distance - background_distance
+
+
 def compute_gaussian_nll(features: np.ndarray, gaussian_stats: Dict[str, np.ndarray]) -> np.ndarray:
     """Class-conditional diagonal Gaussian negative log-likelihood.
 
@@ -1382,6 +1700,38 @@ def compute_gaussian_nll(features: np.ndarray, gaussian_stats: Dict[str, np.ndar
     variances = np.clip(np.asarray(gaussian_stats["variances"], dtype=float)[None, :, :], 1e-6, None)
     nll = 0.5 * (((feat - means) ** 2) / variances + np.log(2.0 * np.pi * variances))
     return nll.mean(axis=-1).min(axis=1)
+
+
+def compute_openmax_score(features: np.ndarray, gaussian_stats: Dict[str, np.ndarray]) -> np.ndarray:
+    """Compute an OpenMax-style EVT distance score.
+
+    A sample is considered unknown when it is in the fitted tail for every
+    known class. The minimum classwise Weibull CDF is therefore used: a close
+    class keeps the score low, while a sample far from all class centers gets
+    a high score.
+    """
+    required = ("means", "weibull_shapes", "weibull_locations", "weibull_scales")
+    if any(key not in gaussian_stats for key in required):
+        raise ValueError("openmax requires Weibull statistics from known training features")
+    feat = np.asarray(features, dtype=float)[:, None, :]
+    means = np.asarray(gaussian_stats["means"], dtype=float)[None, :, :]
+    distances = np.linalg.norm(feat - means, axis=-1)
+    shapes = np.clip(np.asarray(gaussian_stats["weibull_shapes"], dtype=float), 1e-3, None)
+    locations = np.asarray(gaussian_stats["weibull_locations"], dtype=float)
+    scales = np.clip(np.asarray(gaussian_stats["weibull_scales"], dtype=float), 1e-6, None)
+    cdf = weibull_min.cdf(distances, shapes[None, :], loc=locations[None, :], scale=scales[None, :])
+    return np.clip(np.nanmin(cdf, axis=1), 0.0, 1.0)
+
+
+def compute_reciprocal_score(features: np.ndarray, reciprocal_points: np.ndarray) -> np.ndarray:
+    """Score attraction to learned ARPL-inspired reciprocal points."""
+    feat = np.asarray(features, dtype=float)
+    points = np.asarray(reciprocal_points, dtype=float)
+    if feat.ndim != 2 or points.ndim != 2 or feat.shape[1] != points.shape[1]:
+        raise ValueError("features and reciprocal_points must be 2-D with matching dimensions")
+    feat = feat / np.clip(np.linalg.norm(feat, axis=1, keepdims=True), 1e-8, None)
+    points = points / np.clip(np.linalg.norm(points, axis=1, keepdims=True), 1e-8, None)
+    return (feat @ points.T).max(axis=1)
 
 
 def compute_open_score(
@@ -1414,15 +1764,32 @@ def compute_open_score(
         "normalized_entropy_mahalanobis",
         "normalized_entropy_mahalanobis_diag",
         "normalized_entropy_mahalanobis_shared",
+        "relative_mahalanobis",
+        "normalized_entropy_relative_mahalanobis",
     }
     if gaussian_stats is not None and score_mode in mahalanobis_score_modes:
-        mahalanobis = compute_mahalanobis_distance(
-            outputs["features"], gaussian_stats, covariance=mahalanobis_mode
-        )
+        if score_mode in {"relative_mahalanobis", "normalized_entropy_relative_mahalanobis"}:
+            mahalanobis = compute_relative_mahalanobis_distance(
+                outputs["features"], gaussian_stats
+            )
+        else:
+            mahalanobis = compute_mahalanobis_distance(
+                outputs["features"], gaussian_stats, covariance=mahalanobis_mode
+            )
     gaussian_nll = None
     gaussian_nll_score_modes = {"gaussian_nll", "normalized_entropy_gaussian_nll"}
     if gaussian_stats is not None and score_mode in gaussian_nll_score_modes:
         gaussian_nll = compute_gaussian_nll(outputs["features"], gaussian_stats)
+    openmax_score = None
+    if gaussian_stats is not None and score_mode == "openmax":
+        openmax_score = compute_openmax_score(outputs["features"], gaussian_stats)
+    reciprocal_score = None
+    if gaussian_stats is not None and score_mode == "reciprocal":
+        if "reciprocal_points" not in gaussian_stats:
+            raise ValueError("reciprocal score requires a checkpoint trained with reciprocal points")
+        reciprocal_score = compute_reciprocal_score(
+            outputs["features"], gaussian_stats["reciprocal_points"]
+        )
 
     if score_mode == "full":
         score = weights[0] * entropy + weights[1] * epistemic + weights[2] * aleatoric
@@ -1509,6 +1876,14 @@ def compute_open_score(
         if gaussian_nll is None:
             raise ValueError("gaussian_nll requires known-training Gaussian statistics")
         score = gaussian_nll
+    elif score_mode == "openmax":
+        if openmax_score is None:
+            raise ValueError("openmax requires Weibull statistics from known training features")
+        score = openmax_score
+    elif score_mode == "reciprocal":
+        if reciprocal_score is None:
+            raise ValueError("reciprocal score requires learned reciprocal points")
+        score = reciprocal_score
     elif score_mode == "normalized_entropy_gaussian_nll":
         if gaussian_nll is None or normalization is None:
             raise ValueError("normalized_entropy_gaussian_nll requires statistics")
@@ -1516,6 +1891,18 @@ def compute_open_score(
             (entropy - normalization["entropy"]["mean"]) / normalization["entropy"]["std"]
             + (gaussian_nll - normalization["gaussian_nll"]["mean"])
             / normalization["gaussian_nll"]["std"]
+        )
+    elif score_mode == "relative_mahalanobis":
+        if mahalanobis is None:
+            raise ValueError("relative_mahalanobis requires class and global Gaussian statistics")
+        score = mahalanobis
+    elif score_mode == "normalized_entropy_relative_mahalanobis":
+        if mahalanobis is None or normalization is None:
+            raise ValueError("normalized_entropy_relative_mahalanobis requires statistics")
+        score = (
+            (entropy - normalization["entropy"]["mean"]) / normalization["entropy"]["std"]
+            + (mahalanobis - normalization["relative_mahalanobis"]["mean"])
+            / normalization["relative_mahalanobis"]["std"]
         )
     elif score_mode == "vim_residual":
         if "vim_residual" not in outputs:
@@ -1625,6 +2012,10 @@ def fit_score_normalization(
             result["mahalanobis_shared"] = stats(
                 compute_mahalanobis_distance(outputs_known["features"], gaussian_stats, covariance="shared")
             )
+        if "precision" in gaussian_stats:
+            result["relative_mahalanobis"] = stats(
+                compute_relative_mahalanobis_distance(outputs_known["features"], gaussian_stats)
+            )
         result["gaussian_nll"] = stats(compute_gaussian_nll(outputs_known["features"], gaussian_stats))
     if "unified_novel_mass" in outputs_known and "logits" in outputs_known:
         raw_score = np.asarray(outputs_known["unified_novel_mass"], dtype=float)
@@ -1655,10 +2046,36 @@ def calibrate_threshold(scores_known: np.ndarray, percentile: float = 95.0) -> f
     return float(np.percentile(scores_known, percentile))
 
 
+def calibrate_coverage_threshold(
+    scores_known: np.ndarray,
+    target_known_coverage: float = 0.95,
+) -> tuple[float, dict]:
+    """Choose a known-only threshold for a target known acceptance rate.
+
+    Scores at or below the threshold are accepted as known.  The threshold is
+    estimated only from known validation scores, so this policy can compare
+    unknown rejection at a matched known-coverage operating point without
+    using unknown test labels.
+    """
+    scores_known = np.asarray(scores_known, dtype=float)
+    if scores_known.ndim != 1 or scores_known.size == 0:
+        raise ValueError("scores_known must be a non-empty 1-D array")
+    target = float(target_known_coverage)
+    if not 0.0 < target <= 1.0:
+        raise ValueError("target_known_coverage must be in (0, 1]")
+    threshold = float(np.quantile(scores_known, target, method="linear"))
+    known_acceptance = float(np.mean(scores_known <= threshold))
+    return threshold, {
+        "target_known_coverage": target,
+        "known_accept_rate": known_acceptance,
+    }
+
+
 def calibrate_open_threshold(
     scores: np.ndarray,
     is_known: np.ndarray,
     objective: str = "balanced_accuracy",
+    target_known_coverage: float = 0.95,
 ) -> tuple[float, dict]:
     """Choose an operating threshold on a labeled open-validation split.
 
@@ -1666,7 +2083,7 @@ def calibrate_open_threshold(
     operating-point calibration and must not be used as a replacement for
     AUROC, which is threshold-independent.
     """
-    if objective not in {"balanced_accuracy", "unknown_f1"}:
+    if objective not in {"balanced_accuracy", "unknown_f1", "known_coverage"}:
         raise ValueError(f"Unsupported open threshold objective: {objective}")
     scores = np.asarray(scores, dtype=float)
     is_known = np.asarray(is_known, dtype=bool)
@@ -1674,6 +2091,9 @@ def calibrate_open_threshold(
         raise ValueError("scores and is_known must be matching 1-D arrays")
     if not np.any(is_known) or np.all(is_known):
         raise ValueError("Open threshold calibration requires known and unknown samples")
+    target = float(target_known_coverage)
+    if not 0.0 < target <= 1.0:
+        raise ValueError("target_known_coverage must be in (0, 1]")
     candidates = np.unique(scores)
     candidates = np.concatenate(
         [np.array([np.nextafter(candidates[0], -np.inf)]), candidates, np.array([np.nextafter(candidates[-1], np.inf)])]
@@ -1683,7 +2103,11 @@ def calibrate_open_threshold(
         pred_known = scores <= threshold
         known_accept = float(np.mean(pred_known[is_known]))
         unknown_reject = float(np.mean(~pred_known[~is_known]))
-        if objective == "balanced_accuracy":
+        if objective == "known_coverage":
+            if known_accept + 1e-12 < target:
+                continue
+            value = unknown_reject
+        elif objective == "balanced_accuracy":
             value = 0.5 * (known_accept + unknown_reject)
         else:
             predicted_unknown = ~pred_known
@@ -1692,14 +2116,24 @@ def calibrate_open_threshold(
             precision = tp / max(float(predicted_unknown.sum()), 1.0)
             recall = tp / max(float(true_unknown.sum()), 1.0)
             value = 2.0 * precision * recall / max(precision + recall, 1e-12)
-        candidate = (value, known_accept, unknown_reject, float(threshold))
+        if objective == "known_coverage":
+            candidate = (value, -known_accept, -float(threshold))
+        else:
+            candidate = (value, known_accept, unknown_reject, float(threshold))
         if best is None or candidate > best:
             best = candidate
-    _, known_accept, unknown_reject, threshold = best
+    if objective == "known_coverage":
+        threshold = -best[2]
+        pred_known = scores <= threshold
+        known_accept = float(np.mean(pred_known[is_known]))
+        unknown_reject = float(np.mean(~pred_known[~is_known]))
+    else:
+        _, known_accept, unknown_reject, threshold = best
     return threshold, {
         "objective": objective,
         "known_accept_rate": known_accept,
         "unknown_reject_rate": unknown_reject,
+        "target_known_coverage": target if objective == "known_coverage" else None,
     }
 
 
@@ -1762,7 +2196,47 @@ def candidate_purification_score(
             _rank_normalize_numpy(1.0 - outputs["probs"].max(axis=1)),
         ]
         return np.mean(components, axis=0)
+    if mode == "knn_support":
+        if "knn_class_support" not in outputs:
+            raise ValueError("knn_support purification requires labeled KNN feature-bank outputs")
+        # High class-consensus among known neighbors is evidence that a
+        # rejected sample may be a known-class false rejection.
+        return 1.0 - np.asarray(outputs["knn_class_support"], dtype=float)
+    if mode == "open_knn_support":
+        if open_score is None or "knn_class_support" not in outputs:
+            raise ValueError("open_knn_support requires open_score and labeled KNN outputs")
+        return 0.5 * (
+            _rank_normalize_numpy(open_score)
+            + _rank_normalize_numpy(1.0 - outputs["knn_class_support"])
+        )
     raise ValueError(f"Unsupported candidate purification mode: {mode}")
+
+
+def evaluate_candidate_purification(
+    outputs: Dict[str, np.ndarray],
+    candidate_mask: np.ndarray,
+    purified_mask: np.ndarray,
+) -> dict:
+    """Measure candidate-pool quality using known/unknown identity labels.
+
+    Intended for the reserved open-validation split only; test labels must not
+    be used to select purification rules or keep ratios.
+    """
+    known = np.asarray(outputs["is_known"], dtype=bool)
+    candidate_mask = np.asarray(candidate_mask, dtype=bool)
+    purified_mask = np.asarray(purified_mask, dtype=bool)
+
+    def summarize(mask):
+        count = int(mask.sum())
+        unknown_count = int(np.sum(mask & ~known))
+        return {
+            "count": count,
+            "unknown_precision": float(unknown_count / max(count, 1)),
+            "unknown_recall": float(unknown_count / max(int((~known).sum()), 1)),
+            "known_contamination": float(np.sum(mask & known) / max(count, 1)),
+        }
+
+    return {"before": summarize(candidate_mask), "after": summarize(purified_mask)}
 
 
 def purify_candidate_mask(
@@ -1873,7 +2347,9 @@ def evaluate_cluster_candidates(
     n = len(features)
     if n < 4:
         return max(1, n), []
-    upper = min(int(max_clusters), n - 1, 20)
+    # Respect the configured search bound. A hidden cap of 20 silently made
+    # larger novel-class counts impossible to recover.
+    upper = min(int(max_clusters), n - 1)
     if upper < 2:
         return 1, []
     values = np.asarray(features, dtype=np.float32)
@@ -1896,19 +2372,29 @@ def evaluate_cluster_candidates(
             "calinski_harabasz": float(calinski_harabasz_score(eval_values, eval_labels)),
             "davies_bouldin": float(davies_bouldin_score(eval_values, eval_labels)),
         }
-        repeat_labels = []
-        for repeat in range(max(1, int(stability_repeats))):
-            repeat_labels.append(
-                cluster_unknown_samples(
-                    values, k, method, n_init, random_state + repeat + 1
-                )[eval_indices]
-            )
-        stability_values = [
-            normalized_mutual_info_score(repeat_labels[i], repeat_labels[j])
-            for i in range(len(repeat_labels))
-            for j in range(i + 1, len(repeat_labels))
-        ]
-        row["stability_nmi"] = float(np.mean(stability_values)) if stability_values else 1.0
+        if selection == "gmm_bic":
+            mixture = GaussianMixture(
+                n_components=k,
+                covariance_type="diag",
+                reg_covar=1e-4,
+                n_init=1,
+                random_state=random_state,
+            ).fit(eval_values)
+            row["gmm_bic"] = float(mixture.bic(eval_values))
+        if selection == "stability":
+            repeat_labels = []
+            for repeat in range(max(2, int(stability_repeats))):
+                repeat_labels.append(
+                    cluster_unknown_samples(
+                        values, k, method, n_init, random_state + repeat + 1
+                    )[eval_indices]
+                )
+            stability_values = [
+                normalized_mutual_info_score(repeat_labels[i], repeat_labels[j])
+                for i in range(len(repeat_labels))
+                for j in range(i + 1, len(repeat_labels))
+            ]
+            row["stability_nmi"] = float(np.mean(stability_values)) if stability_values else 1.0
         rows.append(row)
 
     if not rows:
@@ -1916,14 +2402,18 @@ def evaluate_cluster_candidates(
     silhouette = _scale_metric([row["silhouette"] for row in rows], True)
     ch = _scale_metric([row["calinski_harabasz"] for row in rows], True)
     db = _scale_metric([row["davies_bouldin"] for row in rows], False)
-    stability = np.asarray([row["stability_nmi"] for row in rows], dtype=float)
     internal = 0.5 * silhouette + 0.25 * ch + 0.25 * db
     if selection == "silhouette":
         combined = silhouette
     elif selection == "stability":
+        stability = np.asarray([row["stability_nmi"] for row in rows], dtype=float)
         combined = 0.5 * internal + 0.5 * stability
     elif selection == "composite":
         combined = internal
+    elif selection == "gmm_bic":
+        combined = _scale_metric(
+            [row["gmm_bic"] for row in rows], higher_is_better=False
+        )
     else:
         raise ValueError(f"Unsupported cluster selection: {selection}")
     for row, internal_value, value in zip(rows, internal, combined):
@@ -1965,6 +2455,7 @@ def run_discovery(
     cluster_whiten: bool = True,
     cluster_n_init: int = 10,
     cluster_stability_repeats: int = 5,
+    max_auto_clusters: int = 50,
     candidate_purify: str = "none",
     candidate_keep_ratio: float = 1.0,
     enable_clustering: bool = True,
@@ -1990,12 +2481,16 @@ def run_discovery(
         "normalized_entropy_mahalanobis",
         "normalized_entropy_mahalanobis_diag",
         "normalized_entropy_mahalanobis_shared",
+        "relative_mahalanobis",
+        "normalized_entropy_relative_mahalanobis",
     }
-    mahalanobis = (
-        compute_mahalanobis_distance(outputs["features"], gaussian_stats)
-        if gaussian_stats is not None and score_mode in mahalanobis_score_modes
-        else np.zeros_like(score)
-    )
+    if gaussian_stats is not None and score_mode in mahalanobis_score_modes:
+        if score_mode in {"relative_mahalanobis", "normalized_entropy_relative_mahalanobis"}:
+            mahalanobis = compute_relative_mahalanobis_distance(outputs["features"], gaussian_stats)
+        else:
+            mahalanobis = compute_mahalanobis_distance(outputs["features"], gaussian_stats)
+    else:
+        mahalanobis = np.zeros_like(score)
     known_mask = outputs["is_known"].astype(bool)
     open_labels = (~known_mask).astype(int)
     auroc = compute_auroc(open_labels, score)
@@ -2174,7 +2669,7 @@ def run_discovery(
         if cluster_k != "oracle":
             selected_cluster_k, cluster_diagnostics = evaluate_cluster_candidates(
                 novel_features,
-                max_clusters=num_novel,
+                max_clusters=max_auto_clusters,
                 method=cluster_method,
                 selection=cluster_selection,
                 n_init=cluster_n_init,
@@ -2232,6 +2727,7 @@ def run_discovery(
             "cluster_normalized": bool(cluster_normalize or cluster_feature.endswith("_pca")),
             "cluster_n_init": int(cluster_n_init),
             "cluster_stability_repeats": int(cluster_stability_repeats),
+            "max_auto_clusters": int(max_auto_clusters),
             "cluster_diagnostics": cluster_diagnostics,
             "candidate_purify": candidate_purify,
             "candidate_keep_ratio": float(candidate_keep_ratio),

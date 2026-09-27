@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -246,6 +247,7 @@ def build_open_validation_and_discovery(
     open_val_ratio: float,
     seed: int,
     discovery_pool_mode: str,
+    unknown_open_val_pool: Dataset | None = None,
 ):
     """Reserve training-split samples for open validation, never from test.
 
@@ -257,7 +259,13 @@ def build_open_validation_and_discovery(
         raise ValueError(f"Unsupported discovery pool mode: {discovery_pool_mode}")
     if open_val_ratio > 0.0:
         open_known, known_val = split_dataset(known_val, open_val_ratio, seed)
-        open_unknown, unknown_pool = split_dataset(unknown_pool, open_val_ratio, seed + 1)
+        open_unknown_train, unknown_pool = split_dataset(unknown_pool, open_val_ratio, seed + 1)
+        if unknown_open_val_pool is not None:
+            if len(unknown_open_val_pool) != len(unknown_pool) + len(open_unknown_train):
+                raise ValueError("evaluation and training unknown pools must have matching samples")
+            open_unknown, _ = split_dataset(unknown_open_val_pool, open_val_ratio, seed + 1)
+        else:
+            open_unknown = open_unknown_train
         open_val = ConcatDataset([open_known, open_unknown])
     else:
         open_val = None
@@ -294,11 +302,15 @@ def build_data_bundle(
         train_full = OpenSetCIFAR100(root, known_classes, train=True, transform=train_tf, download=download, include_unknown=False)
         val_full = OpenSetCIFAR100(root, known_classes, train=True, transform=test_tf, download=download, include_unknown=False)
         pool_full = OpenSetCIFAR100(root, known_classes, train=True, transform=train_tf, download=download, include_unknown=True)
+        pool_eval = copy.copy(pool_full)
+        pool_eval.base = copy.copy(pool_full.base)
+        pool_eval.base.transform = test_tf
         test_open = OpenSetCIFAR100(root, known_classes, train=False, transform=test_tf, download=download, include_unknown=True)
         train_indices, val_indices = split_known_indices(len(train_full), val_ratio=0.1, seed=seed)
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
         unknown_pool = unknown_subset(pool_full)
+        unknown_open_val_pool = unknown_subset(pool_eval)
         val_set, open_val, discovery_pool = build_open_validation_and_discovery(
             train_set,
             val_set,
@@ -306,6 +318,7 @@ def build_data_bundle(
             open_val_ratio,
             seed,
             discovery_pool_mode,
+            unknown_open_val_pool=unknown_open_val_pool,
         )
         train_set = limit_dataset(train_set, limit_train, seed)
         val_set = limit_dataset(val_set, limit_val, seed)
@@ -323,8 +336,15 @@ def build_data_bundle(
 
     if dataset_name.lower() == "imagefolder":
         root_path = Path(root)
-        train_root = root_path / "train" if (root_path / "train").is_dir() else root_path
-        test_root = root_path / "test" if (root_path / "test").is_dir() else root_path
+        has_train_dir = (root_path / "train").is_dir()
+        has_test_dir = (root_path / "test").is_dir()
+        if not has_train_dir or not has_test_dir:
+            raise ValueError(
+                "ImageFolder evaluation requires separate root/train and root/test directories "
+                "to prevent train/test sample overlap."
+            )
+        train_root = root_path / "train"
+        test_root = root_path / "test"
         base = datasets.ImageFolder(root=str(train_root))
         imagefolder_split = None
         if split_path:
@@ -336,11 +356,15 @@ def build_data_bundle(
         train_full = OpenSetImageFolder(str(train_root), known_classes, transform=train_tf, include_unknown=False)
         val_full = OpenSetImageFolder(str(train_root), known_classes, transform=test_tf, include_unknown=False)
         pool_full = OpenSetImageFolder(str(train_root), known_classes, transform=train_tf, include_unknown=True)
+        pool_eval = copy.copy(pool_full)
+        pool_eval.base = copy.copy(pool_full.base)
+        pool_eval.base.transform = test_tf
         test_open = OpenSetImageFolder(str(test_root), known_classes, transform=test_tf, include_unknown=True)
         train_indices, val_indices = split_known_indices(len(train_full), val_ratio=0.1, seed=seed)
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
         unknown_pool = unknown_subset(pool_full)
+        unknown_open_val_pool = unknown_subset(pool_eval)
         val_set, open_val, discovery_pool = build_open_validation_and_discovery(
             train_set,
             val_set,
@@ -348,6 +372,7 @@ def build_data_bundle(
             open_val_ratio,
             seed,
             discovery_pool_mode,
+            unknown_open_val_pool=unknown_open_val_pool,
         )
         train_set = limit_dataset(train_set, limit_train, seed)
         val_set = limit_dataset(val_set, limit_val, seed)
@@ -370,10 +395,14 @@ def build_data_bundle(
         train_full = OpenSetFakeData(1000, known_classes, image_size, transform=train_tf, include_unknown=False, random_offset=0)
         val_full = OpenSetFakeData(200, known_classes, image_size, transform=test_tf, include_unknown=False, random_offset=10000)
         pool_full = OpenSetFakeData(1000, known_classes, image_size, transform=train_tf, include_unknown=True, random_offset=30000)
+        pool_eval = copy.copy(pool_full)
+        pool_eval.base = copy.copy(pool_full.base)
+        pool_eval.base.transform = test_tf
         test_open = OpenSetFakeData(1000, known_classes, image_size, transform=test_tf, include_unknown=True, random_offset=20000)
         train_set, _ = split_known_dataset(train_full, val_ratio=0.1, seed=seed)
         val_set = limit_dataset(val_full, limit_val, seed)
         unknown_pool = unknown_subset(pool_full)
+        unknown_open_val_pool = unknown_subset(pool_eval)
         val_set, open_val, discovery_pool = build_open_validation_and_discovery(
             train_set,
             val_set,
@@ -381,6 +410,7 @@ def build_data_bundle(
             open_val_ratio,
             seed,
             discovery_pool_mode,
+            unknown_open_val_pool=unknown_open_val_pool,
         )
         train_set = limit_dataset(train_set, limit_train, seed)
         val_set = limit_dataset(val_set, limit_val, seed)

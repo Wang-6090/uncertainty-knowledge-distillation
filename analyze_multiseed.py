@@ -96,14 +96,17 @@ def aggregate(items):
 def fmt(item):
     if item["mean"] is None:
         return "-"
-    return f"{item['mean']:.4f} ± {item['std']:.4f}"
+    count = int(item.get("count", 0))
+    return f"{item['mean']:.4f} ± {item['std']:.4f} (n={count})"
 
 
 def make_markdown(summary):
     lines = [
         "# Multi-seed Ablation Summary",
         "",
-        "Results are mean +/- sample standard deviation across completed seeds.",
+        "Results are mean +/- sample standard deviation across completed seeds. "
+        "Each metric includes its valid report count (n). Older reports may omit "
+        "newer metrics such as AUPR or OSCR.",
         "",
         "| method | K protocol | seeds | AUROC | AUPR | FPR95 | OSCR | known acc | unknown reject | cluster ACC | NMI | ARI | estimated K |",
         "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
