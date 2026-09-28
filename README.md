@@ -1125,3 +1125,143 @@ batch 类中心版本的 AUROC 有小幅提升，说明虚拟尾部特征可能�
 5. 在协议稳定后，将表现最稳定的方案迁移到 CUB-200-2011，而不是用新数据集掩盖 CIFAR-100 上尚未解释的问题。
 
 当前判断是：需要重新划分已有数据集进行敏感性分析，但不应抛弃现有数据；暂时不需要马上下载新数据。数据协议审计是为了确认方法是否稳健，不是为了寻找一个更容易得到高指标的划分。
+
+## 本轮代码更新：可复现的数据协议生成与校验（2026-09-28）
+
+为把上面的数据协议审计落到代码中，本轮新增了：
+
+- `scripts/make_cifar100_splits.py`：读取官方 CIFAR-100 的 fine/coarse 标签，生成三套固定 60/40 类别协议：
+  - `random`：带随机种子的随机划分基线；
+  - `semantic_hard`：每个 coarse superclass 选择 3 个已知类、2 个未知类，集中测试细粒度相似未知类；
+  - `semantic_isolated`：12 个完整 coarse superclass 作为已知类、其余 8 个作为未知类，作为语义隔离补充协议。
+- `novel_discovery/data.py`：加载 split JSON 时校验类别是否重复、是否交叉、是否覆盖全部类别，以及 `num_known` 是否匹配。错误协议会在训练前直接报错。
+- `tests/test_core_behaviors.py`：增加协议结构和非法 split 校验测试。
+
+生成命令：
+
+```powershell
+python scripts/make_cifar100_splits.py --data-root .\data --output-dir .\splits_cifar100_protocols --seed 42
+```
+
+使用示例：
+
+```powershell
+python train.py inspect_data --dataset cifar100 --data-root .\data `
+  --num-known 60 `
+  --split-path .\splits_cifar100_protocols\cifar100_60_40_semantic_hard.json `
+  --limit-train 4 --limit-val 4 --limit-test 8 --image-size 64 --num-workers 0 --device cpu
+```
+
+本轮验证结果：三套协议均成功生成并被 `inspect_data` 读取，均为 60 个已知类和 40 个未知类；Python 编译通过，测试为 `65 passed`。这一步没有声称提升模型指标，它解决的是实验协议可控、可复现和不易误配的问题。下一步应在三套协议上运行相同设置的小规模 teacher/student/discover smoke 实验，然后再决定是否进行三 seed 正式比较。
+
+## 本轮代码更新：已知类分层切分（2026-09-28）
+
+审计发现，原流程按全部已知样本随机切分 train/val。在完整 CIFAR-100 上通常不会漏掉类别，但在 `limit-train`、toy smoke 或迁移到样本更少的数据集时，某些已知类可能只出现在训练集或验证集，导致实验结果混入类别覆盖差异。
+
+现已新增：
+
+- `--known-split-mode random`：历史默认行为，保持旧实验可复现；
+- `--known-split-mode stratified`：按已知类别分层切分，尽量保证每个有多个样本的已知类同时出现在 train 和 val。
+
+教师训练、学生训练、discover 和 `inspect_data` 都使用同一个参数，避免不同阶段读取出不一致的训练/验证协议。正式的新协议实验建议显式使用：
+
+```powershell
+--known-split-mode stratified
+```
+
+该修改只减少数据切分噪声，不直接提升未知检测 AUROC；它的作用是让后续比较更能反映算法本身，而不是某个类别是否偶然进入验证集。本轮新增测试后共 `68 passed`。下一步应在三套 CIFAR-100 类别协议上用相同参数进行小规模对照，并同时固定 `known-split-mode stratified`。
+
+另外，`limit-train` 和 `limit-val` 的限量抽样也已接入同一分层逻辑：当样本预算不少于类别数时，会先为每个已知类保留一个样本，再补足剩余预算。若预算小于类别数，则无法保证所有类别都出现，程序会按预算尽可能保持类别覆盖。实际检查中，`limit-train 64` 在 60 个已知类协议下仍覆盖 60 类；`limit-val 32` 覆盖 32 类，符合预算约束。
+
+标签统计对 `Subset` 和 `ConcatDataset` 使用底层索引递归获取，不读取图像、不触发随机增强，避免分层采样过程污染训练前的随机状态。
+
+## 本轮代码更新：已知类别原型间隔约束（2026-09-28）
+
+针对已知类特征重叠问题，在已有 prototype alignment 之外新增了可选的 `prototype_repulsion_loss`。它计算分类器原型之间的余弦相似度，只惩罚超过指定 margin 的类别对：
+
+```text
+L_repulsion = mean(ReLU(cos(w_i, w_j) - margin)), i != j
+```
+
+该方法只约束已知类别原型，不把未标注样本错误当作未知样本，因此适合作为第一步表征改进。教师和学生均支持：
+
+```powershell
+--alpha-proto-repulsion 0.05 --proto-repulsion-margin 0.0
+```
+
+默认权重仍为 `0`，历史基线不变。toy smoke 中教师和学生日志均出现非零 `proto_repulsion`，并成功保存 checkpoint；discover 入口也正常运行。但该 smoke 只有 1 个 epoch、64 个样本，不能证明 AUROC 提升。下一步应在固定 CIFAR-100 协议和相同训练设置下，与不加该项的 baseline 做小规模配对实验，再决定是否进入正式多 seed 实验。
+
+### CIFAR-100 配对实验结果（seed=3407）
+
+在 CIFAR-100 60/40、预训练 ResNet-34/ResNet-18、3 epochs、1200/300/1000 样本和相同 `normalized_entropy_mahalanobis` 检测器下，完成了 baseline 与 `alpha_proto_repulsion=0.05` 的配对实验：
+
+| 方法 | AUROC | FPR95 | known accuracy | known accept | unknown reject | candidate purity | cluster ACC |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.5335 | 0.9289 | 0.2264 | 0.9074 | 0.0608 | 0.3000 | 0.5500 |
+| prototype repulsion, alpha=0.01 | **0.5536** | **0.9008** | **0.2529** | 0.9455 | 0.0582 | **0.4107** | 0.6250 |
+| prototype repulsion | **0.5459** | **0.9041** | 0.2116 | **0.9504** | 0.0481 | **0.3878** | **0.7143** |
+
+该结果说明原型间隔约束确实改变了特征空间。`alpha=0.01` 在本次小实验中比 `0.05` 更平衡：AUROC、FPR95、known accuracy 和候选纯度均优于 baseline，unknown reject rate 仅略低于 baseline；`alpha=0.05` 的聚类 ACC 更高，但 known accuracy 和 unknown reject rate 下降更明显。因此只能判定为“排序和聚类的局部改进”，不能宣称已经解决未知检测。完整记录见 `analysis/proto_repulsion_compare_s3407.md`。
+
+下一步不立即继续增大权重，而是先在相同已知覆盖率下比较三种模型，再用至少两个额外 seed 优先验证 `alpha=0.01` 的稳定性。
+
+下一步不立即继续增大权重，而是：
+
+1. 在相同已知覆盖率下比较两种模型，区分真正的排序改善和阈值尺度变化；
+2. 在相同设置下补跑至少两个 seed，并测试 `alpha=0.01/0.05`，确认收益是否稳定且不继续损害 known accuracy。
+
+## 本轮继续审计：mixed 池 rejector 与 MC 不确定性增强（2026-09-28）
+
+本轮围绕核心问题“已知/未知特征与分数分布重叠、未知拒绝率低”继续进行公平验证。重点不是继续移动阈值，而是检查独立 rejector 是否能够在更接近真实开放环境的 mixed 无标签池上工作。
+
+### 1. 标准 KD + support-augmented rejector
+
+在完整 CIFAR-100 60/40 测试协议下，使用标准 KD 学生模型、mixed discovery pool、留出的 known open-validation 样本训练 rejector，并把已知特征支持边界分数加入 rejector 输入。结果为：
+
+| 协议 | AUROC | FPR95 | known accept | unknown reject |
+| --- | ---: | ---: | ---: | ---: |
+| 纯未知池，support-augmented | 0.7199 | 0.7288 | 0.9472 | 0.1638 |
+| mixed 池，严格 open-validation support-augmented | 0.5108 | 0.9377 | 0.9598 | 0.0365 |
+
+这说明纯未知池上的较好结果不能直接代表真实 mixed 场景。mixed 池中已知样本会污染 rejector 的“未知”训练侧，且当前学生特征本身没有形成稳定的已知/未知边界；继续只调阈值或只扩大 rejector 并不能解决这个问题。
+
+### 2. MC Dropout 不确定性增强 rejector
+
+新增了 `uncertainty_augmented` 和 `support_uncertainty_augmented` 两种特征模式，并新增 `--rejector-mc-samples`。新模式将以下信号联合输入 rejector：
+
+- 学生特征与分类 logits；
+- 辅助 uncertainty head；
+- MC Dropout 的 epistemic uncertainty；
+- expected entropy 与 aleatoric uncertainty；
+- 可选的 class-conditional support score。
+
+该设计参考 Gal and Ghahramani 的 MC Dropout 不确定性估计，以及 Kendall and Gal 对 epistemic / aleatoric uncertainty 的区分。它用于检验“不确定性信号是否能补足特征重叠”，并不声称已经完整实现贝叶斯模型。
+
+在同一 mixed 协议下，`--rejector-mc-samples 4` 的结果为：
+
+| 方法 | AUROC | FPR95 | known accept | unknown reject |
+| --- | ---: | ---: | ---: | ---: |
+| support-augmented | 0.5108 | 0.9377 | 0.9598 | 0.0365 |
+| support + MC uncertainty augmented | 0.5084 | 0.9388 | 0.9577 | 0.0395 |
+
+结果没有改善整体排序，未知拒绝率仅有很小变化。因此当前 MC 不确定性信号不能单独解决特征重叠问题，也不能据此宣称“不确定性建模有效提升了未知检测”。
+
+### 3. 当前判断与修改方向
+
+当前代码检查通过：`83 passed`，并完成 `compileall` 检查。今天的实验进一步确定：
+
+1. 纯未知 discovery pool 是受控上限，不应作为真实 mixed 开放环境的最终结果；
+2. 独立 Logistic rejector 在纯未知池有效，但在 mixed 池明显失效；
+3. support boundary、虚拟未知、PU、简单伪未知筛选和 MC 不确定性增强都没有稳定解决 mixed 场景；
+4. 核心瓶颈仍是学生特征空间没有把未知样本推到已知分布之外，而不是阈值或单一检测分数选择错误；
+5. Standard KD 目前仍是较稳定的表示学习基线，不确定性 KD 只能保留为消融项，不能提前宣称优于 Standard KD。
+
+后续优先方向：
+
+- **先改训练协议**：固定 `stratified` 已知类划分，使用完整训练集、至少 3 个 seed，并分开报告 pure-unknown 与 mixed 两种协议；
+- **再改表征学习**：在 Standard KD 基础上逐一验证 supervised contrastive、Proxy Anchor、prototype repulsion、特征蒸馏和 angular margin，观察最近已知原型距离与已知/未知分布重叠是否真的改善；
+- **改造 mixed 学习方式**：参考 Vaze 的 GCD、Fini 的 UNO、Wen 的 SimGCD 和 FixMatch 的高置信伪标签思想，不再把 mixed 池全部当作未知，而是使用统一 known+novel 空间、周期性伪标签更新、类别均衡和双视图一致性；
+- **再考虑 rejector**：若表征空间仍重叠，应停止扩展 rejector；只有在表征改善后，再比较 PU、可靠负样本、energy、Mahalanobis 和 OpenMax 等检测器；
+- **严格记录失败实验**：AUROC、AUPR、FPR95、OSCR、known accuracy、known accept、unknown reject、候选纯度和 auto-K 必须同时报告，不能只挑选单个变好的指标。
+
+本轮新增代码主要位于 `novel_discovery/pipeline.py` 和 `train.py`，默认模式保持不变；新 rejector 特征模式只通过命令行显式启用。

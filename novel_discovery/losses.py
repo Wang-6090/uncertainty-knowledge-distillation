@@ -222,6 +222,28 @@ def prototype_alignment_loss(features: torch.Tensor, labels: torch.Tensor, proto
     return 1.0 - (feats * proto).sum(dim=-1).mean()
 
 
+def prototype_repulsion_loss(
+    prototypes: torch.Tensor,
+    similarity_margin: float = 0.0,
+) -> torch.Tensor:
+    """Penalize classifier prototypes that are too close to one another.
+
+    This is an optional class-space regularizer. It does not push every pair
+    to be maximally opposite; it only penalizes off-diagonal cosine
+    similarities above ``similarity_margin`` and therefore stays compatible
+    with many-class classifiers.
+    """
+    if prototypes.ndim != 2 or prototypes.size(0) <= 1:
+        return prototypes.new_tensor(0.0)
+    if not -1.0 <= float(similarity_margin) <= 1.0:
+        raise ValueError("similarity_margin must be in [-1, 1]")
+    normalized = F.normalize(prototypes, dim=-1)
+    similarity = normalized @ normalized.T
+    mask = ~torch.eye(similarity.size(0), dtype=torch.bool, device=similarity.device)
+    violations = F.relu(similarity[mask] - float(similarity_margin))
+    return violations.mean() if violations.numel() else prototypes.new_tensor(0.0)
+
+
 def unknown_feature_margin_loss(
     features: torch.Tensor,
     known_prototypes: torch.Tensor,
@@ -248,6 +270,37 @@ def unknown_feature_margin_loss(
     if denominator <= 0:
         return per_sample.sum() * 0.0
     return (per_sample * weight).sum() / denominator
+
+
+def unknown_feature_separation_loss(
+    known_features: torch.Tensor,
+    unknown_features: torch.Tensor,
+    similarity_margin: float = 0.0,
+    temperature: float = 0.1,
+) -> torch.Tensor:
+    """Push unknown features away from the *observed known feature batch*.
+
+    The existing prototype-margin loss uses classifier weights as proxies.  That
+    proxy can be misaligned with the feature statistics used by Mahalanobis
+    scoring.  This loss instead compares discovery features with current known
+    embeddings, using a smooth maximum over all known samples.  Known features
+    are detached so this auxiliary term cannot move the known representation
+    merely to make the separation task easier.
+    """
+    if known_features.numel() == 0 or unknown_features.numel() == 0:
+        return unknown_features.new_tensor(0.0)
+    known = F.normalize(known_features.detach(), dim=-1)
+    unknown = F.normalize(unknown_features, dim=-1)
+    similarities = unknown @ known.T
+    tau = max(float(temperature), 1e-6)
+    # Remove the batch-size-dependent log(N) offset from logsumexp so this is
+    # a true smooth approximation of max cosine similarity.
+    smooth_max = tau * (
+        torch.logsumexp(similarities / tau, dim=-1)
+        - torch.log(similarities.new_tensor(float(similarities.size(1))))
+    )
+    violations = F.relu(smooth_max - float(similarity_margin))
+    return violations.mean()
 
 
 def proxy_contrastive_loss(
@@ -479,6 +532,20 @@ def uncertainty_separation_loss(
         [torch.zeros_like(known_uncertainty), torch.ones_like(unknown_uncertainty)], dim=0
     )
     return F.binary_cross_entropy(values, targets)
+
+
+def uncertainty_ranking_loss(
+    known_uncertainty: torch.Tensor,
+    unknown_uncertainty: torch.Tensor,
+    margin: float = 0.1,
+) -> torch.Tensor:
+    """Rank unknown uncertainty above known uncertainty with a pairwise margin."""
+    if known_uncertainty.numel() == 0 or unknown_uncertainty.numel() == 0:
+        return known_uncertainty.new_tensor(0.0)
+    known = known_uncertainty.reshape(-1)
+    unknown = unknown_uncertainty.reshape(-1)
+    pairwise = F.relu(float(margin) + known[:, None] - unknown[None, :])
+    return pairwise.mean()
 
 
 def discovery_consistency_loss(

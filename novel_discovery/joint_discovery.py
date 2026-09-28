@@ -138,6 +138,54 @@ def novel_consistency_loss(
     return torch.stack(losses).mean()
 
 
+def prototype_pseudo_label_loss(
+    first_logits: torch.Tensor,
+    second_logits: torch.Tensor,
+    confidence_threshold: float = 1.0,
+    assignment_temperature: float = 1.0,
+    sample_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Cross-view hard pseudo-label loss for prototype discovery.
+
+    Sinkhorn assignments are used only as detached, approximately balanced
+    targets.  Compared with a soft KL target, the hard target supplies a
+    stronger class-specific gradient once KMeans or another initialization has
+    broken prototype symmetry.  The two directions are averaged, and samples
+    below the relative confidence threshold are ignored.
+    """
+    if first_logits.numel() == 0 or second_logits.numel() == 0:
+        return first_logits.new_tensor(0.0)
+    first_target = balanced_assignments(
+        first_logits.detach(), temperature=assignment_temperature
+    ).argmax(dim=-1)
+    second_target = balanced_assignments(
+        second_logits.detach(), temperature=assignment_temperature
+    ).argmax(dim=-1)
+    first_conf = (
+        first_logits.detach().softmax(dim=-1).max(dim=-1).values
+        * first_logits.size(-1)
+    )
+    second_conf = (
+        second_logits.detach().softmax(dim=-1).max(dim=-1).values
+        * second_logits.size(-1)
+    )
+
+    def direction_loss(logits, targets, confidence):
+        mask = confidence >= float(confidence_threshold)
+        if not mask.any():
+            return logits.new_tensor(0.0)
+        values = F.cross_entropy(logits[mask], targets[mask], reduction="none")
+        if sample_weights is None:
+            return values.mean()
+        weights = sample_weights[mask].detach().to(values).clamp_min(0.0)
+        return (values * weights).sum() / weights.sum().clamp_min(1e-8)
+
+    return 0.5 * (
+        direction_loss(second_logits, first_target, first_conf)
+        + direction_loss(first_logits, second_target, second_conf)
+    )
+
+
 def neighbor_consistency_loss(
     features: torch.Tensor,
     logits: torch.Tensor,
@@ -176,6 +224,7 @@ def joint_discovery_loss(
     alpha_balance: float = 0.1,
     alpha_information: float = 0.1,
     alpha_neighbor: float = 0.1,
+    alpha_pseudo: float = 0.0,
     neighbor_k: int = 5,
     first_known_logits: torch.Tensor | None = None,
     second_known_logits: torch.Tensor | None = None,
@@ -212,11 +261,19 @@ def joint_discovery_loss(
             second_features, second_joint_logits, k=neighbor_k, sample_weights=sample_weights
         )
     )
+    pseudo = prototype_pseudo_label_loss(
+        first_joint_logits,
+        second_joint_logits,
+        confidence_threshold=confidence_threshold,
+        assignment_temperature=assignment_temperature,
+        sample_weights=sample_weights,
+    )
     total = (
         alpha_consistency * consistency
         + alpha_balance * balance
         + alpha_information * information
         + alpha_neighbor * neighbor
+        + alpha_pseudo * pseudo
     )
     return {
         "total": total,
@@ -224,4 +281,5 @@ def joint_discovery_loss(
         "balance": balance,
         "information": information,
         "neighbor": neighbor,
+        "pseudo": pseudo,
     }

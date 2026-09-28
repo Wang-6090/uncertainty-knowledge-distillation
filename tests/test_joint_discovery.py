@@ -18,7 +18,9 @@ from novel_discovery.joint_discovery import (
     information_maximization_loss,
     neighbor_consistency_loss,
     novel_consistency_loss,
+    prototype_pseudo_label_loss,
 )
+from novel_discovery.pipeline import select_joint_candidates
 
 
 class JointDiscoveryTest(unittest.TestCase):
@@ -94,6 +96,43 @@ class JointDiscoveryTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(losses["total"]))
         losses["total"].backward()
         self.assertIsNotNone(first_logits.grad)
+
+    def test_hard_prototype_pseudo_loss_is_finite_and_differentiable(self):
+        first = torch.randn(8, 4, requires_grad=True)
+        second = torch.randn(8, 4, requires_grad=True)
+        loss = prototype_pseudo_label_loss(first, second, confidence_threshold=0.0)
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        self.assertIsNotNone(first.grad)
+        self.assertIsNotNone(second.grad)
+
+    def test_prototype_distance_candidate_selection(self):
+        known_logits = torch.randn(8, 3)
+        novel_logits = torch.randn(8, 2)
+        features = torch.randn(8, 5)
+        prototypes = torch.randn(3, 5)
+        mask = select_joint_candidates(
+            known_logits,
+            novel_logits,
+            features=features,
+            known_prototypes=prototypes,
+            ratio=0.25,
+            mode="prototype_distance",
+        )
+        self.assertEqual(mask.dtype, torch.bool)
+        self.assertEqual(int(mask.sum()), 2)
+
+    def test_distance_consensus_candidate_selection(self):
+        mask = select_joint_candidates(
+            torch.randn(8, 3),
+            torch.randn(8, 2),
+            uncertainty=torch.rand(8),
+            features=torch.randn(8, 5),
+            known_prototypes=torch.randn(3, 5),
+            ratio=0.25,
+            mode="distance_consensus",
+        )
+        self.assertEqual(int(mask.sum()), 2)
 
 
 if __name__ == "__main__":

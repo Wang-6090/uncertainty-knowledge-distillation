@@ -24,10 +24,21 @@ from novel_discovery.losses import (
     weighted_energy_margin_loss,
     uncertainty_weights,
     unknown_feature_margin_loss,
+    unknown_feature_separation_loss,
     uncertainty_separation_loss,
     outlier_exposure_uniform_loss,
+    prototype_repulsion_loss,
 )
-from novel_discovery.data import build_data_bundle, build_open_validation_and_discovery
+from novel_discovery.data import (
+    build_data_bundle,
+    build_open_validation_and_discovery,
+    make_class_split,
+    limit_dataset,
+    split_known_indices,
+    _known_labels,
+    validate_class_split,
+)
+from scripts.make_cifar100_splits import build_protocols
 from novel_discovery.pipeline import (
     calibration_diagnostics,
     attach_knn_distances,
@@ -50,14 +61,179 @@ from novel_discovery.pipeline import (
     candidate_purification_score,
     evaluate_candidate_purification,
     select_discovery_candidates,
+    select_joint_candidates,
+    compute_joint_candidate_weights,
     update_ema_model,
     synthesize_virtual_outliers,
     synthesize_gaussian_virtual_outliers,
+    fit_feature_rejector,
+    fit_virtual_outlier_rejector,
+    fit_known_support_rejector,
+    attach_known_support_score,
+    fit_pu_feature_rejector,
+    attach_feature_rejector_score,
 )
 from train import parse_args, scheduled_weight
 
 
 class CommandLineTest(unittest.TestCase):
+    def test_feature_rejector_is_separate_score(self):
+        known = {"features": np.asarray([[1.0, 0.0], [0.9, 0.1], [1.0, 0.1]])}
+        unknown = {"features": np.asarray([[-1.0, 0.0], [-0.9, -0.1], [-1.0, -0.1]])}
+        rejector = fit_feature_rejector(known, unknown, max_samples=10, seed=0)
+        outputs = {
+            "features": np.asarray([[1.0, 0.0], [-1.0, 0.0]]),
+            "entropy": np.zeros(2),
+            "epistemic": np.zeros(2),
+            "aleatoric": np.zeros(2),
+        }
+        attach_feature_rejector_score(outputs, rejector)
+        self.assertEqual(outputs["feature_rejector_score"].shape, (2,))
+        self.assertLess(outputs["feature_rejector_score"][0], outputs["feature_rejector_score"][1])
+        score, _ = compute_open_score(outputs, score_mode="feature_rejector")
+        np.testing.assert_allclose(score, outputs["feature_rejector_score"])
+
+    def test_support_augmented_rejector_requires_and_uses_support_score(self):
+        known = {
+            "features": np.asarray([[1.0, 0.0], [0.9, 0.1]]),
+            "logits": np.zeros((2, 2)),
+            "probs": np.full((2, 2), 0.5),
+            "entropy": np.zeros(2),
+            "head_uncertainty": np.zeros(2),
+            "known_support_score": np.asarray([0.1, 0.2]),
+        }
+        unknown = {key: value.copy() for key, value in known.items()}
+        unknown["features"] = np.asarray([[-1.0, 0.0], [-0.9, -0.1]])
+        unknown["known_support_score"] = np.asarray([2.0, 2.1])
+        rejector = fit_feature_rejector(
+            known, unknown, feature_mode="support_augmented", seed=0
+        )
+        outputs = {key: value[:1].copy() for key, value in unknown.items()}
+        attach_feature_rejector_score(outputs, rejector, feature_mode="support_augmented")
+        self.assertIn("feature_rejector_score", outputs)
+
+    def test_soft_pu_feature_rejector_accepts_unlabeled_pool(self):
+        known = {"features": np.asarray([[1.0, 0.0], [0.9, 0.1], [1.0, 0.1]])}
+        unlabeled = {"features": np.asarray([[-1.0, 0.0], [-0.9, -0.1], [0.8, 0.2]])}
+        rejector = fit_pu_feature_rejector(known, unlabeled, max_samples=10, iterations=2, seed=0)
+        self.assertEqual(rejector.coef_.shape, (1, 2))
+
+    def test_virtual_outlier_rejector_uses_known_features_only(self):
+        rng = np.random.default_rng(0)
+        features = np.concatenate(
+            [rng.normal(loc=-1.0, scale=0.1, size=(8, 3)),
+             rng.normal(loc=1.0, scale=0.1, size=(8, 3))], axis=0
+        ).astype(np.float32)
+        outputs = {"features": features, "labels": np.array([0] * 8 + [1] * 8)}
+        rejector = fit_virtual_outlier_rejector(outputs, max_samples=8, seed=0)
+        self.assertTrue(hasattr(rejector, "predict_proba"))
+
+    def test_known_support_detector_scores_far_features_higher(self):
+        known = {
+            "features": np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]]),
+            "labels": np.asarray([0, 0, 1, 1]),
+        }
+        support = fit_known_support_rejector(known, quantile=0.95)
+        outputs = {"features": np.asarray([[1.0, 0.0], [-1.0, 0.0]])}
+        attach_known_support_score(outputs, support)
+        self.assertGreater(outputs["known_support_score"][1], outputs["known_support_score"][0])
+
+    def test_class_split_validation_rejects_overlap_and_wrong_count(self):
+        with self.assertRaises(ValueError):
+            validate_class_split([0, 1, 2], [0, 1], [1, 2], num_known=2)
+        with self.assertRaises(ValueError):
+            validate_class_split([0, 1, 2], [0], [1], num_known=1)
+
+    def test_class_split_file_is_validated_before_loading(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "split.json"
+            path.write_text(
+                '{"known_classes": [0, 1], "novel_classes": [1, 2]}',
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                make_class_split([0, 1, 2], 2, 0, str(path))
+
+    def test_stratified_known_split_keeps_each_class_in_train_and_val(self):
+        labels = [label for label in range(4) for _ in range(10)]
+        train_indices, val_indices = split_known_indices(
+            len(labels), val_ratio=0.2, seed=7, labels=labels
+        )
+        train_labels = {labels[index] for index in train_indices}
+        val_labels = {labels[index] for index in val_indices}
+        self.assertEqual(train_labels, set(range(4)))
+        self.assertEqual(val_labels, set(range(4)))
+        self.assertEqual(len(train_indices) + len(val_indices), len(labels))
+
+    def test_default_known_split_remains_random_compatible(self):
+        random_split = split_known_indices(20, val_ratio=0.2, seed=7)
+        explicit_random = split_known_indices(20, val_ratio=0.2, seed=7, labels=None)
+        self.assertEqual(random_split, explicit_random)
+
+    def test_stratified_limit_keeps_each_class_when_budget_allows(self):
+        dataset = torch.utils.data.TensorDataset(
+            torch.zeros(12, 1),
+            torch.tensor([0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3]),
+        )
+        limited = limit_dataset(
+            dataset,
+            max_items=8,
+            seed=9,
+            labels=[0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        )
+        selected_labels = {int(limited[index][1]) for index in range(len(limited))}
+        self.assertEqual(selected_labels, {0, 1, 2, 3})
+        self.assertEqual(len(limited), 8)
+
+    def test_stratified_split_handles_subset_without_changing_dataset_contract(self):
+        base = torch.utils.data.TensorDataset(
+            torch.arange(20).float().unsqueeze(1),
+            torch.tensor([0] * 5 + [1] * 5 + [2] * 5 + [3] * 5),
+        )
+        subset = torch.utils.data.Subset(base, list(range(16)))
+        self.assertEqual(_known_labels(subset), [0] * 5 + [1] * 5 + [2] * 5 + [3])
+        train, val = split_known_indices(
+            len(subset), val_ratio=0.25, seed=4,
+            labels=[int(subset[index][1]) for index in range(len(subset))],
+        )
+        self.assertEqual(len(train) + len(val), len(subset))
+        self.assertTrue(set(int(subset[index][1]) for index in val))
+
+    def test_known_split_mode_is_exposed_on_all_commands(self):
+        args = parse_args(["train_teacher", "--known-split-mode", "stratified"])
+        self.assertEqual(args.known_split_mode, "stratified")
+
+    def test_cifar_protocols_have_expected_semantic_structure(self):
+        fine_names = [f"fine_{i}" for i in range(100)]
+        coarse_names = [f"coarse_{i}" for i in range(20)]
+        fine_to_coarse = {fine_id: fine_id // 5 for fine_id in range(100)}
+        protocols = build_protocols(fine_names, coarse_names, fine_to_coarse, seed=42)
+
+        self.assertEqual(set(protocols), {"random", "semantic_hard", "semantic_isolated"})
+        for protocol in protocols.values():
+            self.assertEqual(len(protocol["known_classes"]), 60)
+            self.assertEqual(len(protocol["novel_classes"]), 40)
+            self.assertEqual(
+                set(protocol["known_classes"]) | set(protocol["novel_classes"]),
+                set(range(100)),
+            )
+        hard_counts = {
+            coarse_id: sum(
+                fine_to_coarse[fine_id] == coarse_id
+                for fine_id in protocols["semantic_hard"]["known_classes"]
+            )
+            for coarse_id in range(20)
+        }
+        self.assertEqual(set(hard_counts.values()), {3})
+        isolated_counts = {
+            coarse_id: sum(
+                fine_to_coarse[fine_id] == coarse_id
+                for fine_id in protocols["semantic_isolated"]["known_classes"]
+            )
+            for coarse_id in range(20)
+        }
+        self.assertEqual(set(isolated_counts.values()), {0, 5})
+
     def test_teacher_proxy_anchor_arguments_are_available(self):
         args = parse_args(["train_teacher"])
         self.assertEqual(args.alpha_proxy_anchor, 0.0)
@@ -144,6 +320,7 @@ class CommandLineTest(unittest.TestCase):
                 "--uncertainty-weight-max", "1.0",
                 "--discovery-pool",
                 "--discovery-pool-mode", "mixed",
+                "--rejector-strict-mixed",
                 "--alpha-discovery-selective-energy", "0.1",
                 "--alpha-discovery-uniform", "0.07",
                 "--discovery-uniform-warmup-epochs", "1",
@@ -172,6 +349,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertAlmostEqual(args.uncertainty_weight_min, 0.5)
         self.assertAlmostEqual(args.uncertainty_weight_max, 1.0)
         self.assertEqual(args.discovery_pool_mode, "mixed")
+        self.assertTrue(args.rejector_strict_mixed)
         self.assertAlmostEqual(args.alpha_discovery_selective_energy, 0.1)
         self.assertAlmostEqual(args.alpha_discovery_uniform, 0.07)
         self.assertEqual(args.discovery_uniform_warmup_epochs, 1)
@@ -219,6 +397,16 @@ class LossBehaviorTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertIsNotNone(features.grad)
         self.assertIsNotNone(weights.grad)
+
+    def test_prototype_repulsion_loss_is_finite_and_has_gradient(self):
+        prototypes = torch.tensor(
+            [[1.0, 0.0], [0.9, 0.1], [0.0, 1.0]], requires_grad=True
+        )
+        loss = prototype_repulsion_loss(prototypes, similarity_margin=0.5)
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreater(loss.item(), 0.0)
+        self.assertIsNotNone(prototypes.grad)
 
     def test_openmax_score_is_finite_and_increases_for_far_features(self):
         stats = {
@@ -358,6 +546,18 @@ class LossBehaviorTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertGreater(known.grad.mean().item(), 0.0)
         self.assertLess(unknown.grad.mean().item(), 0.0)
+
+    def test_unknown_feature_separation_is_not_scaled_by_known_batch_size(self):
+        unknown = torch.tensor([[1.0, 0.0]])
+        one_known = torch.tensor([[0.5, 0.8660254]])
+        repeated_known = one_known.repeat(64, 1)
+        one = unknown_feature_separation_loss(
+            one_known, unknown, similarity_margin=0.0, temperature=0.1
+        )
+        repeated = unknown_feature_separation_loss(
+            repeated_known, unknown, similarity_margin=0.0, temperature=0.1
+        )
+        self.assertAlmostEqual(one.item(), repeated.item(), places=5)
 
     def test_outlier_exposure_uniform_loss_prefers_uniform_logits(self):
         uniform = torch.zeros(2, 3, requires_grad=True)
@@ -556,6 +756,25 @@ class ScoreBehaviorTest(unittest.TestCase):
         self.assertTrue(np.isfinite(score).all())
         self.assertGreater(score[1], score[0])
 
+    def test_uncertainty_aware_novel_mass_score_uses_known_statistics(self):
+        outputs = {
+            "entropy": np.array([0.1, 0.4, 0.8]),
+            "epistemic": np.zeros(3),
+            "aleatoric": np.zeros(3),
+            "features": np.arange(3, dtype=np.float32).reshape(3, 1),
+            "logits": np.array([[4.0, 0.0], [2.0, 1.0], [1.0, 1.0]], dtype=np.float32),
+            "unified_novel_mass": np.array([0.1, 0.2, 0.3]),
+        }
+        stats = fit_score_normalization(outputs, prototypes=None, gaussian_stats=None)
+        score, _ = compute_open_score(
+            outputs,
+            score_mode="normalized_unified_novel_mass_entropy",
+            normalization=stats,
+        )
+        self.assertIn("unified_novel_mass", stats)
+        self.assertTrue(np.isfinite(score).all())
+        self.assertGreater(score[2], score[0])
+
     def test_odin_score_requires_extracted_odin_values(self):
         outputs = {
             "entropy": np.array([0.1, 0.2]),
@@ -626,6 +845,26 @@ class ScoreBehaviorTest(unittest.TestCase):
         self.assertEqual(mask.sum().item(), 2)
         self.assertTrue(mask[1].item())
         self.assertTrue(mask[3].item())
+
+    def test_joint_novel_mass_selection_prefers_novel_subspace(self):
+        known_logits = torch.tensor(
+            [[5.0, 0.0], [5.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+        )
+        novel_logits = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [5.0, 5.0], [4.0, 4.0]]
+        )
+        mask = select_joint_candidates(
+            known_logits, novel_logits, ratio=0.5, mode="novel_mass"
+        )
+        self.assertEqual(mask.sum().item(), 2)
+        self.assertTrue(mask[2].item())
+        self.assertTrue(mask[3].item())
+
+    def test_joint_novel_mass_weights_require_novel_logits(self):
+        with self.assertRaises(ValueError):
+            compute_joint_candidate_weights(
+                torch.zeros(4, 2), ratio=0.5, mode="novel_mass"
+            )
 
     def test_consensus_selection_requires_multiple_risk_signals(self):
         logits = torch.tensor(

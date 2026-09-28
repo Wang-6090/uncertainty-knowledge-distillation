@@ -12,7 +12,7 @@ from sklearn.cluster import KMeans
 # Keep downloaded torchvision weights inside the project by default.
 os.environ.setdefault("TORCH_HOME", str(Path.cwd() / ".torch_cache"))
 
-from novel_discovery.data import TwoViewDataset, build_data_bundle
+from novel_discovery.data import TwoViewDataset, build_data_bundle, build_outlier_dataset
 from novel_discovery.joint_discovery import NovelPrototypeHead, combine_known_novel_logits
 from novel_discovery.metrics import compute_auroc
 from novel_discovery.models import build_model
@@ -28,11 +28,18 @@ from novel_discovery.pipeline import (
     evaluate_classification,
     extract_outputs,
     compute_open_score,
+    select_discovery_candidates,
     apply_temperature,
     calibration_diagnostics,
     fit_temperature,
     run_discovery,
     collect_activation_clip_value,
+    fit_feature_rejector,
+    fit_virtual_outlier_rejector,
+    fit_known_support_rejector,
+    attach_known_support_score,
+    fit_pu_feature_rejector,
+    attach_feature_rejector_score,
     collect_knn_feature_bank,
     attach_knn_distances,
     purify_candidate_mask,
@@ -73,6 +80,66 @@ def parse_args(argv=None):
         p.add_argument("--limit-test", type=int, default=0)
         p.add_argument("--limit-discovery", type=int, default=0)
         p.add_argument("--discovery-pool-mode", choices=["unknown", "mixed"], default="unknown")
+        p.add_argument(
+            "--rejector-pool-selection",
+            choices=["all", "high_risk"],
+            default="all",
+            help="Use all discovery samples or only high-risk pseudo-unknowns to fit feature_rejector.",
+        )
+        p.add_argument("--rejector-candidate-ratio", type=float, default=0.25)
+        p.add_argument(
+            "--rejector-training",
+            choices=["hard", "soft_pu"],
+            default="hard",
+            help="Hard binary rejector or soft positive-unlabeled training on the discovery pool.",
+        )
+        p.add_argument("--rejector-pu-iterations", type=int, default=4)
+        p.add_argument(
+            "--rejector-feature-mode",
+            choices=[
+                "embedding",
+                "augmented",
+                "support_augmented",
+                "uncertainty_augmented",
+                "support_uncertainty_augmented",
+            ],
+            default="embedding",
+            help=(
+                "Use frozen embeddings alone, append classifier summaries, or also "
+                "append MC-dropout epistemic/entropy signals."
+            ),
+        )
+        p.add_argument(
+            "--rejector-mc-samples",
+            type=int,
+            default=1,
+            help="MC-dropout passes used to build rejector training features; 1 disables MC features.",
+        )
+        p.add_argument(
+            "--rejector-model",
+            choices=["logistic", "mlp"],
+            default="logistic",
+            help="Linear or small nonlinear classifier for the frozen-feature rejector.",
+        )
+        p.add_argument(
+            "--rejector-strict-mixed",
+            action="store_true",
+            help=(
+                "For mixed discovery, train the rejector's known side from the "
+                "reserved open-validation known subset, requiring --open-val-ratio > 0."
+            ),
+        )
+        p.add_argument(
+            "--rejector-candidate-mode",
+            choices=["entropy", "max_softmax", "energy", "entropy_uncertainty", "consensus"],
+            default="entropy_uncertainty",
+        )
+        p.add_argument(
+            "--known-split-mode",
+            choices=["random", "stratified"],
+            default="random",
+            help="How to split known training samples into train/validation; random preserves the historical baseline.",
+        )
 
     p = sub.add_parser("train_teacher")
     add_common(p)
@@ -81,6 +148,11 @@ def parse_args(argv=None):
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--alpha-unc", type=float, default=0.1)
     p.add_argument("--alpha-proto", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-proto-repulsion", type=float, default=0.0,
+        help="Weight a cosine-margin regularizer that separates class prototypes.",
+    )
+    p.add_argument("--proto-repulsion-margin", type=float, default=0.0)
     p.add_argument("--alpha-proxy", type=float, default=0.0)
     p.add_argument("--proxy-temperature", type=float, default=0.1)
     p.add_argument("--alpha-proxy-anchor", type=float, default=0.0)
@@ -114,6 +186,11 @@ def parse_args(argv=None):
     p.add_argument("--kd-mode", choices=["standard", "uncertainty"], default="uncertainty")
     p.add_argument("--alpha-supcon", type=float, default=0.1)
     p.add_argument("--alpha-proto", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-proto-repulsion", type=float, default=0.0,
+        help="Weight a cosine-margin regularizer that separates class prototypes.",
+    )
+    p.add_argument("--proto-repulsion-margin", type=float, default=0.0)
     p.add_argument("--alpha-proxy", type=float, default=0.0)
     p.add_argument("--proxy-temperature", type=float, default=0.1)
     p.add_argument("--alpha-proxy-anchor", type=float, default=0.0)
@@ -208,10 +285,40 @@ def parse_args(argv=None):
         help="Maximum cosine similarity allowed between a discovery feature and its nearest known prototype.",
     )
     p.add_argument(
+        "--alpha-discovery-feature-separation",
+        type=float,
+        default=0.0,
+        help="Push pure-unknown features away from the current known feature batch.",
+    )
+    p.add_argument(
+        "--discovery-feature-separation-margin",
+        type=float,
+        default=0.0,
+        help="Maximum smooth similarity allowed between unknown and observed known features.",
+    )
+    p.add_argument(
+        "--discovery-feature-separation-temperature",
+        type=float,
+        default=0.1,
+        help="Temperature for the smooth maximum over known-feature similarities.",
+    )
+    p.add_argument(
         "--alpha-discovery-uncertainty-separation",
         type=float,
         default=0.0,
         help="Train the uncertainty head to separate known samples from a pure-unknown discovery pool.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-loss",
+        choices=["bce", "ranking"],
+        default="bce",
+        help="Objective for known/unknown uncertainty separation.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-margin",
+        type=float,
+        default=0.1,
+        help="Pairwise margin for ranking-based uncertainty separation.",
     )
     p.add_argument(
         "--uncertainty-separation-warmup-epochs",
@@ -346,6 +453,26 @@ def parse_args(argv=None):
     p.add_argument("--alpha-joint-balance", type=float, default=0.1)
     p.add_argument("--alpha-joint-information", type=float, default=0.1)
     p.add_argument("--alpha-joint-neighbor", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-joint-pseudo",
+        type=float,
+        default=0.0,
+        help="Weight cross-view hard pseudo-label learning for novel prototypes.",
+    )
+    p.add_argument(
+        "--alpha-joint-gate",
+        type=float,
+        default=0.0,
+        help="Weight independent uncertainty ranking for selected mixed-pool candidates.",
+    )
+    p.add_argument("--joint-gate-margin", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-joint-proto-repulsion",
+        type=float,
+        default=0.0,
+        help="Separate learnable novel prototypes with an optional cosine-margin regularizer.",
+    )
+    p.add_argument("--joint-proto-repulsion-margin", type=float, default=0.0)
     p.add_argument("--joint-neighbor-k", type=int, default=5)
     p.add_argument("--alpha-joint-known-ce", type=float, default=0.1)
     p.add_argument("--joint-known-temperature", type=float, default=1.0)
@@ -357,7 +484,16 @@ def parse_args(argv=None):
     p.add_argument("--joint-candidate-ratio", type=float, default=0.25)
     p.add_argument(
         "--joint-candidate-mode",
-        choices=["entropy", "max_softmax", "energy", "entropy_uncertainty", "consensus"],
+        choices=[
+            "entropy",
+            "max_softmax",
+            "energy",
+            "entropy_uncertainty",
+            "consensus",
+            "novel_mass",
+            "prototype_distance",
+            "distance_consensus",
+        ],
         default="consensus",
     )
     p.add_argument("--joint-candidate-neighbor-filter", action="store_true")
@@ -365,6 +501,18 @@ def parse_args(argv=None):
     p.add_argument("--joint-candidate-min-votes", type=int, default=2)
     p.add_argument("--joint-candidate-soft-weighting", action="store_true")
     p.add_argument("--joint-candidate-weight-floor", type=float, default=0.05)
+    p.add_argument(
+        "--outlier-dataset",
+        choices=["cifar10", "imagefolder"],
+        default="",
+        help="Optional unlabeled auxiliary dataset for Outlier Exposure.",
+    )
+    p.add_argument("--outlier-data-root", default="")
+    p.add_argument("--outlier-download", action="store_true")
+    p.add_argument("--outlier-batch-size", type=int, default=0)
+    p.add_argument("--alpha-outlier-uniform", type=float, default=0.0)
+    p.add_argument("--alpha-outlier-energy", type=float, default=0.0)
+    p.add_argument("--alpha-outlier-uncertainty", type=float, default=0.0)
     p.add_argument("--discovery-batch-size", type=int, default=0)
     p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
     p.add_argument("--discovery-temperature", type=float, default=0.2)
@@ -456,6 +604,12 @@ def parse_args(argv=None):
         help="Purify rejected candidates only before clustering; detection metrics are unchanged.",
     )
     p.add_argument("--candidate-keep-ratio", type=float, default=1.0)
+    p.add_argument(
+        "--support-quantile",
+        type=float,
+        default=0.95,
+        help="Per-class known-feature distance quantile for known_support detection.",
+    )
     p.add_argument("--mc-samples", type=int, default=8)
     p.add_argument("--temperature-calibration", action="store_true")
     p.add_argument("--calibration-bins", type=int, default=15)
@@ -472,6 +626,7 @@ def parse_args(argv=None):
             "novel_entropy",
             "unified_novel_mass",
             "classwise_unified_novel_mass",
+            "normalized_unified_novel_mass_entropy",
             "odin_msp",
             "energy",
             "react_energy",
@@ -485,6 +640,9 @@ def parse_args(argv=None):
             "normalized_entropy_relative_mahalanobis",
             "vim_residual",
             "head_uncertainty",
+            "feature_rejector",
+            "virtual_rejector",
+            "known_support",
             "margin_uncertainty",
             "entropy_only",
             "proto_only",
@@ -856,6 +1014,7 @@ def fit_teacher(args):
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
+        known_split_mode=args.known_split_mode,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
@@ -882,6 +1041,8 @@ def fit_teacher(args):
             device,
             alpha_unc=args.alpha_unc,
             alpha_proto=args.alpha_proto,
+            alpha_proto_repulsion=args.alpha_proto_repulsion,
+            proto_repulsion_margin=args.proto_repulsion_margin,
             alpha_proxy=args.alpha_proxy,
             alpha_pseudo=args.alpha_pseudo,
             alpha_energy=args.alpha_energy,
@@ -953,6 +1114,7 @@ def fit_student(args):
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
+        known_split_mode=args.known_split_mode,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
@@ -960,11 +1122,35 @@ def fit_student(args):
     train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
     discovery_loader = None
+    outlier_loader = None
+    uses_outlier_exposure = (
+        args.alpha_outlier_uniform > 0.0
+        or args.alpha_outlier_energy > 0.0
+        or args.alpha_outlier_uncertainty > 0.0
+    )
+    if uses_outlier_exposure:
+        if not args.outlier_dataset or not args.outlier_data_root:
+            raise ValueError(
+                "Outlier Exposure requires --outlier-dataset and --outlier-data-root."
+            )
+        outlier_dataset = build_outlier_dataset(
+            args.outlier_dataset,
+            args.outlier_data_root,
+            args.image_size,
+            download=args.outlier_download,
+        )
+        outlier_loader = build_loader(
+            outlier_dataset,
+            args.outlier_batch_size or args.batch_size,
+            True,
+            args.num_workers,
+        )
     uses_discovery_regularizer = (
         args.alpha_discovery_unknown > 0.0
         or args.alpha_discovery_energy > 0.0
         or args.alpha_discovery_uniform > 0.0
         or args.alpha_discovery_feature_margin > 0.0
+        or args.alpha_discovery_feature_separation > 0.0
         or args.alpha_discovery_uncertainty_separation > 0.0
         or args.alpha_discovery_selective_unknown > 0.0
         or args.alpha_discovery_selective_energy > 0.0
@@ -978,6 +1164,7 @@ def fit_student(args):
             or args.alpha_discovery_energy > 0.0
             or args.alpha_discovery_uniform > 0.0
             or args.alpha_discovery_feature_margin > 0.0
+            or args.alpha_discovery_feature_separation > 0.0
             or args.alpha_discovery_uncertainty_separation > 0.0
         ):
             raise ValueError(
@@ -1116,6 +1303,8 @@ def fit_student(args):
             alpha_feat_kd=args.alpha_feat_kd,
             alpha_supcon=args.alpha_supcon,
             alpha_proto=args.alpha_proto,
+            alpha_proto_repulsion=args.alpha_proto_repulsion,
+            proto_repulsion_margin=args.proto_repulsion_margin,
             alpha_proxy=args.alpha_proxy,
             alpha_pseudo=args.alpha_pseudo,
             alpha_energy=args.alpha_energy,
@@ -1140,10 +1329,15 @@ def fit_student(args):
             alpha_discovery_uniform=args.alpha_discovery_uniform * discovery_uniform_weight,
             alpha_discovery_feature_margin=args.alpha_discovery_feature_margin,
             discovery_feature_margin=args.discovery_feature_margin,
+            alpha_discovery_feature_separation=args.alpha_discovery_feature_separation,
+            discovery_feature_separation_margin=args.discovery_feature_separation_margin,
+            discovery_feature_separation_temperature=args.discovery_feature_separation_temperature,
             alpha_discovery_uncertainty_separation=(
                 args.alpha_discovery_uncertainty_separation
                 * uncertainty_separation_weight
             ),
+            discovery_uncertainty_loss=args.discovery_uncertainty_loss,
+            discovery_uncertainty_margin=args.discovery_uncertainty_margin,
             alpha_discovery_selective_unknown=args.alpha_discovery_selective_unknown * selective_weight,
             alpha_discovery_selective_energy=args.alpha_discovery_selective_energy * selective_weight,
             discovery_select_ratio=args.discovery_select_ratio,
@@ -1181,7 +1375,12 @@ def fit_student(args):
             alpha_joint_balance=args.alpha_joint_balance,
             alpha_joint_information=args.alpha_joint_information,
             alpha_joint_neighbor=args.alpha_joint_neighbor,
+            alpha_joint_pseudo=args.alpha_joint_pseudo,
+            alpha_joint_gate=args.alpha_joint_gate,
+            joint_gate_margin=args.joint_gate_margin,
             joint_neighbor_k=args.joint_neighbor_k,
+            alpha_joint_proto_repulsion=args.alpha_joint_proto_repulsion,
+            joint_proto_repulsion_margin=args.joint_proto_repulsion_margin,
             joint_space=args.joint_space,
             alpha_joint_known_ce=args.alpha_joint_known_ce,
             joint_known_temperature=args.joint_known_temperature,
@@ -1193,6 +1392,10 @@ def fit_student(args):
             joint_candidate_min_votes=args.joint_candidate_min_votes,
             joint_candidate_soft_weighting=args.joint_candidate_soft_weighting,
             joint_candidate_weight_floor=args.joint_candidate_weight_floor,
+            outlier_loader=outlier_loader,
+            alpha_outlier_uniform=args.alpha_outlier_uniform,
+            alpha_outlier_energy=args.alpha_outlier_energy,
+            alpha_outlier_uncertainty=args.alpha_outlier_uncertainty,
         )
         stats["discovery_selective_weight"] = selective_weight
         stats["uncertainty_separation_weight"] = uncertainty_separation_weight
@@ -1286,6 +1489,7 @@ def discover(args):
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
+        known_split_mode=args.known_split_mode,
         open_val_ratio=args.open_val_ratio,
     )
     device = resolve_device(args.device)
@@ -1389,6 +1593,143 @@ def discover(args):
     if novel_head is not None and outputs_open_val is not None:
         outputs_open_val = attach_novel_outputs(
             outputs_open_val, novel_head, device, known_temperature=novel_known_temperature
+        )
+    if args.score_mode in {"feature_rejector", "virtual_rejector"}:
+        if (
+            args.score_mode == "feature_rejector"
+            and args.rejector_strict_mixed
+            and args.discovery_pool_mode == "mixed"
+            and args.open_val_ratio <= 0.0
+        ):
+            raise ValueError(
+                "--rejector-strict-mixed with a mixed pool requires --open-val-ratio > 0"
+            )
+        if args.score_mode == "feature_rejector" and (
+            bundle.discovery_pool is None or len(bundle.discovery_pool) == 0
+        ):
+            raise ValueError(
+                "feature_rejector requires a non-empty discovery pool; "
+                "use the unknown discovery pool or provide --limit-discovery"
+            )
+        if (
+            args.score_mode == "feature_rejector"
+            and args.rejector_strict_mixed
+            and args.discovery_pool_mode == "mixed"
+            and outputs_open_val is not None
+        ):
+            known_open_mask = np.asarray(outputs_open_val["is_known"], dtype=bool)
+            rejector_known_outputs = {
+                key: value[known_open_mask]
+                if isinstance(value, np.ndarray) and value.shape[:1] == known_open_mask.shape
+                else value
+                for key, value in outputs_open_val.items()
+            }
+            if len(rejector_known_outputs["features"]) == 0:
+                raise ValueError("strict mixed rejector found no known open-validation samples")
+            print(
+                "feature rejector strict mixed protocol: using "
+                f"{len(rejector_known_outputs['features'])} held-out known samples"
+            )
+        else:
+            rejector_known_loader = build_loader(
+                bundle.train, args.batch_size, False, args.num_workers
+            )
+            rejector_known_outputs = extract_outputs(
+                model,
+                rejector_known_loader,
+                device,
+                mc_samples=(args.rejector_mc_samples if args.rejector_feature_mode in {
+                    "uncertainty_augmented", "support_uncertainty_augmented"
+                } else 1),
+            )
+        support_model_for_rejector = None
+        if args.score_mode == "virtual_rejector":
+            feature_rejector = fit_virtual_outlier_rejector(
+                rejector_known_outputs, seed=args.seed
+            )
+            print(
+                "virtual feature rejector: trained on "
+                f"{len(rejector_known_outputs['features'])} known features and "
+                "class-boundary virtual outliers"
+            )
+        else:
+            rejector_unknown_loader = build_loader(
+                bundle.discovery_pool, args.batch_size, False, args.num_workers
+            )
+            rejector_unknown_outputs = extract_outputs(
+                model,
+                rejector_unknown_loader,
+                device,
+                mc_samples=(args.rejector_mc_samples if args.rejector_feature_mode in {
+                    "uncertainty_augmented", "support_uncertainty_augmented"
+                } else 1),
+            )
+            if args.rejector_feature_mode in {"support_augmented", "support_uncertainty_augmented"}:
+                support_model_for_rejector = fit_known_support_rejector(
+                    rejector_known_outputs, quantile=args.support_quantile
+                )
+                attach_known_support_score(rejector_known_outputs, support_model_for_rejector)
+                attach_known_support_score(rejector_unknown_outputs, support_model_for_rejector)
+            if args.rejector_pool_selection == "high_risk":
+                pool_logits = torch.from_numpy(rejector_unknown_outputs["logits"])
+                pool_uncertainty = torch.from_numpy(rejector_unknown_outputs["head_uncertainty"])
+                candidate_mask = select_discovery_candidates(
+                    pool_logits,
+                    pool_uncertainty,
+                    ratio=args.rejector_candidate_ratio,
+                    mode=args.rejector_candidate_mode,
+                ).numpy()
+                if int(candidate_mask.sum()) < 2:
+                    raise ValueError("rejector high-risk selection produced fewer than two samples")
+                rejector_unknown_outputs = {
+                    key: value[candidate_mask]
+                    if isinstance(value, np.ndarray) and value.shape[:1] == candidate_mask.shape
+                    else value
+                    for key, value in rejector_unknown_outputs.items()
+                }
+                print(
+                    "feature rejector pseudo-unknown selection: "
+                    f"{int(candidate_mask.sum())}/{len(candidate_mask)} samples"
+                )
+            if args.rejector_training == "soft_pu":
+                feature_rejector = fit_pu_feature_rejector(
+                    rejector_known_outputs,
+                    rejector_unknown_outputs,
+                    iterations=args.rejector_pu_iterations,
+                    feature_mode=args.rejector_feature_mode,
+                    seed=args.seed,
+                )
+            else:
+                feature_rejector = fit_feature_rejector(
+                    rejector_known_outputs,
+                    rejector_unknown_outputs,
+                    feature_mode=args.rejector_feature_mode,
+                    model_type=args.rejector_model,
+                    seed=args.seed,
+                )
+        for extracted in (outputs_test, outputs_val, outputs_open_val):
+            if extracted is not None:
+                if support_model_for_rejector is not None:
+                    attach_known_support_score(extracted, support_model_for_rejector)
+                attach_feature_rejector_score(
+                    extracted, feature_rejector, feature_mode=args.rejector_feature_mode
+                )
+        print(
+            "feature rejector scores attached"
+        )
+    if args.score_mode == "known_support":
+        support_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        support_outputs = extract_outputs(model, support_loader, device, mc_samples=1)
+        support_model = fit_known_support_rejector(
+            support_outputs, quantile=args.support_quantile
+        )
+        for extracted in (outputs_test, outputs_val, outputs_open_val):
+            if extracted is not None:
+                attach_known_support_score(extracted, support_model)
+        print(
+            "known support detector: fitted on "
+            f"{len(support_outputs['features'])} known features, "
+            f"{len(support_model['classes'])} classes, q={args.support_quantile:.3f}"
         )
     if knn_bank is not None:
         attach_knn_distances(outputs_test, knn_bank, k=args.knn_k, feature_key=args.knn_feature)
@@ -1552,6 +1893,7 @@ def discover(args):
                     "novel_msp",
                     "novel_entropy",
                     "unified_novel_mass",
+                    "normalized_unified_novel_mass_entropy",
                 ]
             )
         selected, all_candidates = _select_score_mode(
@@ -1787,6 +2129,7 @@ def inspect_data(args):
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
+        known_split_mode=args.known_split_mode,
     )
     print("dataset:", args.dataset)
     print("known classes:", len(bundle.known_classes))
