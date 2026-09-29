@@ -17,6 +17,7 @@ from novel_discovery.losses import (
     angular_margin_loss,
     proxy_anchor_loss,
     reciprocal_point_loss,
+    known_pseudo_label_consistency_loss,
     energy_margin_loss,
     per_sample_energy_margin_loss,
     proxy_contrastive_loss,
@@ -35,6 +36,7 @@ from novel_discovery.data import (
     make_class_split,
     limit_dataset,
     split_known_indices,
+    split_known_for_discovery,
     _known_labels,
     validate_class_split,
 )
@@ -71,6 +73,7 @@ from novel_discovery.pipeline import (
     fit_known_support_rejector,
     attach_known_support_score,
     fit_pu_feature_rejector,
+    fit_nnpu_feature_rejector,
     attach_feature_rejector_score,
 )
 from train import parse_args, scheduled_weight
@@ -117,6 +120,21 @@ class CommandLineTest(unittest.TestCase):
         unlabeled = {"features": np.asarray([[-1.0, 0.0], [-0.9, -0.1], [0.8, 0.2]])}
         rejector = fit_pu_feature_rejector(known, unlabeled, max_samples=10, iterations=2, seed=0)
         self.assertEqual(rejector.coef_.shape, (1, 2))
+
+    def test_nnpu_feature_rejector_returns_unknown_score(self):
+        known = {"features": np.asarray([[1.0, 0.0], [0.9, 0.1], [1.0, 0.1]])}
+        unlabeled = {
+            "features": np.asarray(
+                [[-1.0, 0.0], [-0.9, -0.1], [0.8, 0.2], [0.7, 0.3]]
+            )
+        }
+        rejector = fit_nnpu_feature_rejector(
+            known, unlabeled, known_prior=0.5, iterations=30, seed=0
+        )
+        known_score = float(rejector.decision_function(np.asarray([[1.0, 0.0]]))[0])
+        unknown_score = float(rejector.decision_function(np.asarray([[-1.0, 0.0]]))[0])
+        self.assertTrue(np.isfinite([known_score, unknown_score]).all())
+        self.assertGreater(unknown_score, known_score)
 
     def test_virtual_outlier_rejector_uses_known_features_only(self):
         rng = np.random.default_rng(0)
@@ -310,6 +328,53 @@ class CommandLineTest(unittest.TestCase):
         self.assertTrue(any(100 <= sample_id < 120 for sample_id in open_ids))
         self.assertTrue(any(200 <= sample_id < 240 for sample_id in open_ids))
 
+    def test_mixed_discovery_reserves_disjoint_known_samples(self):
+        def make_dataset(start, count, known):
+            ids = torch.arange(start, start + count)
+            labels = torch.zeros(count, dtype=torch.long) if known else torch.full((count,), -1)
+            known_flags = torch.ones(count, dtype=torch.long) if known else torch.zeros(count, dtype=torch.long)
+            return torch.utils.data.TensorDataset(
+                torch.zeros(count, 3, 2, 2), labels, ids, known_flags, ids
+            )
+
+        known = make_dataset(0, 20, known=True)
+        unknown = make_dataset(100, 12, known=False)
+        supervised, known_pool = split_known_for_discovery(known, 0.25, seed=11)
+        _, _, mixed = build_open_validation_and_discovery(
+            supervised,
+            make_dataset(200, 4, known=True),
+            unknown,
+            open_val_ratio=0.0,
+            seed=11,
+            discovery_pool_mode="mixed",
+            known_discovery_pool=known_pool,
+        )
+        ids = lambda dataset: {int(dataset[index][4]) for index in range(len(dataset))}
+        supervised_ids = ids(supervised)
+        known_pool_ids = ids(known_pool)
+        mixed_ids = ids(mixed)
+        self.assertTrue(supervised_ids.isdisjoint(known_pool_ids))
+        self.assertTrue(known_pool_ids.issubset(mixed_ids))
+        self.assertTrue({100, 101}.issubset(mixed_ids))
+
+    def test_mixed_discovery_rejects_reusing_supervised_known_samples(self):
+        dataset = torch.utils.data.TensorDataset(
+            torch.zeros(4, 3, 2, 2),
+            torch.zeros(4, dtype=torch.long),
+            torch.arange(4),
+            torch.ones(4, dtype=torch.long),
+            torch.arange(4),
+        )
+        with self.assertRaises(ValueError):
+            build_open_validation_and_discovery(
+                dataset,
+                dataset,
+                dataset,
+                open_val_ratio=0.0,
+                seed=1,
+                discovery_pool_mode="mixed",
+            )
+
     def test_train_student_proxy_arguments_are_available(self):
         args = parse_args(
             [
@@ -340,6 +405,10 @@ class CommandLineTest(unittest.TestCase):
             "--discovery-selective-ramp-epochs", "2",
                 "--uncertainty-separation-warmup-epochs", "1",
                 "--uncertainty-separation-ramp-epochs", "2",
+                "--outlier-dataset", "cifar10",
+                "--outlier-data-root", ".\\data",
+                "--alpha-outlier-feature-margin", "0.05",
+                "--outlier-feature-margin", "0.15",
             ]
         )
 
@@ -365,6 +434,10 @@ class CommandLineTest(unittest.TestCase):
         self.assertAlmostEqual(args.discovery_neighbor_temperature, 0.3)
         self.assertAlmostEqual(args.alpha_discovery_feature_margin, 0.05)
         self.assertAlmostEqual(args.discovery_feature_margin, 0.2)
+        self.assertEqual(args.outlier_dataset, "cifar10")
+        self.assertEqual(args.outlier_data_root, ".\\data")
+        self.assertAlmostEqual(args.alpha_outlier_feature_margin, 0.05)
+        self.assertAlmostEqual(args.outlier_feature_margin, 0.15)
         self.assertEqual(args.discovery_selective_warmup_epochs, 1)
         self.assertEqual(args.discovery_selective_ramp_epochs, 2)
         self.assertEqual(args.uncertainty_separation_warmup_epochs, 1)
@@ -445,6 +518,27 @@ class LossBehaviorTest(unittest.TestCase):
             np.array([[1.0, 0.0]], dtype=np.float32),
         )
         self.assertTrue(np.allclose(scores, [1.0, 0.0]))
+
+    def test_known_pseudo_label_consistency_uses_only_selected_samples(self):
+        first = torch.tensor(
+            [[4.0, 0.0], [0.0, 4.0]], requires_grad=True
+        )
+        second = torch.tensor(
+            [[3.0, 0.0], [0.0, 3.0]], requires_grad=True
+        )
+        labels = torch.tensor([0, 1])
+        selected = torch.tensor([True, False])
+        loss = known_pseudo_label_consistency_loss(first, second, labels, selected)
+        expected = 0.5 * (
+            torch.nn.functional.cross_entropy(first[:1], labels[:1])
+            + torch.nn.functional.cross_entropy(second[:1], labels[:1])
+        )
+        self.assertAlmostEqual(loss.item(), expected.item(), places=6)
+        loss.backward()
+        self.assertIsNotNone(first.grad)
+        self.assertIsNotNone(second.grad)
+        self.assertTrue(torch.allclose(first.grad[1], torch.zeros_like(first.grad[1])))
+        self.assertTrue(torch.allclose(second.grad[1], torch.zeros_like(second.grad[1])))
 
     def test_uncertainty_weights_can_be_clipped(self):
         values = uncertainty_weights(
@@ -805,6 +899,24 @@ class ScoreBehaviorTest(unittest.TestCase):
 
         np.testing.assert_allclose(diag, np.array([0.5, 0.5]))
         np.testing.assert_allclose(shared, np.array([1.0, 1.0]))
+
+    def test_chunked_mahalanobis_matches_full_batch_for_both_covariances(self):
+        rng = np.random.default_rng(17)
+        features = rng.normal(size=(23, 7)).astype(np.float32)
+        means = rng.normal(size=(5, 7)).astype(np.float32)
+        variances = np.exp(rng.normal(size=(5, 7))).astype(np.float32)
+        matrix = rng.normal(size=(7, 7))
+        precision = (matrix.T @ matrix + np.eye(7)).astype(np.float32)
+        stats = {"means": means, "variances": variances, "precision": precision}
+
+        for covariance in ("diag", "shared"):
+            full_batch = compute_mahalanobis_distance(
+                features, stats, covariance=covariance, chunk_size=len(features)
+            )
+            chunked = compute_mahalanobis_distance(
+                features, stats, covariance=covariance, chunk_size=4
+            )
+            np.testing.assert_allclose(chunked, full_batch, rtol=1e-6, atol=1e-6)
 
     def test_non_mahalanobis_score_skips_mahalanobis_computation(self):
         outputs = {

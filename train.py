@@ -28,6 +28,7 @@ from novel_discovery.pipeline import (
     evaluate_classification,
     extract_outputs,
     compute_open_score,
+    compute_predicted_classwise_mahalanobis,
     select_discovery_candidates,
     apply_temperature,
     calibration_diagnostics,
@@ -39,6 +40,7 @@ from novel_discovery.pipeline import (
     fit_known_support_rejector,
     attach_known_support_score,
     fit_pu_feature_rejector,
+    fit_nnpu_feature_rejector,
     attach_feature_rejector_score,
     collect_knn_feature_bank,
     attach_knn_distances,
@@ -70,8 +72,26 @@ def parse_args(argv=None):
         p.add_argument("--teacher-backbone", default=None)
         p.add_argument("--student-backbone", default=None)
         p.add_argument("--pretrained", action="store_true")
+        p.add_argument(
+            "--encoder-lr-scale",
+            type=float,
+            default=1.0,
+            help=(
+                "Multiply the learning rate of the student encoder only. "
+                "Values below 1 preserve pretrained features during fine-tuning; "
+                "default 1.0 keeps the historical behavior."
+            ),
+        )
         p.add_argument("--proj-dim", type=int, default=128)
         p.add_argument("--dropout", type=float, default=0.2)
+        p.add_argument(
+            "--cifar-stem",
+            action="store_true",
+            help=(
+                "Use a CIFAR-style 3x3/stride-1 ResNet stem and remove the "
+                "initial max-pool. Disabled by default for historical compatibility."
+            ),
+        )
         p.add_argument("--download", action="store_true")
         p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
         p.add_argument("--work-dir", default="./runs")
@@ -89,11 +109,17 @@ def parse_args(argv=None):
         p.add_argument("--rejector-candidate-ratio", type=float, default=0.25)
         p.add_argument(
             "--rejector-training",
-            choices=["hard", "soft_pu"],
+            choices=["hard", "soft_pu", "nnpu"],
             default="hard",
-            help="Hard binary rejector or soft positive-unlabeled training on the discovery pool.",
+            help="Hard binary rejector, heuristic soft-PU, or non-negative PU risk on the discovery pool.",
         )
         p.add_argument("--rejector-pu-iterations", type=int, default=4)
+        p.add_argument(
+            "--rejector-known-prior",
+            type=float,
+            default=0.2,
+            help="Estimated known fraction in a mixed unlabeled pool for nnPU training.",
+        )
         p.add_argument(
             "--rejector-feature-mode",
             choices=[
@@ -139,6 +165,15 @@ def parse_args(argv=None):
             choices=["random", "stratified"],
             default="random",
             help="How to split known training samples into train/validation; random preserves the historical baseline.",
+        )
+        p.add_argument(
+            "--mixed-known-pool-ratio",
+            type=float,
+            default=0.2,
+            help=(
+                "Fraction of the known training partition reserved as disjoint "
+                "unlabeled samples when --discovery-pool-mode=mixed."
+            ),
         )
 
     p = sub.add_parser("train_teacher")
@@ -477,6 +512,73 @@ def parse_args(argv=None):
     p.add_argument("--alpha-joint-known-ce", type=float, default=0.1)
     p.add_argument("--joint-known-temperature", type=float, default=1.0)
     p.add_argument(
+        "--joint-mixed-residual",
+        action="store_true",
+        help=(
+            "On a mixed discovery pool, weight novel-prototype learning by "
+            "1-max known-class probability instead of balancing known and "
+            "novel logits in one Sinkhorn space."
+        ),
+    )
+    p.add_argument(
+        "--joint-residual-temperature",
+        type=float,
+        default=1.0,
+        help="Temperature used to compute mixed-pool known residual weights.",
+    )
+    p.add_argument(
+        "--joint-residual-floor",
+        type=float,
+        default=0.0,
+        help="Minimum residual weight retained for mixed-pool novel learning.",
+    )
+    p.add_argument(
+        "--joint-novel-mass",
+        action="store_true",
+        help=(
+            "Use the unified known-plus-novel probability mass, with two-view "
+            "agreement, to weight novel learning on a mixed discovery pool."
+        ),
+    )
+    p.add_argument(
+        "--joint-novel-neighbor-support",
+        action="store_true",
+        help=(
+            "Multiply cross-view novel-mass weights by local kNN support in "
+            "the mixed-pool feature batch. Requires --joint-novel-mass."
+        ),
+    )
+    p.add_argument("--joint-novel-neighbor-k", type=int, default=5)
+    p.add_argument(
+        "--joint-weighted-sinkhorn",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Use detached novel-mass sample weights as Sinkhorn sample marginals; "
+            "loss weighting remains active when disabled."
+        ),
+    )
+    p.add_argument(
+        "--joint-novel-ema-weights",
+        action="store_true",
+        help=(
+            "Generate joint novel-mass and neighbor-support weights from the "
+            "EMA selection model; requires --discovery-selection-model ema."
+        ),
+    )
+    p.add_argument(
+        "--alpha-joint-novel-margin",
+        type=float,
+        default=0.0,
+        help="Weight soft feature repulsion for high-novel-mass mixed-pool samples.",
+    )
+    p.add_argument(
+        "--joint-novel-margin",
+        type=float,
+        default=0.2,
+        help="Maximum cosine similarity to a known prototype for soft novel repulsion.",
+    )
+    p.add_argument(
         "--joint-candidate-gating",
         action="store_true",
         help="Apply the joint novel objective only to high-risk unlabeled discovery candidates.",
@@ -502,6 +604,33 @@ def parse_args(argv=None):
     p.add_argument("--joint-candidate-soft-weighting", action="store_true")
     p.add_argument("--joint-candidate-weight-floor", type=float, default=0.05)
     p.add_argument(
+        "--joint-mixed-known-consistency",
+        action="store_true",
+        help=(
+            "On a mixed unlabeled pool, train low-risk, cross-view-consistent "
+            "samples toward EMA known-class pseudo labels. Requires joint "
+            "candidate gating and mixed discovery mode."
+        ),
+    )
+    p.add_argument(
+        "--alpha-joint-known-consistency",
+        type=float,
+        default=0.0,
+        help="Weight the mixed-pool known-anchor pseudo-label consistency loss.",
+    )
+    p.add_argument(
+        "--joint-known-confidence-threshold",
+        type=float,
+        default=0.8,
+        help="Minimum EMA confidence for a low-risk mixed-pool known anchor.",
+    )
+    p.add_argument(
+        "--joint-known-target",
+        choices=["ema", "teacher"],
+        default="ema",
+        help="Detached model used to assign labels for mixed-pool known anchors.",
+    )
+    p.add_argument(
         "--outlier-dataset",
         choices=["cifar10", "imagefolder"],
         default="",
@@ -513,6 +642,11 @@ def parse_args(argv=None):
     p.add_argument("--alpha-outlier-uniform", type=float, default=0.0)
     p.add_argument("--alpha-outlier-energy", type=float, default=0.0)
     p.add_argument("--alpha-outlier-uncertainty", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-outlier-feature-margin", type=float, default=0.0,
+        help="Push auxiliary outlier features away from the nearest known classifier prototype.",
+    )
+    p.add_argument("--outlier-feature-margin", type=float, default=0.2)
     p.add_argument("--discovery-batch-size", type=int, default=0)
     p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
     p.add_argument("--discovery-temperature", type=float, default=0.2)
@@ -664,6 +798,8 @@ def parse_args(argv=None):
             "normalized_entropy_mahalanobis",
             "normalized_entropy_mahalanobis_diag",
             "normalized_entropy_mahalanobis_shared",
+            "classwise_mahalanobis",
+            "normalized_entropy_classwise_mahalanobis",
         ],
     )
     p.add_argument(
@@ -935,6 +1071,8 @@ def _score_needs_shared_mahalanobis(score_mode: str, auto_calibrate: bool = Fals
         "normalized_entropy_mahalanobis",
         "relative_mahalanobis",
         "normalized_entropy_relative_mahalanobis",
+        "classwise_mahalanobis",
+        "normalized_entropy_classwise_mahalanobis",
         "gaussian_nll",
         "normalized_entropy_gaussian_nll",
         "relative_mahalanobis",
@@ -1015,6 +1153,7 @@ def fit_teacher(args):
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
         known_split_mode=args.known_split_mode,
+        mixed_known_pool_ratio=args.mixed_known_pool_ratio,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
@@ -1027,6 +1166,7 @@ def fit_teacher(args):
         proj_dim=args.proj_dim,
         dropout=args.dropout,
         pretrained=args.pretrained,
+        cifar_stem=args.cifar_stem,
     ).to(device)
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     best_acc = -1.0
@@ -1092,6 +1232,42 @@ def fit_teacher(args):
 
 
 def fit_student(args):
+    if args.joint_mixed_known_consistency or args.alpha_joint_known_consistency > 0.0:
+        if (
+            not args.joint_discovery
+            or not args.joint_candidate_gating
+            or args.alpha_joint_discovery <= 0.0
+        ):
+            raise ValueError(
+                "mixed known consistency requires --joint-discovery and "
+                "--joint-candidate-gating"
+            )
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "mixed known consistency requires --discovery-pool-mode mixed"
+            )
+        if not args.discovery_pool:
+            raise ValueError(
+                "mixed known consistency requires --discovery-pool"
+            )
+        if args.discovery_selection_model != "ema":
+            raise ValueError(
+                "mixed known consistency requires --discovery-selection-model ema"
+            )
+        if args.alpha_joint_known_consistency <= 0.0:
+            raise ValueError(
+                "--joint-mixed-known-consistency requires "
+                "--alpha-joint-known-consistency > 0"
+            )
+        if not 0.0 < args.joint_known_confidence_threshold <= 1.0:
+            raise ValueError("--joint-known-confidence-threshold must be in (0, 1]")
+    if args.joint_novel_ema_weights and (
+        not args.joint_novel_mass or args.discovery_selection_model != "ema"
+    ):
+        raise ValueError(
+            "--joint-novel-ema-weights requires --joint-novel-mass and "
+            "--discovery-selection-model ema"
+        )
     if args.alpha_reciprocal > 0.0 and args.reciprocal_points <= 0:
         raise ValueError("--alpha-reciprocal requires --reciprocal-points greater than zero")
     if args.alpha_reciprocal > 0.0 and (
@@ -1115,6 +1291,7 @@ def fit_student(args):
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
         known_split_mode=args.known_split_mode,
+        mixed_known_pool_ratio=args.mixed_known_pool_ratio,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
     )
     device = resolve_device(args.device)
@@ -1127,6 +1304,7 @@ def fit_student(args):
         args.alpha_outlier_uniform > 0.0
         or args.alpha_outlier_energy > 0.0
         or args.alpha_outlier_uncertainty > 0.0
+        or args.alpha_outlier_feature_margin > 0.0
     )
     if uses_outlier_exposure:
         if not args.outlier_dataset or not args.outlier_data_root:
@@ -1184,6 +1362,7 @@ def fit_student(args):
         proj_dim=args.proj_dim,
         dropout=args.dropout,
         pretrained=args.pretrained,
+        cifar_stem=args.cifar_stem,
     ).to(device)
     student = build_model(
         len(bundle.known_classes),
@@ -1191,6 +1370,7 @@ def fit_student(args):
         proj_dim=args.proj_dim,
         dropout=args.dropout,
         pretrained=args.pretrained,
+        cifar_stem=args.cifar_stem,
     ).to(device)
     novel_head = None
     if args.joint_discovery:
@@ -1225,16 +1405,35 @@ def fit_student(args):
     if args.alpha_vos > 0.0 and args.vos_mode == "gaussian":
         vos_gaussian_stats = refresh_vos_gaussian_stats()
         print("initialized VOS class-conditional Gaussian statistics")
-    trainable_parameters = list(student.parameters())
-    if novel_head is not None:
-        trainable_parameters += list(novel_head.parameters())
+    if args.encoder_lr_scale < 0.0:
+        raise ValueError("--encoder-lr-scale must be non-negative")
+    encoder_parameters = list(student.encoder.parameters())
+    encoder_parameter_ids = {id(parameter) for parameter in encoder_parameters}
+    head_parameters = [
+        parameter
+        for parameter in student.parameters()
+        if id(parameter) not in encoder_parameter_ids
+    ]
     reciprocal_points = None
     if args.reciprocal_points > 0:
         reciprocal_points = torch.nn.Parameter(
             torch.randn(args.reciprocal_points, student.encoder.out_dim, device=device) * 0.02
         )
-        trainable_parameters.append(reciprocal_points)
-    optim = torch.optim.AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
+    optimizer_groups = [
+        {
+            "params": encoder_parameters,
+            "lr": args.lr * args.encoder_lr_scale,
+        },
+        {
+            "params": head_parameters,
+            "lr": args.lr,
+        },
+    ]
+    if novel_head is not None:
+        optimizer_groups.append({"params": list(novel_head.parameters()), "lr": args.lr})
+    if reciprocal_points is not None:
+        optimizer_groups.append({"params": [reciprocal_points], "lr": args.lr})
+    optim = torch.optim.AdamW(optimizer_groups, weight_decay=args.weight_decay)
     best_acc = -1.0
     best_state = None
     best_novel_head_state = None
@@ -1384,6 +1583,16 @@ def fit_student(args):
             joint_space=args.joint_space,
             alpha_joint_known_ce=args.alpha_joint_known_ce,
             joint_known_temperature=args.joint_known_temperature,
+            joint_mixed_residual=args.joint_mixed_residual,
+            joint_residual_temperature=args.joint_residual_temperature,
+            joint_residual_floor=args.joint_residual_floor,
+            joint_novel_mass=args.joint_novel_mass,
+            joint_novel_neighbor_support=args.joint_novel_neighbor_support,
+            joint_novel_neighbor_k=args.joint_novel_neighbor_k,
+            joint_novel_ema_weights=args.joint_novel_ema_weights,
+            joint_weighted_sinkhorn=args.joint_weighted_sinkhorn,
+            alpha_joint_novel_margin=args.alpha_joint_novel_margin,
+            joint_novel_margin=args.joint_novel_margin,
             joint_candidate_gating=args.joint_candidate_gating,
             joint_candidate_ratio=args.joint_candidate_ratio,
             joint_candidate_mode=args.joint_candidate_mode,
@@ -1392,10 +1601,16 @@ def fit_student(args):
             joint_candidate_min_votes=args.joint_candidate_min_votes,
             joint_candidate_soft_weighting=args.joint_candidate_soft_weighting,
             joint_candidate_weight_floor=args.joint_candidate_weight_floor,
+            joint_mixed_known_consistency=args.joint_mixed_known_consistency,
+            alpha_joint_known_consistency=args.alpha_joint_known_consistency,
+            joint_known_confidence_threshold=args.joint_known_confidence_threshold,
+            joint_known_target=args.joint_known_target,
             outlier_loader=outlier_loader,
             alpha_outlier_uniform=args.alpha_outlier_uniform,
             alpha_outlier_energy=args.alpha_outlier_energy,
             alpha_outlier_uncertainty=args.alpha_outlier_uncertainty,
+            alpha_outlier_feature_margin=args.alpha_outlier_feature_margin,
+            outlier_feature_margin=args.outlier_feature_margin,
         )
         stats["discovery_selective_weight"] = selective_weight
         stats["uncertainty_separation_weight"] = uncertainty_separation_weight
@@ -1490,6 +1705,7 @@ def discover(args):
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
         known_split_mode=args.known_split_mode,
+        mixed_known_pool_ratio=args.mixed_known_pool_ratio,
         open_val_ratio=args.open_val_ratio,
     )
     device = resolve_device(args.device)
@@ -1502,6 +1718,7 @@ def discover(args):
         proj_dim=args.proj_dim,
         dropout=args.dropout,
         pretrained=args.pretrained,
+        cifar_stem=args.cifar_stem,
     ).to(device)
     ckpt_path = resolve_input_checkpoint(args.student_ckpt, args.work_dir, "student.pt")
     ckpt = load_checkpoint(model, ckpt_path, device)
@@ -1595,6 +1812,13 @@ def discover(args):
             outputs_open_val, novel_head, device, known_temperature=novel_known_temperature
         )
     if args.score_mode in {"feature_rejector", "virtual_rejector"}:
+        if args.rejector_training == "nnpu":
+            if args.score_mode != "feature_rejector":
+                raise ValueError("nnpu training is only available for feature_rejector")
+            if args.discovery_pool_mode != "mixed":
+                raise ValueError("nnpu rejector training requires --discovery-pool-mode mixed")
+            if not 0.0 < args.rejector_known_prior < 1.0:
+                raise ValueError("--rejector-known-prior must be in (0, 1) for nnpu")
         if (
             args.score_mode == "feature_rejector"
             and args.rejector_strict_mixed
@@ -1696,6 +1920,15 @@ def discover(args):
                     rejector_known_outputs,
                     rejector_unknown_outputs,
                     iterations=args.rejector_pu_iterations,
+                    feature_mode=args.rejector_feature_mode,
+                    seed=args.seed,
+                )
+            elif args.rejector_training == "nnpu":
+                feature_rejector = fit_nnpu_feature_rejector(
+                    rejector_known_outputs,
+                    rejector_unknown_outputs,
+                    known_prior=args.rejector_known_prior,
+                    iterations=max(50, args.rejector_pu_iterations * 75),
                     feature_mode=args.rejector_feature_mode,
                     seed=args.seed,
                 )
@@ -1806,6 +2039,7 @@ def discover(args):
     needs_normalization = (
         selected_score_mode.startswith("normalized_")
         or selected_score_mode == "classwise_unified_novel_mass"
+        or selected_score_mode == "classwise_mahalanobis"
     )
     score_normalization = (
         fit_score_normalization(
@@ -2130,6 +2364,7 @@ def inspect_data(args):
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
         known_split_mode=args.known_split_mode,
+        mixed_known_pool_ratio=args.mixed_known_pool_ratio,
     )
     print("dataset:", args.dataset)
     print("known classes:", len(bundle.known_classes))

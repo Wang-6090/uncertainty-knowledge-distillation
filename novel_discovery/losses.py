@@ -417,6 +417,37 @@ def reciprocal_point_loss(
     return repel_known + attract_unknown + repel_unknown_known + 0.1 * diversify
 
 
+def known_pseudo_label_consistency_loss(
+    first_logits: torch.Tensor,
+    second_logits: torch.Tensor,
+    pseudo_labels: torch.Tensor,
+    mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Match two augmented views to detached known-class pseudo labels.
+
+    This is intended for a mixed unlabeled pool: only samples selected by an
+    external confidence/agreement gate should reach this loss.  The labels are
+    supplied by a detached teacher/EMA model, so this term cannot reinforce a
+    student's own changing logits through the target path.
+    """
+    if first_logits.shape != second_logits.shape:
+        raise ValueError("first_logits and second_logits must have the same shape")
+    if pseudo_labels.ndim != 1 or pseudo_labels.size(0) != first_logits.size(0):
+        raise ValueError("pseudo_labels must contain one label per sample")
+    if first_logits.size(0) == 0:
+        return first_logits.new_tensor(0.0)
+    if mask is None:
+        mask = torch.ones(first_logits.size(0), dtype=torch.bool, device=first_logits.device)
+    else:
+        mask = mask.to(device=first_logits.device, dtype=torch.bool)
+    if not mask.any():
+        return first_logits.new_tensor(0.0)
+    labels = pseudo_labels.detach().to(device=first_logits.device, dtype=torch.long)
+    first = F.cross_entropy(first_logits[mask], labels[mask], reduction="mean")
+    second = F.cross_entropy(second_logits[mask], labels[mask], reduction="mean")
+    return 0.5 * (first + second)
+
+
 def angular_margin_loss(
     features: torch.Tensor,
     labels: torch.Tensor,

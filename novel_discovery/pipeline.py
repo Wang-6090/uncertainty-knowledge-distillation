@@ -35,6 +35,7 @@ from .losses import (
     proxy_contrastive_loss,
     proxy_anchor_loss,
     reciprocal_point_loss,
+    known_pseudo_label_consistency_loss,
     prototype_alignment_loss,
     prototype_repulsion_loss,
     supervised_contrastive_loss,
@@ -46,7 +47,13 @@ from .losses import (
     uncertainty_ranking_loss,
     outlier_exposure_uniform_loss,
 )
-from .joint_discovery import combine_known_novel_logits, joint_discovery_loss
+from .joint_discovery import (
+    combine_known_novel_logits,
+    joint_discovery_loss,
+    known_residual_weights,
+    neighbor_novel_support_weights,
+    novel_mass_weights,
+)
 from .metrics import (
     clustering_report,
     compute_aupr,
@@ -707,6 +714,16 @@ def train_one_epoch_student(
     joint_space: str = "novel",
     alpha_joint_known_ce: float = 0.1,
     joint_known_temperature: float = 1.0,
+    joint_mixed_residual: bool = False,
+    joint_residual_temperature: float = 1.0,
+    joint_residual_floor: float = 0.0,
+    joint_novel_mass: bool = False,
+    joint_novel_neighbor_support: bool = False,
+    joint_novel_neighbor_k: int = 5,
+    joint_novel_ema_weights: bool = False,
+    joint_weighted_sinkhorn: bool = True,
+    alpha_joint_novel_margin: float = 0.0,
+    joint_novel_margin: float = 0.2,
     joint_candidate_gating: bool = False,
     joint_candidate_ratio: float = 0.25,
     joint_candidate_mode: str = "consensus",
@@ -715,10 +732,16 @@ def train_one_epoch_student(
     joint_candidate_min_votes: int = 2,
     joint_candidate_soft_weighting: bool = False,
     joint_candidate_weight_floor: float = 0.05,
+    joint_mixed_known_consistency: bool = False,
+    alpha_joint_known_consistency: float = 0.0,
+    joint_known_confidence_threshold: float = 0.8,
+    joint_known_target: str = "ema",
     outlier_loader=None,
     alpha_outlier_uniform: float = 0.0,
     alpha_outlier_energy: float = 0.0,
     alpha_outlier_uncertainty: float = 0.0,
+    alpha_outlier_feature_margin: float = 0.0,
+    outlier_feature_margin: float = 0.2,
 ):
     student.train()
     teacher.eval()
@@ -759,9 +782,15 @@ def train_one_epoch_student(
     joint_proto_repulsion_meter = AverageMeter()
     joint_known_ce_meter = AverageMeter()
     joint_candidate_meter = AverageMeter()
+    joint_known_consistency_meter = AverageMeter()
+    joint_residual_weight_meter = AverageMeter()
+    joint_novel_mass_weight_meter = AverageMeter()
+    joint_novel_margin_meter = AverageMeter()
+    joint_novel_neighbor_support_meter = AverageMeter()
     outlier_uniform_meter = AverageMeter()
     outlier_energy_meter = AverageMeter()
     outlier_uncertainty_meter = AverageMeter()
+    outlier_feature_margin_meter = AverageMeter()
     discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     outlier_iter = iter(outlier_loader) if outlier_loader is not None else None
     for batch in tqdm(loader, desc="student-train", leave=False):
@@ -872,16 +901,26 @@ def train_one_epoch_student(
         joint_gate = s_out["logits"].new_tensor(0.0)
         joint_proto_repulsion = s_out["logits"].new_tensor(0.0)
         loss_joint_known_ce = s_out["logits"].new_tensor(0.0)
+        loss_joint_known_consistency = s_out["logits"].new_tensor(0.0)
+        loss_joint_novel_margin = s_out["logits"].new_tensor(0.0)
         joint_candidate_ratio_value = 0.0
+        joint_residual_weight_value = 0.0
+        joint_novel_mass_weight_value = 0.0
+        joint_novel_margin_value = 0.0
+        joint_novel_neighbor_support_value = 0.0
         joint_sample_weights = None
+        first_selection_out = None
+        second_selection_out = None
         main_novel_logits = None
         loss_outlier_uniform = s_out["logits"].new_tensor(0.0)
         loss_outlier_energy = s_out["logits"].new_tensor(0.0)
         loss_outlier_uncertainty = s_out["logits"].new_tensor(0.0)
+        loss_outlier_feature_margin = s_out["logits"].new_tensor(0.0)
         if outlier_iter is not None and (
             alpha_outlier_uniform > 0.0
             or alpha_outlier_energy > 0.0
             or alpha_outlier_uncertainty > 0.0
+            or alpha_outlier_feature_margin > 0.0
         ):
             try:
                 outlier_images, _ = next(outlier_iter)
@@ -900,6 +939,12 @@ def train_one_epoch_student(
                 loss_outlier_uncertainty = F.binary_cross_entropy(
                     outlier_out["uncertainty"].clamp(1e-6, 1.0 - 1e-6),
                     torch.ones_like(outlier_out["uncertainty"]),
+                )
+            if alpha_outlier_feature_margin > 0.0:
+                loss_outlier_feature_margin = unknown_feature_margin_loss(
+                    outlier_out["features"],
+                    student.classifier.weight,
+                    similarity_margin=outlier_feature_margin,
                 )
         if novel_head is not None and alpha_joint_discovery > 0.0:
             main_novel_logits = novel_head(s_out["features"])
@@ -989,45 +1034,126 @@ def train_one_epoch_student(
                         joint_sample_weights >= 0.5
                     ).float().mean().item()
                 else:
-                    first_gate = select_joint_candidates(
-                        first_selection_out["logits"],
-                        first_selection_novel_logits,
-                        first_selection_out["uncertainty"],
-                        features=first_selection_out["features"],
-                        known_prototypes=student.classifier.weight,
-                        ratio=joint_candidate_ratio,
-                        mode=joint_candidate_mode,
-                        known_temperature=joint_known_temperature,
+                    # Rank the paired views jointly.  Selecting top-k in each
+                    # view and intersecting the masks can erase the whole
+                    # training signal on small batches, even when both views
+                    # agree on the same risk ordering.
+                    paired_known_logits = 0.5 * (
+                        first_selection_out["logits"] + second_selection_out["logits"]
                     )
-                    second_gate = select_joint_candidates(
-                        second_selection_out["logits"],
-                        second_selection_novel_logits,
-                        second_selection_out["uncertainty"],
-                        features=second_selection_out["features"],
+                    paired_novel_logits = 0.5 * (
+                        first_selection_novel_logits + second_selection_novel_logits
+                    )
+                    paired_uncertainty = 0.5 * (
+                        first_selection_out["uncertainty"]
+                        + second_selection_out["uncertainty"]
+                    )
+                    paired_features = 0.5 * (
+                        first_selection_out["features"] + second_selection_out["features"]
+                    )
+                    joint_mask = select_joint_candidates(
+                        paired_known_logits,
+                        paired_novel_logits,
+                        paired_uncertainty,
+                        features=paired_features,
                         known_prototypes=student.classifier.weight,
                         ratio=joint_candidate_ratio,
                         mode=joint_candidate_mode,
                         known_temperature=joint_known_temperature,
                     )
                     if joint_candidate_neighbor_filter:
-                        first_gate, _ = filter_discovery_candidates_by_neighbors(
-                            first_gate,
-                            first_selection_out["proj"],
+                        joint_mask, _ = filter_discovery_candidates_by_neighbors(
+                            joint_mask,
+                            0.5 * (
+                                first_selection_out["proj"] + second_selection_out["proj"]
+                            ),
                             k=joint_candidate_neighbor_k,
                             min_votes=joint_candidate_min_votes,
                         )
-                        second_gate, _ = filter_discovery_candidates_by_neighbors(
-                            second_gate,
-                            second_selection_out["proj"],
-                            k=joint_candidate_neighbor_k,
-                            min_votes=joint_candidate_min_votes,
-                        )
-                    # Keep only paired candidates so the two augmented views stay aligned.
-                    joint_mask = first_gate & second_gate
                     joint_candidate_ratio_value = joint_mask.float().mean().item()
+            if (
+                joint_mixed_known_consistency
+                and alpha_joint_known_consistency > 0.0
+                and joint_mask is not None
+            ):
+                # The complement of the high-risk gate is not automatically
+                # known.  Retain only EMA/student predictions that agree
+                # across views and exceed a confidence floor.
+                if joint_known_target == "teacher":
+                    with torch.no_grad():
+                        first_target = teacher(first_view)
+                        second_target = teacher(second_view)
+                elif joint_known_target == "ema":
+                    first_target = first_selection_out if first_selection_out is not None else first_out
+                    second_target = second_selection_out if second_selection_out is not None else second_out
+                else:
+                    raise ValueError(
+                        "joint_known_target must be either 'ema' or 'teacher'"
+                    )
+                first_probs = first_target["logits"].detach().softmax(dim=-1)
+                second_probs = second_target["logits"].detach().softmax(dim=-1)
+                first_labels = first_probs.argmax(dim=-1)
+                second_labels = second_probs.argmax(dim=-1)
+                confidence = 0.5 * (
+                    first_probs.max(dim=-1).values + second_probs.max(dim=-1).values
+                )
+                known_anchor_mask = (
+                    (~joint_mask)
+                    & (first_labels == second_labels)
+                    & (confidence >= float(joint_known_confidence_threshold))
+                )
+                loss_joint_known_consistency = known_pseudo_label_consistency_loss(
+                    first_out["logits"],
+                    second_out["logits"],
+                    ((first_labels + second_labels) // 2),
+                    mask=known_anchor_mask,
+                )
             if novel_head is not None and alpha_joint_discovery > 0.0:
                 first_novel_logits = novel_head(first_out["features"])
                 second_novel_logits = novel_head(second_out["features"])
+                first_weight_out = first_out
+                second_weight_out = second_out
+                first_weight_novel_logits = first_novel_logits
+                second_weight_novel_logits = second_novel_logits
+                if joint_novel_ema_weights and discovery_selection_model is not None:
+                    with torch.no_grad():
+                        first_weight_out = discovery_selection_model(first_view)
+                        second_weight_out = discovery_selection_model(second_view)
+                        first_weight_novel_logits = novel_head(first_weight_out["features"])
+                        second_weight_novel_logits = novel_head(second_weight_out["features"])
+                elif joint_novel_ema_weights and discovery_selection_model is None:
+                    raise ValueError(
+                        "--joint-novel-ema-weights requires "
+                        "--discovery-selection-model ema"
+                    )
+                first_residual = None
+                second_residual = None
+                first_novel_mass = None
+                second_novel_mass = None
+                if joint_mixed_residual:
+                    first_residual = known_residual_weights(
+                        first_out["logits"],
+                        temperature=joint_residual_temperature,
+                        floor=joint_residual_floor,
+                    )
+                    second_residual = known_residual_weights(
+                        second_out["logits"],
+                        temperature=joint_residual_temperature,
+                        floor=joint_residual_floor,
+                    )
+                if joint_novel_mass:
+                    first_novel_mass = novel_mass_weights(
+                        first_weight_out["logits"],
+                        first_weight_novel_logits,
+                        known_temperature=joint_known_temperature,
+                        floor=joint_residual_floor,
+                    )
+                    second_novel_mass = novel_mass_weights(
+                        second_weight_out["logits"],
+                        second_weight_novel_logits,
+                        known_temperature=joint_known_temperature,
+                        floor=joint_residual_floor,
+                    )
                 if joint_mask is not None:
                     first_features = first_out["features"][joint_mask]
                     second_features = second_out["features"][joint_mask]
@@ -1035,11 +1161,87 @@ def train_one_epoch_student(
                     second_novel_logits = second_novel_logits[joint_mask]
                     first_known_logits = first_out["logits"][joint_mask]
                     second_known_logits = second_out["logits"][joint_mask]
+                    if joint_sample_weights is not None:
+                        joint_sample_weights = joint_sample_weights[joint_mask]
+                    if joint_mixed_residual:
+                        residual_weights = 0.5 * (
+                            first_residual[joint_mask] + second_residual[joint_mask]
+                        )
+                    if joint_novel_mass:
+                        novel_mass_weights_value = 0.5 * (
+                            first_novel_mass[joint_mask] + second_novel_mass[joint_mask]
+                        )
+                        novel_mass_agreement = 1.0 - (
+                            first_novel_mass[joint_mask] - second_novel_mass[joint_mask]
+                        ).abs()
+                        mass_weights = (
+                            novel_mass_weights_value * novel_mass_agreement
+                        ).clamp_min(float(joint_residual_floor))
                 else:
                     first_features = first_out["features"]
                     second_features = second_out["features"]
                     first_known_logits = first_out["logits"]
                     second_known_logits = second_out["logits"]
+                    if joint_mixed_residual:
+                        residual_weights = 0.5 * (first_residual + second_residual)
+                    if joint_novel_mass:
+                        novel_mass_weights_value = 0.5 * (
+                            first_novel_mass + second_novel_mass
+                        )
+                        novel_mass_agreement = 1.0 - (
+                            first_novel_mass - second_novel_mass
+                        ).abs()
+                        mass_weights = (
+                            novel_mass_weights_value * novel_mass_agreement
+                        ).clamp_min(float(joint_residual_floor))
+                if joint_mixed_residual:
+                    joint_residual_weight_value = (
+                        residual_weights.mean().item() if residual_weights.numel() else 0.0
+                    )
+                    if joint_sample_weights is None:
+                        joint_sample_weights = residual_weights
+                    else:
+                        joint_sample_weights = joint_sample_weights * residual_weights
+                if joint_novel_mass:
+                    joint_novel_mass_weight_value = (
+                        mass_weights.mean().item() if mass_weights.numel() else 0.0
+                    )
+                    if joint_novel_neighbor_support:
+                        if joint_mask is not None:
+                            support_first = first_weight_out["features"][joint_mask]
+                            support_second = second_weight_out["features"][joint_mask]
+                        else:
+                            support_first = first_weight_out["features"]
+                            support_second = second_weight_out["features"]
+                        support_features = 0.5 * (support_first + support_second)
+                        mass_weights = neighbor_novel_support_weights(
+                            support_features,
+                            mass_weights,
+                            k=joint_novel_neighbor_k,
+                        ).clamp_min(float(joint_residual_floor))
+                        joint_novel_neighbor_support_value = (
+                            mass_weights.mean().item() if mass_weights.numel() else 0.0
+                        )
+                    if joint_sample_weights is None:
+                        joint_sample_weights = mass_weights
+                    else:
+                        joint_sample_weights = joint_sample_weights * mass_weights
+                    if alpha_joint_novel_margin > 0.0:
+                        loss_joint_novel_margin = 0.5 * (
+                            unknown_feature_margin_loss(
+                                first_features,
+                                student.classifier.weight,
+                                similarity_margin=joint_novel_margin,
+                                sample_weight=joint_sample_weights,
+                            )
+                            + unknown_feature_margin_loss(
+                                second_features,
+                                student.classifier.weight,
+                                similarity_margin=joint_novel_margin,
+                                sample_weight=joint_sample_weights,
+                            )
+                        )
+                        joint_novel_margin_value = loss_joint_novel_margin.item()
                 confidence_threshold = (
                     0.0
                     if joint_mask is not None or joint_sample_weights is not None
@@ -1058,10 +1260,31 @@ def train_one_epoch_student(
                     alpha_neighbor=alpha_joint_neighbor,
                     alpha_pseudo=alpha_joint_pseudo,
                     neighbor_k=joint_neighbor_k,
-                    first_known_logits=(first_known_logits if joint_space == "unified" else None),
-                    second_known_logits=(second_known_logits if joint_space == "unified" else None),
+                    # In residual mode, known logits are used only to produce
+                    # sample weights.  Keeping them in the Sinkhorn space
+                    # would again force known and novel classes to compete in
+                    # one balanced assignment problem.
+                    first_known_logits=(
+                        first_known_logits
+                        if (
+                            joint_space == "unified"
+                            and not joint_mixed_residual
+                            and not joint_novel_mass
+                        )
+                        else None
+                    ),
+                    second_known_logits=(
+                        second_known_logits
+                        if (
+                            joint_space == "unified"
+                            and not joint_mixed_residual
+                            and not joint_novel_mass
+                        )
+                        else None
+                    ),
                     known_temperature=joint_known_temperature,
                     sample_weights=joint_sample_weights,
+                    weighted_assignments=joint_weighted_sinkhorn,
                 )
                 loss_joint_discovery = joint_losses["total"]
                 joint_consistency = joint_losses["consistency"]
@@ -1306,10 +1529,13 @@ def train_one_epoch_student(
             + alpha_joint_discovery * loss_joint_discovery
             + alpha_joint_proto_repulsion * joint_proto_repulsion
             + alpha_joint_known_ce * loss_joint_known_ce
+            + alpha_joint_known_consistency * loss_joint_known_consistency
             + alpha_joint_gate * joint_gate
+            + alpha_joint_novel_margin * loss_joint_novel_margin
             + alpha_outlier_uniform * loss_outlier_uniform
             + alpha_outlier_energy * loss_outlier_energy
             + alpha_outlier_uncertainty * loss_outlier_uncertainty
+            + alpha_outlier_feature_margin * loss_outlier_feature_margin
         )
         optimizer.zero_grad()
         loss.backward()
@@ -1355,9 +1581,19 @@ def train_one_epoch_student(
         joint_proto_repulsion_meter.update(joint_proto_repulsion.item(), images.size(0))
         joint_known_ce_meter.update(loss_joint_known_ce.item(), images.size(0))
         joint_candidate_meter.update(joint_candidate_ratio_value, images.size(0))
+        joint_known_consistency_meter.update(
+            loss_joint_known_consistency.item(), images.size(0)
+        )
+        joint_residual_weight_meter.update(joint_residual_weight_value, images.size(0))
+        joint_novel_mass_weight_meter.update(joint_novel_mass_weight_value, images.size(0))
+        joint_novel_margin_meter.update(joint_novel_margin_value, images.size(0))
+        joint_novel_neighbor_support_meter.update(
+            joint_novel_neighbor_support_value, images.size(0)
+        )
         outlier_uniform_meter.update(loss_outlier_uniform.item(), images.size(0))
         outlier_energy_meter.update(loss_outlier_energy.item(), images.size(0))
         outlier_uncertainty_meter.update(loss_outlier_uncertainty.item(), images.size(0))
+        outlier_feature_margin_meter.update(loss_outlier_feature_margin.item(), images.size(0))
     return {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
@@ -1396,9 +1632,15 @@ def train_one_epoch_student(
         "joint_proto_repulsion": joint_proto_repulsion_meter.avg,
         "joint_known_ce": joint_known_ce_meter.avg,
         "joint_candidate_ratio": joint_candidate_meter.avg,
+        "joint_known_consistency": joint_known_consistency_meter.avg,
+        "joint_residual_weight": joint_residual_weight_meter.avg,
+        "joint_novel_mass_weight": joint_novel_mass_weight_meter.avg,
+        "joint_novel_margin": joint_novel_margin_meter.avg,
+        "joint_novel_neighbor_support": joint_novel_neighbor_support_meter.avg,
         "outlier_uniform": outlier_uniform_meter.avg,
         "outlier_energy": outlier_energy_meter.avg,
         "outlier_uncertainty": outlier_uncertainty_meter.avg,
+        "outlier_feature_margin": outlier_feature_margin_meter.avg,
     }
 
 
@@ -1849,6 +2091,109 @@ def fit_pu_feature_rejector(
     return rejector
 
 
+class NnPUFeatureRejector:
+    """Linear unknown-score model fitted with a non-negative PU risk.
+
+    The positive distribution is the known training set.  The discovery pool
+    remains unlabeled and is treated as a mixture of known and unknown data;
+    ``known_prior`` is the estimated known fraction in that mixture.  This is
+    a controlled mixed-pool baseline, not a claim that the deployment prior is
+    known exactly.
+    """
+
+    def __init__(self, mean, scale, weight, bias):
+        self.mean_ = np.asarray(mean, dtype=np.float32)
+        self.scale_ = np.asarray(scale, dtype=np.float32)
+        self.weight_ = np.asarray(weight, dtype=np.float32)
+        self.bias_ = float(bias)
+
+    def _transform(self, values):
+        values = np.asarray(values, dtype=np.float32)
+        return (values - self.mean_) / self.scale_
+
+    def decision_function(self, values):
+        transformed = self._transform(values)
+        return transformed @ self.weight_ + self.bias_
+
+    def predict_proba(self, values):
+        scores = self.decision_function(values)
+        probability = 1.0 / (1.0 + np.exp(-np.clip(scores, -40.0, 40.0)))
+        return np.stack([1.0 - probability, probability], axis=1)
+
+
+def fit_nnpu_feature_rejector(
+    known_outputs: Dict[str, np.ndarray],
+    unlabeled_outputs: Dict[str, np.ndarray],
+    known_prior: float = 0.2,
+    max_samples: int = 5000,
+    iterations: int = 300,
+    lr: float = 0.05,
+    weight_decay: float = 1e-4,
+    seed: int = 42,
+    feature_mode: str = "embedding",
+):
+    """Fit a mixed-pool rejector with non-negative PU risk estimation."""
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1) for nnPU")
+    known = build_rejector_features(known_outputs, feature_mode=feature_mode)
+    unlabeled = build_rejector_features(unlabeled_outputs, feature_mode=feature_mode)
+    if known.ndim != 2 or unlabeled.ndim != 2 or known.shape[1] != unlabeled.shape[1]:
+        raise ValueError("known and unlabeled rejector features must be matching 2-D arrays")
+    if len(known) == 0 or len(unlabeled) == 0:
+        raise ValueError("nnPU requires non-empty known and unlabeled features")
+    rng = np.random.default_rng(int(seed))
+
+    def sample_rows(values):
+        if len(values) <= max_samples:
+            return values
+        return values[rng.choice(len(values), size=max_samples, replace=False)]
+
+    known = sample_rows(known).astype(np.float32, copy=False)
+    unlabeled = sample_rows(unlabeled).astype(np.float32, copy=False)
+    combined = np.concatenate([known, unlabeled], axis=0)
+    mean = combined.mean(axis=0)
+    scale = combined.std(axis=0)
+    scale = np.where(scale < 1e-6, 1.0, scale).astype(np.float32)
+    known = (known - mean) / scale
+    unlabeled = (unlabeled - mean) / scale
+
+    torch.manual_seed(int(seed))
+    known_tensor = torch.from_numpy(known)
+    unlabeled_tensor = torch.from_numpy(unlabeled)
+    weight = torch.zeros(known.shape[1], requires_grad=True)
+    bias = torch.zeros((), requires_grad=True)
+    optimizer = torch.optim.Adam([weight, bias], lr=float(lr), weight_decay=float(weight_decay))
+    known_zero = torch.zeros(len(known_tensor))
+    known_one = torch.ones(len(known_tensor))
+    unknown_one = torch.ones(len(unlabeled_tensor))
+    for _ in range(max(1, int(iterations))):
+        known_logits = known_tensor @ weight + bias
+        unlabeled_logits = unlabeled_tensor @ weight + bias
+        known_as_unknown = torch.nn.functional.binary_cross_entropy_with_logits(
+            known_logits, known_zero
+        )
+        known_as_known = torch.nn.functional.binary_cross_entropy_with_logits(
+            known_logits, known_one
+        )
+        unlabeled_as_unknown = torch.nn.functional.binary_cross_entropy_with_logits(
+            unlabeled_logits, unknown_one
+        )
+        negative_risk = (
+            unlabeled_as_unknown - prior * known_as_known
+        ) / max(1.0 - prior, 1e-6)
+        loss = prior * known_as_unknown + torch.relu(negative_risk)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    return NnPUFeatureRejector(
+        mean,
+        scale,
+        weight.detach().cpu().numpy(),
+        bias.detach().cpu().item(),
+    )
+
+
 def attach_feature_rejector_score(
     outputs: Dict[str, np.ndarray], rejector, feature_mode: str = "embedding"
 ) -> None:
@@ -2190,21 +2535,83 @@ def compute_mahalanobis_distance(
     features: np.ndarray,
     gaussian_stats: Dict[str, np.ndarray],
     covariance: str = "auto",
+    chunk_size: int = 512,
 ) -> np.ndarray:
-    feat = np.asarray(features)[:, None, :]
-    means = np.asarray(gaussian_stats["means"])[None, :, :]
+    distances = compute_mahalanobis_class_distances(
+        features,
+        gaussian_stats,
+        covariance=covariance,
+        chunk_size=chunk_size,
+    )
+    return distances.min(axis=1) if len(distances) else np.empty(0, dtype=float)
+
+
+def compute_mahalanobis_class_distances(
+    features: np.ndarray,
+    gaussian_stats: Dict[str, np.ndarray],
+    covariance: str = "auto",
+    chunk_size: int = 512,
+) -> np.ndarray:
+    """Return one Mahalanobis distance per sample and known class.
+
+    Keeping the class dimension is useful for class-conditional calibration:
+    a distance of 2.0 can be normal for one class and highly atypical for
+    another.  Computation remains chunked to avoid materialising the full
+    sample-by-class-by-feature tensor.
+    """
+    features = np.asarray(features)
+    means = np.asarray(gaussian_stats["means"])
+    if features.ndim != 2 or means.ndim != 2:
+        raise ValueError("features and gaussian means must be 2-D arrays")
+    if features.shape[1] != means.shape[1]:
+        raise ValueError("feature dimension does not match Gaussian means")
+    chunk_size = max(1, int(chunk_size))
     use_shared = covariance == "shared" or (covariance == "auto" and "precision" in gaussian_stats)
+    distance_chunks = []
     if use_shared:
         if "precision" not in gaussian_stats:
             raise ValueError("shared Mahalanobis score requires gaussian_stats['precision']")
         precision = np.asarray(gaussian_stats["precision"], dtype=float)
-        diff = feat - means
-        distances = np.einsum("ncd,df,ncf->nc", diff, precision, diff) / max(diff.shape[-1], 1)
-        distances = np.maximum(distances, 0.0)
+        # Expand (x - mu_c)^T P (x - mu_c) before applying the class
+        # dimension.  The direct einsum over [sample, class, feature,
+        # feature] is mathematically correct but needlessly costs O(N*C*D^2)
+        # and becomes impractical for full CIFAR-100 feature extraction.
+        transformed = np.asarray(features, dtype=float) @ precision
+        quadratic_x = np.sum(transformed * np.asarray(features, dtype=float), axis=1)[:, None]
+        transformed_means = np.asarray(means, dtype=float) @ precision
+        cross = transformed @ np.asarray(means, dtype=float).T
+        quadratic_means = np.sum(transformed_means * np.asarray(means, dtype=float), axis=1)[None, :]
+        distances = (quadratic_x - 2.0 * cross + quadratic_means) / max(features.shape[1], 1)
+        return np.maximum(distances, 0.0)
     else:
-        variances = np.asarray(gaussian_stats["variances"])[None, :, :]
-        distances = ((feat - means) ** 2 / np.clip(variances, 1e-6, None)).mean(axis=-1)
-    return distances.min(axis=1)
+        variances = np.asarray(gaussian_stats["variances"])
+        for start in range(0, len(features), chunk_size):
+            feat = features[start : start + chunk_size, None, :]
+            diff = feat - means[None, :, :]
+            distances = (diff**2 / np.clip(variances[None, :, :], 1e-6, None)).mean(axis=-1)
+            distance_chunks.append(distances)
+    return np.concatenate(distance_chunks, axis=0) if distance_chunks else np.empty((0, len(means)), dtype=float)
+
+
+def compute_predicted_classwise_mahalanobis(
+    outputs: Dict[str, np.ndarray],
+    gaussian_stats: Dict[str, np.ndarray],
+    covariance: str = "auto",
+) -> np.ndarray:
+    """Distance to the class selected by the known classifier.
+
+    Unlike the usual minimum-over-classes distance, this preserves the
+    classifier's decision boundary.  The resulting distance can then be
+    standardised with statistics for the corresponding predicted class.
+    """
+    distances = compute_mahalanobis_class_distances(
+        outputs["features"], gaussian_stats, covariance=covariance
+    )
+    if len(distances) == 0:
+        return np.empty(0, dtype=float)
+    predicted = np.asarray(outputs["logits"]).argmax(axis=1)
+    predicted = np.clip(predicted, 0, distances.shape[1] - 1)
+    return distances[np.arange(len(distances)), predicted]
 
 
 def compute_relative_mahalanobis_distance(
@@ -2319,6 +2726,8 @@ def compute_open_score(
         "normalized_entropy_mahalanobis",
         "normalized_entropy_mahalanobis_diag",
         "normalized_entropy_mahalanobis_shared",
+        "classwise_mahalanobis",
+        "normalized_entropy_classwise_mahalanobis",
         "relative_mahalanobis",
         "normalized_entropy_relative_mahalanobis",
     }
@@ -2326,6 +2735,10 @@ def compute_open_score(
         if score_mode in {"relative_mahalanobis", "normalized_entropy_relative_mahalanobis"}:
             mahalanobis = compute_relative_mahalanobis_distance(
                 outputs["features"], gaussian_stats
+            )
+        elif score_mode in {"classwise_mahalanobis", "normalized_entropy_classwise_mahalanobis"}:
+            mahalanobis = compute_predicted_classwise_mahalanobis(
+                outputs, gaussian_stats, covariance=mahalanobis_mode
             )
         else:
             mahalanobis = compute_mahalanobis_distance(
@@ -2478,6 +2891,38 @@ def compute_open_score(
             + (mahalanobis - normalization["relative_mahalanobis"]["mean"])
             / normalization["relative_mahalanobis"]["std"]
         )
+    elif score_mode == "classwise_mahalanobis":
+        if mahalanobis is None:
+            raise ValueError("classwise_mahalanobis requires Gaussian statistics")
+        if normalization is not None and "classwise_mahalanobis" in normalization:
+            class_stats = normalization["classwise_mahalanobis"]
+            predicted = np.asarray(outputs["logits"]).argmax(axis=1)
+            means = np.asarray(class_stats["mean"], dtype=float)
+            stds = np.maximum(np.asarray(class_stats["std"], dtype=float), 1e-6)
+            predicted = np.clip(predicted, 0, len(means) - 1)
+            score = (mahalanobis - means[predicted]) / stds[predicted]
+        else:
+            score = mahalanobis
+    elif score_mode == "normalized_entropy_classwise_mahalanobis":
+        if mahalanobis is None or normalization is None:
+            raise ValueError(
+                "normalized_entropy_classwise_mahalanobis requires statistics"
+            )
+        if "classwise_mahalanobis" not in normalization:
+            raise ValueError(
+                "normalized_entropy_classwise_mahalanobis requires classwise statistics"
+            )
+        class_stats = normalization["classwise_mahalanobis"]
+        predicted = np.asarray(outputs["logits"]).argmax(axis=1)
+        means = np.asarray(class_stats["mean"], dtype=float)
+        stds = np.maximum(np.asarray(class_stats["std"], dtype=float), 1e-6)
+        predicted = np.clip(predicted, 0, len(means) - 1)
+        distance_z = (mahalanobis - means[predicted]) / stds[predicted]
+        score = (
+            (entropy - normalization["entropy"]["mean"])
+            / normalization["entropy"]["std"]
+            + distance_z
+        )
     elif score_mode == "vim_residual":
         if "vim_residual" not in outputs:
             raise ValueError("vim_residual requires --vim-ood")
@@ -2603,6 +3048,33 @@ def fit_score_normalization(
                 compute_relative_mahalanobis_distance(outputs_known["features"], gaussian_stats)
             )
         result["gaussian_nll"] = stats(compute_gaussian_nll(outputs_known["features"], gaussian_stats))
+        if "labels" in outputs_known and "logits" in outputs_known:
+            classwise_distance = compute_predicted_classwise_mahalanobis(
+                outputs_known, gaussian_stats
+            )
+            labels = np.asarray(outputs_known["labels"], dtype=int)
+            num_classes = int(np.asarray(gaussian_stats["means"]).shape[0])
+            global_distance = stats(classwise_distance)
+            means = np.full(num_classes, global_distance["mean"], dtype=float)
+            stds = np.full(num_classes, global_distance["std"], dtype=float)
+            counts = np.zeros(num_classes, dtype=np.int64)
+            # Calibration uses the ground-truth known label. At test time the
+            # corresponding predicted class is used, so no unknown labels are
+            # involved in score construction.
+            for class_index in range(num_classes):
+                values = classwise_distance[labels == class_index]
+                counts[class_index] = len(values)
+                if len(values) >= 2:
+                    class_stats = stats(values)
+                    means[class_index] = class_stats["mean"]
+                    stds[class_index] = class_stats["std"]
+            result["classwise_mahalanobis"] = {
+                "mean": means.tolist(),
+                "std": stds.tolist(),
+                "count": counts.tolist(),
+                "fallback_mean": global_distance["mean"],
+                "fallback_std": global_distance["std"],
+            }
     if "unified_novel_mass" in outputs_known and "logits" in outputs_known:
         raw_score = np.asarray(outputs_known["unified_novel_mass"], dtype=float)
         result["unified_novel_mass"] = stats(raw_score)

@@ -39,7 +39,7 @@
 
 ### 模型与损失
 
-- 教师模型和学生模型支持 ResNet-18、ResNet-34、MobileNetV3-Small。
+- 教师模型和学生模型支持 ResNet-18、ResNet-34、MobileNetV3-Small；ResNet 还支持显式启用 `--cifar-stem`，使用适合 CIFAR 小图像的 3×3、stride=1 首层并移除初始最大池化。
 - 模型同时输出分类 logits、特征、投影向量和辅助不确定性。
 - 支持标准温度 KL 蒸馏：
 
@@ -64,9 +64,9 @@
 ### 联合新类发现（实验版）
 
 - 新增 NovelPrototypeHead：在学生模型特征上学习一组未知类原型，不改变原有已知分类头。
-- 新增 UNO 风格 balanced assignment，缓解所有未知样本塌缩到少数 prototype 的问题。
-- 新增 SimGCD 风格双视图 novel consistency：用一个增强视图生成伪标签，约束另一个视图的 novel prototype 预测。
-- 新增 SCAN 风格 neighbor consistency：约束特征空间近邻具有相似的 novel prototype 分布。
+- 新增借鉴 Sinkhorn-Knopp 平衡分配思路的 balanced assignment，目标是缓解 prototype 分配塌缩；这只是局部机制借鉴，不是 UNO 完整复现。
+- 新增借鉴 SimGCD/SwAV 跨视图伪标签思路的双视图 novel consistency：使用平衡分配目标约束另一增强视图的 novel prototype 预测；训练流程与 SimGCD 并不等同。
+- 新增借鉴 SCAN 邻域一致性动机的 batch 内 neighbor consistency：约束当前 minibatch 特征近邻具有相似 novel prototype 分布；没有构造 SCAN 式全局近邻图。
 - 通过 --joint-discovery 显式开启，默认关闭；训练后额外保存 novel_head.pt。
 - `--joint-head-temperature` 与 `--joint-assignment-temperature` 分开：前者控制 cosine prototype logits，默认 `0.2`；后者控制均衡分配，默认 `1.0`。
 - --joint-confidence-threshold 使用相对均匀分布的置信度，即 max softmax probability 乘以 novel 类数量。默认值 1.1，适用于 CIFAR-100 的 40 个未知类。
@@ -74,6 +74,8 @@
 - 新增可选 `--joint-space unified`：把已知分类 logits 与 novel prototype logits 拼成统一的 known+novel 空间，并支持 `unified_novel_mass` 检测分数和 `unified` / `unified_pca` 聚类特征。
 
 这一版是从两阶段“检测后聚类”走向联合新类发现的最小实验模块，还没有实现完整 UNO/SimGCD 的周期性伪标签更新、类别均衡分配优化和未知类分类评测。它目前用于验证训练期 novel prototype 是否能学习结构，不应直接作为最终论文方法。
+
+方法实现审计补充：`--joint-novel-mass` 产生的是训练用软样本权重，公式为把 known logits 和 novel prototype logits 拼接后 softmax 并求 novel 概率总和，再乘跨视图一致性；它不是校准好的 unknown posterior。`--joint-novel-neighbor-support` 当前只在每个训练 minibatch 内做特征 top-k，不是全局 memory bank/SCAN 图。历史检测对照使用 Mahalanobis 分数时，只能说明训练变化对 Mahalanobis 检测的间接影响。此前 weighted-Sinkhorn 对照未独立隔离 transport 与 loss reweighting，因果结论已撤回；现加入 `--joint-weighted-sinkhorn` 开关进行独立对照。完整审计与修正结果见 `analysis/method_fidelity_and_sinkhorn_audit_20260929.md`。
 
 ### Discovery pool 学习
 
@@ -205,6 +207,39 @@
 - Wen et al., SimGCD (ICCV 2023)：通过自蒸馏、伪标签和统一分类空间在训练阶段学习 novel structure。当前代码还未实现完整 SimGCD/UNO 目标，只把 discovery pool 的双视图学习作为过渡模块。
 
 因此，当前方法的选择依据是：KL 蒸馏用于建立可解释的 KD 基线；Energy/MSP/ODIN/Mahalanobis 用于检测对比；consensus、EMA 和 kNN 用于降低 mixed pool 的候选污染；KMeans 主要作为简单可复现的聚类基线。选择这些技术是为了逐步验证单个假设，而不是声称它们天然优于所有替代方法。
+
+## 2026-09-29：CIFAR-style ResNet stem 尝试
+
+### 修改内容
+
+当前代码新增了可选参数：
+
+```powershell
+--cifar-stem
+```
+
+启用后，ResNet 使用 `3×3、stride=1、padding=1` 的首层，并移除 ImageNet ResNet 默认的初始 max-pooling。对于 CIFAR-100 的 `32×32` 原始图像，原来的 ImageNet 风格首层和池化会较早降低空间分辨率；CIFAR 风格 stem 的目的，是尽量保留局部结构，从表征学习角度缓解已知类与未知类特征重叠。
+
+该实现仍然支持预训练权重：启用预训练时，将原首层权重插值到 `3×3` 后初始化新首层。这个初始化方式是工程适配，不是某篇论文的完整复现；原有默认配置不变，因此历史实验仍可复现。
+
+### 已完成的检查
+
+- `python -m compileall -q novel_discovery train.py`：通过；
+- toy 数据检查和 CIFAR stem 模型前向：通过；
+- 项目测试：`96 passed`；
+- CIFAR-100 60/40、seed=42、预训练 ResNet-34 教师、3 epochs、1200/300/1000 样本的 CIFAR-stem 教师训练已正常完成并保存 checkpoint，best validation accuracy 为 `0.1233`。
+
+学生训练和最终 discover 对照尚未完成，因此目前只能确认代码可运行，不能声称 CIFAR stem 已改善未知检测。下一步应在相同教师/学生结构、相同 seed、数据预算、损失、评分器和 known-only 阈值校准下，与原 ImageNet stem 做配对比较，并同时报告 AUROC、FPR95、OSCR、known accuracy、known acceptance、unknown rejection，以及 known/unknown 分数分位数。
+
+### 相关先行对照与当前判断
+
+在继续修改结构前，已先复核了预训练 encoder 学习率方向：
+
+- seed=42 的 `encoder_lr_scale=0.1` pilot，相对于原始 ImageNet stem baseline，AUROC 从 `0.6026` 到 `0.6194`，FPR95 从 `0.8683` 到 `0.8512`，固定测试集 95% known coverage 的事后 unknown rejection 从 `6.65%` 到 `9.03%`；但 known accuracy 从 `0.3987` 降到 `0.3678`，OSCR 也下降；
+- seed=123 的 `encoder_lr_scale=0.1` 对照，AUROC 为 `0.6309`，baseline 为 `0.6479`；FPR95 为 `0.8375`，baseline 为 `0.8268`；固定 95% known coverage 的 unknown rejection 为 `10.85%`，baseline 为 `10.60%`；known accuracy 从 `0.4750` 降到 `0.4428`；
+- 完全冻结 encoder 的 seed=123 对照进一步下降到 AUROC `0.5826`、FPR95 `0.8890`、unknown rejection `6.48%`、known accuracy `0.2768`。
+
+因此，降低或冻结 encoder 学习率目前没有稳定、无代价地解决特征重叠，不能修改为默认方案。CIFAR stem 也必须经过学生训练和检测对照后再决定是否保留为有效方法；如果它只提高已知分类而不提高固定 known coverage 下的未知拒绝，就应作为结构消融，而不是项目主方法。
 
 ## 本轮代码修改：kNN 邻域一致性筛选
 
@@ -1265,3 +1300,41 @@ L_repulsion = mean(ReLU(cos(w_i, w_j) - margin)), i != j
 - **严格记录失败实验**：AUROC、AUPR、FPR95、OSCR、known accuracy、known accept、unknown reject、候选纯度和 auto-K 必须同时报告，不能只挑选单个变好的指标。
 
 本轮新增代码主要位于 `novel_discovery/pipeline.py` 和 `train.py`，默认模式保持不变；新 rejector 特征模式只通过命令行显式启用。
+
+## 次日复核：prototype repulsion 是否稳定（2026-09-29）
+
+昨天的待办是用额外随机种子复核 `alpha_proto_repulsion=0.01`。今天在 seed=42、123 上补跑 baseline / repulsion 配对训练与检测，并纳入昨天已有的 seed=3407 同协议小规模结果。所有配对均使用 CIFAR-100 60/40、Standard KD、相同教师、相同 1200/300/1000 数据预算、3 epochs 和 `normalized_entropy_mahalanobis`。
+
+| seed | 方法 | AUROC | FPR95 | known accept | unknown reject | known accuracy |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 42 | baseline | 0.4698 | 0.9408 | 0.9457 | 0.0485 | 0.1464 |
+| 42 | repulsion 0.01 | 0.4690 | 0.9474 | 0.9572 | 0.0281 | 0.1612 |
+| 123 | baseline | 0.5210 | 0.9224 | 0.9439 | 0.0457 | 0.1766 |
+| 123 | repulsion 0.01 | 0.5438 | 0.8944 | 0.9538 | 0.0330 | 0.2228 |
+| 3407 | baseline | 0.5335 | 0.9289 | 0.9074 | 0.0608 | 0.2264 |
+| 3407 | repulsion 0.01 | 0.5536 | 0.9008 | 0.9455 | 0.0582 | 0.2529 |
+
+三组平均 AUROC 从 `0.5081` 到 `0.5221`，FPR95 从 `0.9307` 到 `0.9142`，有一定排序改善；但未知拒绝率在三个 seed 中都下降，平均从 `0.0516` 降至 `0.0398`。seed=42 的 AUROC 基本不变且 FPR95 变差，正向排序结果主要来自 seed=123/3407。因此它不是稳定解决核心问题的方法，不能默认启用或宣称已有效；只保留为消融候选。不同 seed 实际 known coverage 有差异，工作点均值只能作方向性参考。
+
+这轮结果进一步说明：原型分离可能改善已知类几何结构或检测排序，但没有带来更高未知拒绝率；核心重叠仍在。完整记录见 `analysis/proto_repulsion_recheck_20260929.md`。下一步应使用完整训练数据和 stratified split 做严格多 seed 配对，报告 matched-known-coverage 下的未知拒绝率，并检查最近已知原型距离分布；若重叠仍明显，就停止搜索排斥权重，转向更强的预训练/度量表征或规范的 mixed-pool GCD 目标。
+
+### 完整数据、相同分层协议的复核
+
+为避免历史 baseline 的 random split 与 stratified split 不一致，补训了完整 CIFAR-100 训练集上的 Standard KD baseline，并与 `alpha_proto_repulsion=0.01` 模型进行同协议评估。两者使用相同 seed=42、教师权重、15 epoch、完整 10,000 张测试集、`normalized_entropy_mahalanobis`，并在 known coverage 95% 处比较：
+
+| 方法 | AUROC | AUPR | FPR95 | 测试 known accept | unknown reject | known accuracy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Standard KD baseline | **0.5309** | **0.4119** | **0.8987** | 0.9537 | **0.0433** | 0.4017 |
+| Prototype repulsion 0.01 | 0.5167 | 0.3999 | 0.9047 | 0.9493 | 0.0380 | **0.4105** |
+
+完整数据结果没有复现小样本实验中的排序改善：虽然 repulsion 的 known accuracy 略高，但 AUROC、AUPR、FPR95 和 unknown reject 均变差。分数中位数仍高度重叠：baseline known/unknown 为 `0.059/0.165`，repulsion 为 `0.024/0.097`；known 分数 90 分位与 unknown 分数 90 分位仍接近。这说明当前排斥项没有形成有效的已知/未知检测间隔，应保留为可选消融，不再继续搜索权重，也不作为默认方案。
+
+完整分析见 `analysis/full_proto_repulsion_stratified_s42_20260929.md`。下一步应在固定 checkpoint 上检查最近类原型距离和逐类误差，定位哪些未知类别落入已知类簇；随后比较更强预训练表示或规范的 GCD mixed-pool 统一已知/新类目标。新的方法需使用同 split、matched known coverage，并至少三 seed 验证，避免再以单个小样本 seed 作结论。
+
+## 方法忠实度复核：weighted Sinkhorn 与 novel-mass（2026-09-29）
+
+重新检查训练调用链后，发现旧报告的 weighted-Sinkhorn 配对实验没有独立控制 Sinkhorn 伪标签边际：novel-mass 权重此前同时进入 Sinkhorn assignment 和 loss reduction。因此旧的“加权 vs 等权 Sinkhorn”结论撤回，只保留旧 checkpoint 数字作为探索性记录。代码现在用 `--joint-weighted-sinkhorn` / `--no-joint-weighted-sinkhorn` 将这两种作用拆开。
+
+新增 `scripts/diagnose_novel_mass.py` 直接评估 novel-mass 分数。CIFAR-100 60/40、seed=42、小样本 3 epoch 配对实验中，等权/加权 Sinkhorn 的 novel-mass AUROC 分别为 `0.5664/0.5749`，FPR95 为 `0.8711/0.8165`；但 test-known 标签只用于事后覆盖率诊断时，两组未知拒绝率均约 `0.0608`。项目原 Mahalanobis 检测器下，加权组 AUROC 和未知拒绝率反而下降。该单 seed 结果指标冲突，尚未证明加权 Sinkhorn 能解决低拒绝率问题。
+
+诊断脚本复用项目统一的阈值校准、FPR95 和 OSCR 实现；测试集标签只用于事后指标。测试集 known coverage 重校准是不可部署的诊断结果，不能用于模型选择。完整审计、协议和指标见 `analysis/method_fidelity_and_sinkhorn_audit_20260929.md`。下一步先用其他 seeds 复核真正单因素设置，再决定保留还是停止该方向。

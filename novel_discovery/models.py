@@ -7,7 +7,12 @@ from torchvision import models
 
 
 class ResNetBackbone(nn.Module):
-    def __init__(self, name: str = "resnet18", pretrained: bool = False) -> None:
+    def __init__(
+        self,
+        name: str = "resnet18",
+        pretrained: bool = False,
+        cifar_stem: bool = False,
+    ) -> None:
         super().__init__()
         if name == "resnet18":
             weights = models.ResNet18_Weights.DEFAULT if pretrained else None
@@ -19,6 +24,28 @@ class ResNetBackbone(nn.Module):
             out_dim = base.fc.in_features
         else:
             raise ValueError(f"Unsupported backbone: {name}")
+        if cifar_stem:
+            # CIFAR images are much smaller than ImageNet images.  The
+            # ImageNet 7x7/stride-2 stem followed by max-pooling can discard
+            # useful local structure before the residual blocks see it.
+            # Keep the option explicit so historical ImageNet-stem runs stay
+            # exactly reproducible.
+            old_conv = base.conv1
+            new_conv = nn.Conv2d(
+                3, old_conv.out_channels, kernel_size=3, stride=1, padding=1, bias=False
+            )
+            if pretrained:
+                with torch.no_grad():
+                    resized = F.interpolate(
+                        old_conv.weight,
+                        size=(3, 3),
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                    new_conv.weight.copy_(resized)
+            base.conv1 = new_conv
+            base.maxpool = nn.Identity()
+
         self.out_dim = out_dim
         self.features = nn.Sequential(*list(base.children())[:-1])
 
@@ -50,12 +77,15 @@ class UKDNet(nn.Module):
         proj_dim: int = 128,
         dropout: float = 0.2,
         pretrained: bool = False,
+        cifar_stem: bool = False,
     ) -> None:
         super().__init__()
         if backbone == "mobilenet_v3_small":
             self.encoder = MobileNetBackbone(pretrained=pretrained)
         else:
-            self.encoder = ResNetBackbone(backbone, pretrained=pretrained)
+            self.encoder = ResNetBackbone(
+                backbone, pretrained=pretrained, cifar_stem=cifar_stem
+            )
         self.dropout_p = dropout
         feat_dim = self.encoder.out_dim
         self.classifier = nn.Linear(feat_dim, num_classes)
@@ -122,6 +152,7 @@ def build_model(
     proj_dim: int = 128,
     dropout: float = 0.2,
     pretrained: bool = False,
+    cifar_stem: bool = False,
 ) -> UKDNet:
     return UKDNet(
         num_classes=num_classes,
@@ -129,4 +160,5 @@ def build_model(
         proj_dim=proj_dim,
         dropout=dropout,
         pretrained=pretrained,
+        cifar_stem=cifar_stem,
     )

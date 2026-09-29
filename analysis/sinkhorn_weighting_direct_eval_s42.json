@@ -1,0 +1,284 @@
+{
+  "device": "cpu",
+  "score": "softmax(concat(known_logits / known_temperature, novel_logits)).sum(novel classes)",
+  "notes": [
+    "Novel-mass is evaluated directly here; earlier detector comparisons used normalized_entropy_mahalanobis.",
+    "Threshold calibration and FPR95 use the project's shared implementations.",
+    "Test labels are used only for retrospective metrics; test-known coverage calibration is diagnostic-only, not deployable.",
+    "The score's probability interpretation assumes comparable known/novel logit scales; this diagnostic does not calibrate them."
+  ],
+  "runs": [
+    {
+      "run_dir": "runs\\audit_sinkhorn_unweighted_pretrained_s42_e3",
+      "method_config": {
+        "joint_novel_mass": true,
+        "joint_novel_neighbor_support": true,
+        "joint_novel_ema_weights": false,
+        "joint_space": "unified",
+        "alpha_joint_discovery": 1.0,
+        "joint_head_temperature": 0.2,
+        "device_recorded": "cpu",
+        "seed": 42,
+        "train_val_test_limits": [
+          1200,
+          300,
+          1000
+        ]
+      },
+      "validation_known_samples": 300,
+      "validation_known_accept_rate_at_threshold": 0.95,
+      "test_samples": 1000,
+      "test_known_samples": 605,
+      "test_unknown_samples": 395,
+      "test": {
+        "auroc_novel_mass": 0.5664441887226698,
+        "fpr95": 0.8710743801652893,
+        "threshold_from_known_validation": 0.3945607274770737,
+        "target_known_coverage": 0.95,
+        "test_known_accept_rate": 0.9421487603305785,
+        "test_unknown_reject_rate": 0.06835443037974684,
+        "candidate_purity": 0.43548387096774194,
+        "candidate_recall": 0.06835443037974684,
+        "retrospective_test_known_coverage_diagnostic_only": {
+          "threshold_from_test_known_labels_diagnostic_only": 0.399865698814392,
+          "calibration_known_accept_rate": 0.9487603305785124,
+          "known_accept_rate": 0.9487603305785124,
+          "unknown_reject_rate": 0.060759493670886074,
+          "candidate_purity": 0.43636363636363634
+        },
+        "known_accuracy_all": 0.2644628099173554,
+        "known_accuracy_after_accept": 0.2719298245614035,
+        "score_distribution": {
+          "known": {
+            "mean": 0.19197483360767365,
+            "median": 0.1985805332660675,
+            "q90": 0.36533576250076294
+          },
+          "unknown": {
+            "mean": 0.22166675329208374,
+            "median": 0.22619542479515076,
+            "q90": 0.38007646799087524
+          }
+        },
+        "most_false_accepted_novel_classes": [
+          [
+            "9",
+            {
+              "count": 8,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.1920342743396759
+            }
+          ],
+          [
+            "10",
+            {
+              "count": 9,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.19976001977920532
+            }
+          ],
+          [
+            "12",
+            {
+              "count": 11,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.1760478913784027
+            }
+          ],
+          [
+            "30",
+            {
+              "count": 5,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.0423925407230854
+            }
+          ],
+          [
+            "32",
+            {
+              "count": 6,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.2695128917694092
+            }
+          ],
+          [
+            "33",
+            {
+              "count": 7,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.2794458568096161
+            }
+          ],
+          [
+            "37",
+            {
+              "count": 7,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.22191040217876434
+            }
+          ],
+          [
+            "42",
+            {
+              "count": 13,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.2520047426223755
+            }
+          ],
+          [
+            "44",
+            {
+              "count": 12,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.20866520702838898
+            }
+          ],
+          [
+            "47",
+            {
+              "count": 9,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.19743365049362183
+            }
+          ]
+        ]
+      }
+    },
+    {
+      "run_dir": "runs\\audit_sinkhorn_weighted_pretrained_s42_e3",
+      "method_config": {
+        "joint_novel_mass": true,
+        "joint_novel_neighbor_support": true,
+        "joint_novel_ema_weights": false,
+        "joint_space": "unified",
+        "alpha_joint_discovery": 1.0,
+        "joint_head_temperature": 0.2,
+        "device_recorded": "cpu",
+        "seed": 42,
+        "train_val_test_limits": [
+          1200,
+          300,
+          1000
+        ]
+      },
+      "validation_known_samples": 300,
+      "validation_known_accept_rate_at_threshold": 0.95,
+      "test_samples": 1000,
+      "test_known_samples": 605,
+      "test_unknown_samples": 395,
+      "test": {
+        "auroc_novel_mass": 0.5748969557485093,
+        "fpr95": 0.8165289256198347,
+        "threshold_from_known_validation": 0.6357911407947541,
+        "target_known_coverage": 0.95,
+        "test_known_accept_rate": 0.9239669421487603,
+        "test_unknown_reject_rate": 0.07341772151898734,
+        "candidate_purity": 0.38666666666666666,
+        "candidate_recall": 0.07341772151898734,
+        "retrospective_test_known_coverage_diagnostic_only": {
+          "threshold_from_test_known_labels_diagnostic_only": 0.646577262878418,
+          "calibration_known_accept_rate": 0.9487603305785124,
+          "known_accept_rate": 0.9487603305785124,
+          "unknown_reject_rate": 0.060759493670886074,
+          "candidate_purity": 0.43636363636363634
+        },
+        "known_accuracy_all": 0.2727272727272727,
+        "known_accuracy_after_accept": 0.2844364937388193,
+        "score_distribution": {
+          "known": {
+            "mean": 0.35538551211357117,
+            "median": 0.4033413231372833,
+            "q90": 0.6243217587471008
+          },
+          "unknown": {
+            "mean": 0.4159601628780365,
+            "median": 0.45723819732666016,
+            "q90": 0.6288896203041077
+          }
+        },
+        "most_false_accepted_novel_classes": [
+          [
+            "1",
+            {
+              "count": 8,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.3734257221221924
+            }
+          ],
+          [
+            "9",
+            {
+              "count": 8,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.36142587661743164
+            }
+          ],
+          [
+            "10",
+            {
+              "count": 9,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.25562357902526855
+            }
+          ],
+          [
+            "12",
+            {
+              "count": 11,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.33118298649787903
+            }
+          ],
+          [
+            "21",
+            {
+              "count": 11,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.3634454011917114
+            }
+          ],
+          [
+            "30",
+            {
+              "count": 5,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.1979869306087494
+            }
+          ],
+          [
+            "33",
+            {
+              "count": 7,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.4494636058807373
+            }
+          ],
+          [
+            "37",
+            {
+              "count": 7,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.25081852078437805
+            }
+          ],
+          [
+            "42",
+            {
+              "count": 13,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.42720896005630493
+            }
+          ],
+          [
+            "44",
+            {
+              "count": 12,
+              "false_accept_rate": 1.0,
+              "mean_novel_mass": 0.4124758243560791
+            }
+          ]
+        ]
+      }
+    }
+  ]
+}

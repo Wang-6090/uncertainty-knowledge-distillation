@@ -22,6 +22,80 @@ class NovelPrototypeHead(nn.Module):
         return features @ prototypes.T / self.temperature
 
 
+def known_residual_weights(
+    known_logits: torch.Tensor,
+    temperature: float = 1.0,
+    floor: float = 0.0,
+) -> torch.Tensor:
+    """Estimate how much an unlabeled sample remains unexplained by known classes.
+
+    The result is intended to be used as a detached sample weight by the
+    mixed-pool objective, not as a hard unknown label. High-confidence known
+    predictions contribute little to novel-prototype learning, while ambiguous
+    samples can still contribute without forcing every sample into a novel
+    class.
+    """
+    if known_logits.numel() == 0:
+        return known_logits.new_empty((known_logits.size(0),))
+    probs = (known_logits / max(float(temperature), 1e-6)).softmax(dim=-1)
+    residual = 1.0 - probs.max(dim=-1).values
+    return residual.clamp(min=float(floor), max=1.0)
+
+
+def novel_mass_weights(
+    known_logits: torch.Tensor,
+    novel_logits: torch.Tensor,
+    known_temperature: float = 1.0,
+    floor: float = 0.0,
+) -> torch.Tensor:
+    """Return the probability mass assigned to the novel subspace.
+
+    Unlike ``known_residual_weights``, this compares known and novel evidence
+    in one calibrated logit space. It is still only a soft sample weight; it
+    does not assign an unlabeled sample a hard novel label.
+    """
+    if known_logits.size(0) != novel_logits.size(0):
+        raise ValueError("known and novel logits must have the same batch size")
+    unified = combine_known_novel_logits(
+        known_logits, novel_logits, known_temperature=known_temperature
+    )
+    probs = unified.softmax(dim=-1)
+    mass = probs[:, known_logits.size(-1) :].sum(dim=-1)
+    return mass.clamp(min=float(floor), max=1.0)
+
+
+def neighbor_novel_support_weights(
+    features: torch.Tensor,
+    novel_mass: torch.Tensor,
+    k: int = 5,
+) -> torch.Tensor:
+    """Estimate local support for novel evidence from feature-space neighbors.
+
+    A sample's weight is its own novel mass multiplied by the mean novel mass
+    of its nearest non-self neighbors. Isolated high-mass outliers are thus
+    downweighted, while locally coherent candidate groups retain weight.
+    Inputs used to form the weights are detached so the support selection does
+    not create an unintended gradient path through nearest-neighbor indices.
+    This operates within the current mixed-pool batch, not a global memory bank.
+    """
+    if features.ndim != 2 or novel_mass.ndim != 1:
+        raise ValueError("features must be [N,D] and novel_mass must be [N]")
+    if features.size(0) != novel_mass.numel():
+        raise ValueError("features and novel_mass must contain the same samples")
+    n = features.size(0)
+    if n == 0:
+        return novel_mass
+    mass = novel_mass.detach().to(features).clamp(0.0, 1.0)
+    if n == 1 or k <= 0:
+        return mass
+    normalized = F.normalize(features.detach(), dim=-1)
+    similarity = normalized @ normalized.T
+    similarity.fill_diagonal_(float("-inf"))
+    neighbor_indices = similarity.topk(min(int(k), n - 1), dim=-1).indices
+    support = mass[neighbor_indices].mean(dim=-1)
+    return mass * support
+
+
 def combine_known_novel_logits(
     known_logits: torch.Tensor | None,
     novel_logits: torch.Tensor,
@@ -41,12 +115,56 @@ def balanced_assignments(
     logits: torch.Tensor,
     temperature: float = 1.0,
     iterations: int = 3,
+    sample_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Approximate UNO-style balanced assignments with Sinkhorn scaling."""
+    """Approximate balanced assignments, optionally with weighted sample mass.
+
+    Without ``sample_weights`` this preserves the original equal-mass Sinkhorn
+    behavior. With weights, each sample receives a column marginal proportional
+    to its detached weight. Zero-weight samples are excluded from transport and
+    cannot change the balanced pseudo-labels of active samples.
+    """
     if logits.numel() == 0:
         return logits
     batch_size, num_classes = logits.shape
-    q = torch.exp((logits / max(float(temperature), 1e-6)).T - logits.max(dim=1).values.detach())
+    if sample_weights is not None:
+        weights = sample_weights.reshape(-1).detach().to(logits).clamp_min(0.0)
+        if weights.numel() != batch_size:
+            raise ValueError("sample_weights must match the logits batch size")
+        active = weights > 1e-12
+        if not active.any():
+            return logits.softmax(dim=-1)
+        active_logits = logits[active]
+        active_weights = weights[active]
+        scaled_logits = active_logits / max(float(temperature), 1e-6)
+        q = torch.exp(
+            scaled_logits.T - scaled_logits.max(dim=1).values.detach()
+        )
+        q = q / q.sum().clamp_min(1e-8)
+        sample_marginal = active_weights / active_weights.sum().clamp_min(1e-8)
+        class_marginal = q.new_full((num_classes,), 1.0 / num_classes)
+        for _ in range(max(int(iterations), 1)):
+            q = q * (
+                class_marginal / q.sum(dim=1).clamp_min(1e-8)
+            ).unsqueeze(1)
+            q = q * (
+                sample_marginal / q.sum(dim=0).clamp_min(1e-8)
+            ).unsqueeze(0)
+        active_assignments = q.T / sample_marginal.unsqueeze(1).clamp_min(1e-8)
+        active_assignments = active_assignments.clamp_min(1e-8)
+        active_assignments = active_assignments / active_assignments.sum(
+            dim=1, keepdim=True
+        ).clamp_min(1e-8)
+        # Inactive rows are ignored by every weighted objective. A well-formed
+        # probability row is still returned for API consistency.
+        assignments = logits.softmax(dim=-1)
+        assignments[active] = active_assignments
+        return assignments
+
+    scaled_logits = logits / max(float(temperature), 1e-6)
+    q = torch.exp(
+        scaled_logits.T - scaled_logits.max(dim=1).values.detach()
+    )
     q = q / q.sum().clamp_min(1e-8)
     for _ in range(max(int(iterations), 1)):
         q = q / q.sum(dim=1, keepdim=True).clamp_min(1e-8)
@@ -103,12 +221,18 @@ def novel_consistency_loss(
     confidence_threshold: float = 0.6,
     temperature: float = 1.0,
     sample_weights: torch.Tensor | None = None,
+    weighted_assignments: bool = True,
 ) -> torch.Tensor:
     """Use one augmented view as a balanced pseudo-label teacher."""
     if first_logits.numel() == 0 or second_logits.numel() == 0:
         return first_logits.new_tensor(0.0)
-    first_target = balanced_assignments(first_logits.detach(), temperature=temperature)
-    second_target = balanced_assignments(second_logits.detach(), temperature=temperature)
+    assignment_weights = sample_weights if weighted_assignments else None
+    first_target = balanced_assignments(
+        first_logits.detach(), temperature=temperature, sample_weights=assignment_weights
+    )
+    second_target = balanced_assignments(
+        second_logits.detach(), temperature=temperature, sample_weights=assignment_weights
+    )
     # Measure confidence relative to a uniform novel assignment. This keeps
     # the threshold meaningful when the number of novel classes is large.
     num_novel = first_logits.size(-1)
@@ -144,6 +268,7 @@ def prototype_pseudo_label_loss(
     confidence_threshold: float = 1.0,
     assignment_temperature: float = 1.0,
     sample_weights: torch.Tensor | None = None,
+    weighted_assignments: bool = True,
 ) -> torch.Tensor:
     """Cross-view hard pseudo-label loss for prototype discovery.
 
@@ -155,11 +280,16 @@ def prototype_pseudo_label_loss(
     """
     if first_logits.numel() == 0 or second_logits.numel() == 0:
         return first_logits.new_tensor(0.0)
+    assignment_weights = sample_weights if weighted_assignments else None
     first_target = balanced_assignments(
-        first_logits.detach(), temperature=assignment_temperature
+        first_logits.detach(),
+        temperature=assignment_temperature,
+        sample_weights=assignment_weights,
     ).argmax(dim=-1)
     second_target = balanced_assignments(
-        second_logits.detach(), temperature=assignment_temperature
+        second_logits.detach(),
+        temperature=assignment_temperature,
+        sample_weights=assignment_weights,
     ).argmax(dim=-1)
     first_conf = (
         first_logits.detach().softmax(dim=-1).max(dim=-1).values
@@ -230,6 +360,7 @@ def joint_discovery_loss(
     second_known_logits: torch.Tensor | None = None,
     known_temperature: float = 1.0,
     sample_weights: torch.Tensor | None = None,
+    weighted_assignments: bool = True,
 ) -> dict[str, torch.Tensor]:
     """Combine novel or unified-space pseudo-label objectives."""
     first_joint_logits = combine_known_novel_logits(
@@ -244,6 +375,7 @@ def joint_discovery_loss(
         confidence_threshold=confidence_threshold,
         temperature=assignment_temperature,
         sample_weights=sample_weights,
+        weighted_assignments=weighted_assignments,
     )
     balance = 0.5 * (
         balanced_assignment_loss(first_joint_logits, sample_weights=sample_weights)
@@ -267,6 +399,7 @@ def joint_discovery_loss(
         confidence_threshold=confidence_threshold,
         assignment_temperature=assignment_temperature,
         sample_weights=sample_weights,
+        weighted_assignments=weighted_assignments,
     )
     total = (
         alpha_consistency * consistency

@@ -244,6 +244,30 @@ def split_known_dataset(dataset: Dataset, val_ratio: float, seed: int, mode: str
     return Subset(dataset, train_indices), Subset(dataset, val_indices)
 
 
+def split_known_for_discovery(
+    dataset: Dataset,
+    pool_ratio: float,
+    seed: int,
+    mode: str = "random",
+):
+    """Reserve known samples for an unlabeled mixed pool without sample overlap.
+
+    The returned pair is ``(supervised_train, unlabeled_known_pool)``.  Both
+    subsets are drawn only from the known training partition, so validation
+    and test examples remain untouched.
+    """
+    ratio = float(pool_ratio)
+    if not 0.0 <= ratio < 1.0:
+        raise ValueError("mixed_known_pool_ratio must be in [0, 1)")
+    if ratio == 0.0:
+        return dataset, None
+    labels = _known_labels(dataset) if mode == "stratified" else None
+    supervised_indices, pool_indices = split_known_indices(
+        len(dataset), val_ratio=ratio, seed=seed, labels=labels
+    )
+    return Subset(dataset, supervised_indices), Subset(dataset, pool_indices)
+
+
 def split_known_indices(
     n: int,
     val_ratio: float,
@@ -399,6 +423,7 @@ def build_open_validation_and_discovery(
     seed: int,
     discovery_pool_mode: str,
     unknown_open_val_pool: Dataset | None = None,
+    known_discovery_pool: Dataset | None = None,
 ):
     """Reserve training-split samples for open validation, never from test.
 
@@ -424,7 +449,12 @@ def build_open_validation_and_discovery(
     if discovery_pool_mode == "unknown":
         discovery_pool = unknown_pool
     else:
-        discovery_pool = ConcatDataset([known_train, unknown_pool])
+        if known_discovery_pool is None:
+            raise ValueError(
+                "mixed discovery requires a disjoint known_discovery_pool; "
+                "do not reuse labeled known_train samples as unlabeled data"
+            )
+        discovery_pool = ConcatDataset([known_discovery_pool, unknown_pool])
     return known_val, open_val, discovery_pool
 
 
@@ -443,11 +473,17 @@ def build_data_bundle(
     discovery_pool_mode: str = "unknown",
     open_val_ratio: float = 0.0,
     known_split_mode: str = "random",
+    mixed_known_pool_ratio: float = 0.2,
 ) -> DataBundle:
     if discovery_pool_mode not in {"unknown", "mixed"}:
         raise ValueError(f"Unsupported discovery pool mode: {discovery_pool_mode}")
     if known_split_mode not in {"random", "stratified"}:
         raise ValueError(f"Unsupported known split mode: {known_split_mode}")
+    if discovery_pool_mode == "mixed" and not 0.0 < float(mixed_known_pool_ratio) < 1.0:
+        raise ValueError(
+            "mixed discovery requires 0 < mixed_known_pool_ratio < 1 so the "
+            "known portion is disjoint from supervised training"
+        )
 
     if dataset_name.lower() == "cifar100":
         known_classes, novel_classes = make_class_split(list(range(100)), num_known, seed, split_path)
@@ -466,6 +502,14 @@ def build_data_bundle(
         )
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
+        known_discovery_pool = None
+        if discovery_pool_mode == "mixed":
+            train_set, known_discovery_pool = split_known_for_discovery(
+                train_set,
+                mixed_known_pool_ratio,
+                seed + 2,
+                known_split_mode,
+            )
         unknown_pool = unknown_subset(pool_full)
         unknown_open_val_pool = unknown_subset(pool_eval)
         val_set, open_val, discovery_pool = build_open_validation_and_discovery(
@@ -476,6 +520,7 @@ def build_data_bundle(
             seed,
             discovery_pool_mode,
             unknown_open_val_pool=unknown_open_val_pool,
+            known_discovery_pool=known_discovery_pool,
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
@@ -523,6 +568,14 @@ def build_data_bundle(
         )
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
+        known_discovery_pool = None
+        if discovery_pool_mode == "mixed":
+            train_set, known_discovery_pool = split_known_for_discovery(
+                train_set,
+                mixed_known_pool_ratio,
+                seed + 2,
+                known_split_mode,
+            )
         unknown_pool = unknown_subset(pool_full)
         unknown_open_val_pool = unknown_subset(pool_eval)
         val_set, open_val, discovery_pool = build_open_validation_and_discovery(
@@ -533,6 +586,7 @@ def build_data_bundle(
             seed,
             discovery_pool_mode,
             unknown_open_val_pool=unknown_open_val_pool,
+            known_discovery_pool=known_discovery_pool,
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
@@ -562,6 +616,14 @@ def build_data_bundle(
         train_set, _ = split_known_dataset(
             train_full, val_ratio=0.1, seed=seed, mode=known_split_mode
         )
+        known_discovery_pool = None
+        if discovery_pool_mode == "mixed":
+            train_set, known_discovery_pool = split_known_for_discovery(
+                train_set,
+                mixed_known_pool_ratio,
+                seed + 2,
+                known_split_mode,
+            )
         val_set = limit_dataset(val_full, limit_val, seed)
         unknown_pool = unknown_subset(pool_full)
         unknown_open_val_pool = unknown_subset(pool_eval)
@@ -573,6 +635,7 @@ def build_data_bundle(
             seed,
             discovery_pool_mode,
             unknown_open_val_pool=unknown_open_val_pool,
+            known_discovery_pool=known_discovery_pool,
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
