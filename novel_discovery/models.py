@@ -6,6 +6,13 @@ from torch.nn import functional as F
 from torchvision import models
 
 
+def freeze_batchnorm_stats(module: nn.Module) -> None:
+    """Keep BatchNorm running statistics fixed while leaving affine weights trainable."""
+    for child in module.modules():
+        if isinstance(child, nn.modules.batchnorm._BatchNorm):
+            child.eval()
+
+
 class ResNetBackbone(nn.Module):
     def __init__(
         self,

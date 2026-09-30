@@ -303,6 +303,109 @@ def unknown_feature_separation_loss(
     return violations.mean()
 
 
+def unknown_feature_boundary_loss(
+    known_features: torch.Tensor,
+    known_labels: torch.Tensor,
+    unknown_features: torch.Tensor,
+    known_prototypes: torch.Tensor,
+    similarity_margin: float = 0.2,
+    prototype_weight: float = 0.5,
+    temperature: float = 0.1,
+) -> torch.Tensor:
+    """Repel pure-unknown features from a hybrid known support boundary.
+
+    The classifier weights provide a global class prototype, while the
+    labelled features in the current batch provide a local class centroid.
+    Their detached combination is used as a stable, class-conditional support
+    approximation.  This is an auxiliary open-set representation objective;
+    it is intentionally restricted to a protocol-defined pure-unknown pool.
+    It does not claim to reproduce a complete ARPL, VOS, or Mahalanobis model.
+    """
+    if (
+        known_features.numel() == 0
+        or unknown_features.numel() == 0
+        or known_prototypes.numel() == 0
+    ):
+        return unknown_features.new_tensor(0.0)
+    if known_features.ndim != 2 or unknown_features.ndim != 2:
+        raise ValueError("known_features and unknown_features must be 2-D")
+    if known_labels.ndim != 1 or known_labels.size(0) != known_features.size(0):
+        raise ValueError("known_labels must contain one label per known feature")
+    if known_prototypes.ndim != 2 or known_prototypes.size(1) != known_features.size(1):
+        raise ValueError("known_prototypes must match the feature dimension")
+
+    weight = min(max(float(prototype_weight), 0.0), 1.0)
+    tau = max(float(temperature), 1e-6)
+    known = F.normalize(known_features.detach(), dim=-1)
+    unknown = F.normalize(unknown_features, dim=-1)
+    prototypes = F.normalize(known_prototypes.detach(), dim=-1)
+
+    # Estimate only the class centroids observed in this batch.  The missing
+    # classes are still covered by the classifier prototypes.
+    centroids = []
+    for cls in torch.unique(known_labels.detach()):
+        if int(cls) < 0:
+            continue
+        class_features = known[known_labels == cls]
+        if class_features.numel() == 0:
+            continue
+        centroids.append(F.normalize(class_features.mean(dim=0, keepdim=True), dim=-1).squeeze(0))
+    if centroids:
+        local_centroids = torch.stack(centroids, dim=0)
+        local_similarity = unknown @ local_centroids.T
+        # Smooth max avoids a single unstable pair dominating the loss.
+        local_max = tau * (
+            torch.logsumexp(local_similarity / tau, dim=-1)
+            - torch.log(local_similarity.new_tensor(float(local_similarity.size(1))))
+        )
+    else:
+        local_max = torch.zeros(unknown.size(0), device=unknown.device, dtype=unknown.dtype)
+    prototype_max = (unknown @ prototypes.T).max(dim=-1).values
+    hybrid_max = weight * prototype_max + (1.0 - weight) * local_max
+    return F.relu(hybrid_max - float(similarity_margin)).mean()
+
+
+def knn_support_boundary_loss(
+    unknown_features: torch.Tensor,
+    support_features_by_class: list[torch.Tensor],
+    support_radii: torch.Tensor,
+    k: int = 5,
+    margin: float = 0.02,
+) -> torch.Tensor:
+    """Push pure-unknown features outside known class-conditional kNN support.
+
+    Each class support radius is estimated from known training features only.
+    The bank/radii are fixed targets; gradients flow only through unknown
+    features. This is a project-specific training adaptation, not a full OOD
+    nearest-neighbor detector reproduction.
+    """
+    if unknown_features.numel() == 0 or not support_features_by_class:
+        return unknown_features.new_tensor(0.0)
+    if support_radii.ndim != 1 or support_radii.numel() != len(support_features_by_class):
+        raise ValueError("support_radii must contain one radius per class bank")
+    if int(k) <= 0 or float(margin) < 0.0:
+        raise ValueError("k must be positive and margin non-negative")
+
+    unknown = F.normalize(unknown_features, dim=-1)
+    radii = support_radii.detach().to(device=unknown.device, dtype=unknown.dtype)
+    class_violations = []
+    for class_index, bank in enumerate(support_features_by_class):
+        if bank.numel() == 0:
+            continue
+        normalized_bank = F.normalize(bank.detach().to(unknown), dim=-1)
+        similarities = unknown @ normalized_bank.T
+        neighbor_count = min(int(k), normalized_bank.size(0))
+        nearest_similarity = similarities.topk(neighbor_count, dim=-1).values.mean(dim=-1)
+        distance = 1.0 - nearest_similarity
+        class_violations.append(
+            F.relu(radii[class_index] + float(margin) - distance)
+        )
+    if not class_violations:
+        return unknown_features.new_tensor(0.0)
+    # A sample is outside known support only when it violates no class region.
+    return torch.stack(class_violations, dim=1).max(dim=1).values.mean()
+
+
 def proxy_contrastive_loss(
     features: torch.Tensor,
     labels: torch.Tensor,
@@ -563,6 +666,44 @@ def uncertainty_separation_loss(
         [torch.zeros_like(known_uncertainty), torch.ones_like(unknown_uncertainty)], dim=0
     )
     return F.binary_cross_entropy(values, targets)
+
+
+def nnpu_known_uncertainty_loss(
+    known_uncertainty: torch.Tensor,
+    unlabeled_uncertainty: torch.Tensor,
+    known_prior: float,
+) -> torch.Tensor:
+    """Non-negative PU risk for known-vs-unknown scoring from a mixed pool.
+
+    The uncertainty head estimates novelty, so ``1 - uncertainty`` is treated
+    as the positive (known) probability. Labeled known samples are P; the
+    mixed discovery pool is U and is never assigned per-example unknown labels.
+    ``known_prior`` is the assumed known proportion in U.
+    """
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if known_uncertainty.numel() == 0 or unlabeled_uncertainty.numel() == 0:
+        reference = known_uncertainty if known_uncertainty.numel() else unlabeled_uncertainty
+        return reference.new_tensor(0.0)
+
+    known_u = known_uncertainty.reshape(-1).clamp(1e-6, 1.0 - 1e-6)
+    unlabeled_u = unlabeled_uncertainty.reshape(-1).clamp(1e-6, 1.0 - 1e-6)
+    # g is the knownness logit: positive values indicate known samples.
+    known_logit = torch.log1p(-known_u) - torch.log(known_u)
+    unlabeled_logit = torch.log1p(-unlabeled_u) - torch.log(unlabeled_u)
+
+    positive_risk = prior * F.softplus(-known_logit).mean()
+    negative_risk = (
+        F.softplus(unlabeled_logit).mean()
+        - prior * F.softplus(known_logit).mean()
+    )
+    if negative_risk.detach().item() < 0.0:
+        # Kiryo et al.'s nnPU correction uses gradient ascent in the region
+        # where the empirical negative-risk estimate becomes negative. A
+        # plain clamp would zero this gradient and is not the same update.
+        return positive_risk - negative_risk
+    return positive_risk + negative_risk
 
 
 def uncertainty_ranking_loss(

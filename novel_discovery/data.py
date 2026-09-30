@@ -244,6 +244,47 @@ def split_known_dataset(dataset: Dataset, val_ratio: float, seed: int, mode: str
     return Subset(dataset, train_indices), Subset(dataset, val_indices)
 
 
+def split_validation_for_calibration(
+    dataset: Dataset,
+    calibration_ratio: float,
+    seed: int,
+    mode: str = "stratified",
+    overlap_control: bool = False,
+):
+    """Split known validation data for model selection and threshold calibration.
+
+    With ``overlap_control=True``, calibration has the same size as the
+    reserved holdout would have, but is sampled from the selection subset.
+    This is intended for controlled experiments on calibration/selection
+    overlap, not for the default evaluation protocol.
+    """
+    ratio = float(calibration_ratio)
+    if not 0.0 <= ratio < 1.0:
+        raise ValueError("calibration_ratio must be in [0, 1)")
+    if ratio == 0.0:
+        if overlap_control:
+            raise ValueError("overlap_control requires a non-zero calibration_ratio")
+        return dataset, None
+    if mode not in {"random", "stratified"}:
+        raise ValueError("calibration split mode must be 'random' or 'stratified'")
+    labels = _known_labels(dataset) if mode == "stratified" else None
+    selection_indices, calibration_indices = split_known_indices(
+        len(dataset), ratio, seed, labels=labels
+    )
+    if overlap_control:
+        if len(calibration_indices) > len(selection_indices):
+            raise ValueError(
+                "overlap_control requires calibration_ratio <= 0.5 so the "
+                "selection subset can supply an equal-size calibration subset"
+            )
+        generator = torch.Generator().manual_seed(seed + 1)
+        order = torch.randperm(len(selection_indices), generator=generator).tolist()
+        calibration_indices = [
+            selection_indices[index] for index in order[: len(calibration_indices)]
+        ]
+    return Subset(dataset, selection_indices), Subset(dataset, calibration_indices)
+
+
 def split_known_for_discovery(
     dataset: Dataset,
     pool_ratio: float,
@@ -358,6 +399,7 @@ class DataBundle:
     known_classes: Sequence
     novel_classes: Sequence
     discovery_pool: Dataset | None = None
+    calibration: Dataset | None = None
 
 
 class TwoViewDataset(Dataset):
@@ -472,6 +514,8 @@ def build_data_bundle(
     limit_discovery: int | None = None,
     discovery_pool_mode: str = "unknown",
     open_val_ratio: float = 0.0,
+    calibration_ratio: float = 0.0,
+    calibration_overlap_control: bool = False,
     known_split_mode: str = "random",
     mixed_known_pool_ratio: float = 0.2,
 ) -> DataBundle:
@@ -479,6 +523,8 @@ def build_data_bundle(
         raise ValueError(f"Unsupported discovery pool mode: {discovery_pool_mode}")
     if known_split_mode not in {"random", "stratified"}:
         raise ValueError(f"Unsupported known split mode: {known_split_mode}")
+    if not 0.0 <= float(calibration_ratio) < 1.0:
+        raise ValueError("calibration_ratio must be in [0, 1)")
     if discovery_pool_mode == "mixed" and not 0.0 < float(mixed_known_pool_ratio) < 1.0:
         raise ValueError(
             "mixed discovery requires 0 < mixed_known_pool_ratio < 1 so the "
@@ -524,11 +570,19 @@ def build_data_bundle(
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
+        val_set, calibration_set = split_validation_for_calibration(
+            val_set,
+            calibration_ratio,
+            seed + 17,
+            mode="stratified",
+            overlap_control=calibration_overlap_control,
+        )
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
         return DataBundle(
             train=train_set,
             val=val_set,
+            calibration=calibration_set,
             open_val=open_val,
             test=test_open,
             known_classes=known_classes,
@@ -590,11 +644,19 @@ def build_data_bundle(
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
+        val_set, calibration_set = split_validation_for_calibration(
+            val_set,
+            calibration_ratio,
+            seed + 17,
+            mode="stratified",
+            overlap_control=calibration_overlap_control,
+        )
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
         return DataBundle(
             train=train_set,
             val=val_set,
+            calibration=calibration_set,
             open_val=open_val,
             test=test_open,
             known_classes=known_classes,
@@ -639,11 +701,19 @@ def build_data_bundle(
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
+        val_set, calibration_set = split_validation_for_calibration(
+            val_set,
+            calibration_ratio,
+            seed + 17,
+            mode="stratified",
+            overlap_control=calibration_overlap_control,
+        )
         open_val = limit_dataset(open_val, limit_test, seed) if open_val is not None else None
         test_open = limit_dataset(test_open, limit_test, seed)
         return DataBundle(
             train=train_set,
             val=val_set,
+            calibration=calibration_set,
             open_val=open_val,
             test=test_open,
             known_classes=known_classes,

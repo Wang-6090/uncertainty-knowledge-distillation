@@ -43,8 +43,11 @@ from .losses import (
     weighted_energy_margin_loss,
     unknown_feature_margin_loss,
     unknown_feature_separation_loss,
+    unknown_feature_boundary_loss,
+    knn_support_boundary_loss,
     uncertainty_separation_loss,
     uncertainty_ranking_loss,
+    nnpu_known_uncertainty_loss,
     outlier_exposure_uniform_loss,
 )
 from .joint_discovery import (
@@ -63,10 +66,29 @@ from .metrics import (
     open_set_confusion,
 )
 from .utils import AverageMeter
+from .models import freeze_batchnorm_stats
 
 
 def build_loader(dataset, batch_size: int, shuffle: bool, num_workers: int = 4):
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
+
+
+def weighted_discovery_view_loss(
+    first_projection: torch.Tensor,
+    second_projection: torch.Tensor,
+    alpha: float,
+    mode: str = "nt_xent",
+    temperature: float = 0.2,
+) -> torch.Tensor:
+    """Apply two-view loss only when its own explicit coefficient is active."""
+    if float(alpha) <= 0.0:
+        return first_projection.new_tensor(0.0)
+    return discovery_view_loss(
+        first_projection,
+        second_projection,
+        mode=mode,
+        temperature=temperature,
+    )
 
 
 def make_pseudo_unknown(
@@ -545,8 +567,11 @@ def train_one_epoch_teacher(
     reciprocal_points=None,
     alpha_reciprocal: float = 0.0,
     reciprocal_margin: float = 0.2,
+    freeze_bn_stats: bool = False,
 ):
     model.train()
+    if freeze_bn_stats:
+        freeze_batchnorm_stats(model)
     ce_meter = AverageMeter()
     unc_meter = AverageMeter()
     proto_meter = AverageMeter()
@@ -629,6 +654,45 @@ def train_one_epoch_teacher(
     }
 
 
+@torch.no_grad()
+def teacher_kd_uncertainty(
+    teacher,
+    images: torch.Tensor,
+    source: str = "head",
+    mc_samples: int = 4,
+):
+    """Return teacher outputs and the uncertainty used by KD.
+
+    The historical ``head`` source is the learned uncertainty head.  The MC
+    sources use stochastic dropout passes and normalize entropy by log(K),
+    making the result comparable to the head's [0, 1] output.  This helper is
+    deliberately separate so the uncertainty source can be unit-tested and
+    audited independently from the large student-training loop.
+    """
+    if source not in {"head", "mc_epistemic", "mc_predictive_entropy"}:
+        raise ValueError(
+            "source must be 'head', 'mc_epistemic', or 'mc_predictive_entropy'"
+        )
+    if source != "head" and int(mc_samples) < 2:
+        raise ValueError("mc_samples must be at least 2 for MC uncertainty")
+    outputs = teacher(images)
+    logits = outputs["logits"]
+    uncertainty = outputs["uncertainty"]
+    if source == "head":
+        return outputs, logits, uncertainty
+    mc = teacher.mc_predict(images, mc_samples=int(mc_samples))
+    logits = mc["mean_logits"]
+    normalizer = max(float(outputs["logits"].size(-1)), 2.0)
+    if source == "mc_epistemic":
+        uncertainty = mc["epistemic"]
+    else:
+        uncertainty = mc["predictive_entropy"]
+    uncertainty = (
+        uncertainty / outputs["logits"].new_tensor(normalizer).log()
+    ).clamp(0.0, 1.0)
+    return outputs, logits, uncertainty
+
+
 def train_one_epoch_student(
     student,
     teacher,
@@ -639,6 +703,7 @@ def train_one_epoch_student(
     alpha_kd: float = 1.0,
     alpha_feat_kd: float = 0.0,
     alpha_supcon: float = 0.1,
+    alpha_raw_supcon: float = 0.0,
     alpha_proto: float = 0.0,
     alpha_proto_repulsion: float = 0.0,
     proto_repulsion_margin: float = 0.0,
@@ -656,6 +721,8 @@ def train_one_epoch_student(
     uncertainty_target_mode: str = "confidence",
     temperature: float = 2.0,
     kd_mode: str = "uncertainty",
+    kd_uncertainty_source: str = "head",
+    kd_mc_samples: int = 4,
     uncertainty_weight_mode: str = "raw",
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
@@ -669,9 +736,21 @@ def train_one_epoch_student(
     alpha_discovery_feature_separation: float = 0.0,
     discovery_feature_separation_margin: float = 0.0,
     discovery_feature_separation_temperature: float = 0.1,
+    discovery_feature_candidate_gating: bool = False,
+    discovery_pool_mode: str = "unknown",
+    alpha_discovery_boundary: float = 0.0,
+    discovery_boundary_margin: float = 0.2,
+    discovery_boundary_prototype_weight: float = 0.5,
+    discovery_boundary_temperature: float = 0.1,
+    alpha_discovery_knn_boundary: float = 0.0,
+    discovery_knn_support=None,
+    discovery_knn_k: int = 5,
+    discovery_knn_margin: float = 0.02,
     alpha_discovery_uncertainty_separation: float = 0.0,
     discovery_uncertainty_loss: str = "bce",
     discovery_uncertainty_margin: float = 0.1,
+    alpha_discovery_uncertainty_pu: float = 0.0,
+    discovery_uncertainty_known_prior: float = 0.2,
     alpha_discovery_selective_unknown: float = 0.0,
     alpha_discovery_selective_energy: float = 0.0,
     alpha_angular: float = 0.0,
@@ -742,14 +821,25 @@ def train_one_epoch_student(
     alpha_outlier_uncertainty: float = 0.0,
     alpha_outlier_feature_margin: float = 0.0,
     outlier_feature_margin: float = 0.2,
+    freeze_bn_stats: bool = False,
 ):
+    if kd_uncertainty_source not in {"head", "mc_epistemic", "mc_predictive_entropy"}:
+        raise ValueError(
+            "kd_uncertainty_source must be 'head', 'mc_epistemic', "
+            "or 'mc_predictive_entropy'"
+        )
+    if kd_uncertainty_source != "head" and int(kd_mc_samples) < 2:
+        raise ValueError("kd_mc_samples must be at least 2 for MC uncertainty")
     student.train()
+    if freeze_bn_stats:
+        freeze_batchnorm_stats(student)
     teacher.eval()
     ce_meter = AverageMeter()
     kd_meter = AverageMeter()
     feat_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
     sc_meter = AverageMeter()
+    raw_sc_meter = AverageMeter()
     proto_meter = AverageMeter()
     proto_repulsion_meter = AverageMeter()
     proxy_meter = AverageMeter()
@@ -762,7 +852,10 @@ def train_one_epoch_student(
     discovery_uniform_meter = AverageMeter()
     discovery_feature_margin_meter = AverageMeter()
     discovery_feature_separation_meter = AverageMeter()
+    discovery_boundary_meter = AverageMeter()
+    discovery_knn_boundary_meter = AverageMeter()
     discovery_uncertainty_separation_meter = AverageMeter()
+    discovery_uncertainty_pu_meter = AverageMeter()
     discovery_selective_unknown_meter = AverageMeter()
     discovery_selective_energy_meter = AverageMeter()
     angular_meter = AverageMeter()
@@ -798,7 +891,12 @@ def train_one_epoch_student(
         images = images.to(device)
         labels = labels.to(device)
         with torch.no_grad():
-            t_out = teacher(images)
+            t_out, teacher_kd_logits, teacher_kd_uncertainty_value = teacher_kd_uncertainty(
+                teacher,
+                images,
+                source=kd_uncertainty_source,
+                mc_samples=kd_mc_samples,
+            )
         s_out = student(images)
         loss_ce = classification_loss(s_out["logits"], labels)
         loss_unc = uncertainty_alignment_loss(
@@ -806,15 +904,17 @@ def train_one_epoch_student(
         )
         loss_kd = distillation_loss(
             s_out["logits"],
-            t_out["logits"],
-            teacher_uncertainty=t_out["uncertainty"],
+            teacher_kd_logits,
+            teacher_uncertainty=teacher_kd_uncertainty_value,
             temperature=temperature,
             uncertainty_weighted=(kd_mode == "uncertainty"),
             uncertainty_weight_mode=uncertainty_weight_mode,
             uncertainty_weight_min=uncertainty_weight_min,
             uncertainty_weight_max=uncertainty_weight_max,
         )
-        feature_teacher_uncertainty = t_out["uncertainty"] if kd_mode == "uncertainty" else None
+        feature_teacher_uncertainty = (
+            teacher_kd_uncertainty_value if kd_mode == "uncertainty" else None
+        )
         loss_feat_kd = feature_distillation_loss(
             s_out["proj"],
             t_out["proj"],
@@ -824,6 +924,7 @@ def train_one_epoch_student(
             uncertainty_weight_max=uncertainty_weight_max,
         )
         loss_supcon = supervised_contrastive_loss(s_out["proj"], labels)
+        loss_raw_supcon = supervised_contrastive_loss(s_out["features"], labels)
         loss_proto = prototype_alignment_loss(s_out["features"], labels, student.classifier.weight)
         loss_proto_repulsion = prototype_repulsion_loss(
             student.classifier.weight, similarity_margin=proto_repulsion_margin
@@ -889,7 +990,10 @@ def train_one_epoch_student(
         loss_discovery_uniform = s_out["logits"].new_tensor(0.0)
         loss_discovery_feature_margin = s_out["logits"].new_tensor(0.0)
         loss_discovery_feature_separation = s_out["logits"].new_tensor(0.0)
+        loss_discovery_boundary = s_out["logits"].new_tensor(0.0)
+        loss_discovery_knn_boundary = s_out["logits"].new_tensor(0.0)
         loss_discovery_uncertainty_separation = s_out["logits"].new_tensor(0.0)
+        loss_discovery_uncertainty_pu = s_out["logits"].new_tensor(0.0)
         loss_discovery_selective_unknown = s_out["logits"].new_tensor(0.0)
         loss_discovery_selective_energy = s_out["logits"].new_tensor(0.0)
         loss_joint_discovery = s_out["logits"].new_tensor(0.0)
@@ -971,6 +1075,10 @@ def train_one_epoch_student(
             or alpha_discovery_uniform > 0.0
             or alpha_discovery_feature_margin > 0.0
             or alpha_discovery_feature_separation > 0.0
+            or alpha_discovery_boundary > 0.0
+            or alpha_discovery_knn_boundary > 0.0
+            or alpha_discovery_uncertainty_separation > 0.0
+            or alpha_discovery_uncertainty_pu > 0.0
             or alpha_discovery_selective_unknown > 0.0
             or alpha_discovery_selective_energy > 0.0
             or alpha_reciprocal > 0.0
@@ -1311,9 +1419,44 @@ def train_one_epoch_student(
                         margin=joint_gate_margin,
                     )
                 )
-            loss_discovery = discovery_view_loss(
+            feature_candidate_masks = None
+            if (
+                discovery_feature_candidate_gating
+                and discovery_pool_mode == "mixed"
+                and (
+                    alpha_discovery_feature_margin > 0.0
+                    or alpha_discovery_feature_separation > 0.0
+                    or alpha_discovery_boundary > 0.0
+                    or alpha_discovery_knn_boundary > 0.0
+                )
+            ):
+                if discovery_selection_model is None:
+                    first_feature_selection = first_out
+                    second_feature_selection = second_out
+                else:
+                    with torch.no_grad():
+                        first_feature_selection = discovery_selection_model(first_view)
+                        second_feature_selection = discovery_selection_model(second_view)
+                paired_feature_mask = select_discovery_candidates(
+                    0.5 * (
+                        first_feature_selection["logits"]
+                        + second_feature_selection["logits"]
+                    ),
+                    0.5 * (
+                        first_feature_selection["uncertainty"]
+                        + second_feature_selection["uncertainty"]
+                    ),
+                    ratio=discovery_select_ratio,
+                    mode=discovery_select_mode,
+                )
+                # Both augmentations represent the same unlabeled example, so
+                # gate them together using their averaged risk prediction.
+                feature_candidate_masks = (paired_feature_mask, paired_feature_mask)
+
+            loss_discovery = weighted_discovery_view_loss(
                 first_out["proj"],
                 second_out["proj"],
+                alpha=alpha_discovery,
                 mode=discovery_loss_mode,
                 temperature=discovery_temperature,
             )
@@ -1343,31 +1486,93 @@ def train_one_epoch_student(
                     + outlier_exposure_uniform_loss(second_out["logits"])
                 )
             if alpha_discovery_feature_margin > 0.0:
+                first_feature_values = first_out["features"]
+                second_feature_values = second_out["features"]
+                if feature_candidate_masks is not None:
+                    first_feature_values = first_feature_values[feature_candidate_masks[0]]
+                    second_feature_values = second_feature_values[feature_candidate_masks[1]]
                 loss_discovery_feature_margin = 0.5 * (
                     unknown_feature_margin_loss(
-                        first_out["features"],
+                        first_feature_values,
                         student.classifier.weight,
                         similarity_margin=discovery_feature_margin,
                     )
                     + unknown_feature_margin_loss(
-                        second_out["features"],
+                        second_feature_values,
                         student.classifier.weight,
                         similarity_margin=discovery_feature_margin,
                     )
                 )
             if alpha_discovery_feature_separation > 0.0:
+                first_feature_values = first_out["features"]
+                second_feature_values = second_out["features"]
+                if feature_candidate_masks is not None:
+                    first_feature_values = first_feature_values[feature_candidate_masks[0]]
+                    second_feature_values = second_feature_values[feature_candidate_masks[1]]
                 loss_discovery_feature_separation = 0.5 * (
                     unknown_feature_separation_loss(
                         s_out["features"],
-                        first_out["features"],
+                        first_feature_values,
                         similarity_margin=discovery_feature_separation_margin,
                         temperature=discovery_feature_separation_temperature,
                     )
                     + unknown_feature_separation_loss(
                         s_out["features"],
-                        second_out["features"],
+                        second_feature_values,
                         similarity_margin=discovery_feature_separation_margin,
                         temperature=discovery_feature_separation_temperature,
+                    )
+                )
+            if alpha_discovery_boundary > 0.0:
+                first_feature_values = first_out["features"]
+                second_feature_values = second_out["features"]
+                if feature_candidate_masks is not None:
+                    first_feature_values = first_feature_values[feature_candidate_masks[0]]
+                    second_feature_values = second_feature_values[feature_candidate_masks[1]]
+                loss_discovery_boundary = 0.5 * (
+                    unknown_feature_boundary_loss(
+                        s_out["features"],
+                        labels,
+                        first_feature_values,
+                        student.classifier.weight,
+                        similarity_margin=discovery_boundary_margin,
+                        prototype_weight=discovery_boundary_prototype_weight,
+                        temperature=discovery_boundary_temperature,
+                    )
+                    + unknown_feature_boundary_loss(
+                        s_out["features"],
+                        labels,
+                        second_feature_values,
+                        student.classifier.weight,
+                        similarity_margin=discovery_boundary_margin,
+                        prototype_weight=discovery_boundary_prototype_weight,
+                        temperature=discovery_boundary_temperature,
+                    )
+                )
+            if alpha_discovery_knn_boundary > 0.0:
+                if discovery_knn_support is None:
+                    raise ValueError(
+                        "kNN boundary loss requires an epoch-specific known support bank"
+                    )
+                first_knn_values = first_out["features"]
+                second_knn_values = second_out["features"]
+                if feature_candidate_masks is not None:
+                    first_knn_values = first_knn_values[feature_candidate_masks[0]]
+                    second_knn_values = second_knn_values[feature_candidate_masks[1]]
+                loss_discovery_knn_boundary = 0.5 * (
+                    knn_support_boundary_loss(
+                        first_knn_values,
+                        discovery_knn_support["features_by_class"],
+                        discovery_knn_support["radii"],
+                        k=discovery_knn_k,
+                        margin=discovery_knn_margin,
+                    )
+                    + knn_support_boundary_loss(
+                        second_knn_values,
+                        discovery_knn_support["features_by_class"],
+                        discovery_knn_support["radii"],
+                        k=discovery_knn_k,
+                        margin=discovery_knn_margin,
                     )
                 )
             if alpha_discovery_uncertainty_separation > 0.0:
@@ -1383,6 +1588,19 @@ def train_one_epoch_student(
                         second_out["uncertainty"],
                         **({"margin": discovery_uncertainty_margin} if discovery_uncertainty_loss == "ranking" else {}),
                     )
+                )
+            if alpha_discovery_uncertainty_pu > 0.0:
+                if not 0.0 < float(discovery_uncertainty_known_prior) < 1.0:
+                    raise ValueError(
+                        "discovery_uncertainty_known_prior must be in (0, 1)"
+                    )
+                unlabeled_uncertainty = 0.5 * (
+                    first_out["uncertainty"] + second_out["uncertainty"]
+                )
+                loss_discovery_uncertainty_pu = nnpu_known_uncertainty_loss(
+                    s_out["uncertainty"],
+                    unlabeled_uncertainty,
+                    known_prior=discovery_uncertainty_known_prior,
                 )
             if alpha_discovery_selective_unknown > 0.0 or alpha_discovery_selective_energy > 0.0:
                 if discovery_selection_model is None:
@@ -1508,6 +1726,7 @@ def train_one_epoch_student(
             + alpha_kd * loss_kd
             + alpha_feat_kd * loss_feat_kd
             + alpha_supcon * loss_supcon
+            + alpha_raw_supcon * loss_raw_supcon
             + alpha_proto * loss_proto
             + alpha_proto_repulsion * loss_proto_repulsion
             + alpha_proxy * loss_proxy
@@ -1520,7 +1739,10 @@ def train_one_epoch_student(
             + alpha_discovery_uniform * loss_discovery_uniform
             + alpha_discovery_feature_margin * loss_discovery_feature_margin
             + alpha_discovery_feature_separation * loss_discovery_feature_separation
+            + alpha_discovery_boundary * loss_discovery_boundary
+            + alpha_discovery_knn_boundary * loss_discovery_knn_boundary
             + alpha_discovery_uncertainty_separation * loss_discovery_uncertainty_separation
+            + alpha_discovery_uncertainty_pu * loss_discovery_uncertainty_pu
             + alpha_discovery_selective_unknown * loss_discovery_selective_unknown
             + alpha_discovery_selective_energy * loss_discovery_selective_energy
             + alpha_angular * loss_angular
@@ -1547,6 +1769,7 @@ def train_one_epoch_student(
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         sc_meter.update(loss_supcon.item(), images.size(0))
+        raw_sc_meter.update(loss_raw_supcon.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
         proto_repulsion_meter.update(loss_proto_repulsion.item(), images.size(0))
         proxy_meter.update(loss_proxy.item(), images.size(0))
@@ -1559,8 +1782,15 @@ def train_one_epoch_student(
         discovery_uniform_meter.update(loss_discovery_uniform.item(), images.size(0))
         discovery_feature_margin_meter.update(loss_discovery_feature_margin.item(), images.size(0))
         discovery_feature_separation_meter.update(loss_discovery_feature_separation.item(), images.size(0))
+        discovery_boundary_meter.update(loss_discovery_boundary.item(), images.size(0))
+        discovery_knn_boundary_meter.update(
+            loss_discovery_knn_boundary.item(), images.size(0)
+        )
         discovery_uncertainty_separation_meter.update(
             loss_discovery_uncertainty_separation.item(), images.size(0)
+        )
+        discovery_uncertainty_pu_meter.update(
+            loss_discovery_uncertainty_pu.item(), images.size(0)
         )
         discovery_selective_unknown_meter.update(loss_discovery_selective_unknown.item(), images.size(0))
         discovery_selective_energy_meter.update(loss_discovery_selective_energy.item(), images.size(0))
@@ -1600,6 +1830,7 @@ def train_one_epoch_student(
         "feat_kd": feat_kd_meter.avg,
         "unc": unc_meter.avg,
         "supcon": sc_meter.avg,
+        "raw_supcon": raw_sc_meter.avg,
         "proto": proto_meter.avg,
         "proto_repulsion": proto_repulsion_meter.avg,
         "proxy": proxy_meter.avg,
@@ -1612,7 +1843,10 @@ def train_one_epoch_student(
         "discovery_uniform": discovery_uniform_meter.avg,
         "discovery_feature_margin": discovery_feature_margin_meter.avg,
         "discovery_feature_separation": discovery_feature_separation_meter.avg,
+        "discovery_boundary": discovery_boundary_meter.avg,
+        "discovery_knn_boundary": discovery_knn_boundary_meter.avg,
         "discovery_uncertainty_separation": discovery_uncertainty_separation_meter.avg,
+        "discovery_uncertainty_pu": discovery_uncertainty_pu_meter.avg,
         "discovery_selective_unknown": discovery_selective_unknown_meter.avg,
         "discovery_selective_energy": discovery_selective_energy_meter.avg,
         "angular": angular_meter.avg,
@@ -1682,6 +1916,61 @@ def collect_prototypes(model, loader, device, num_classes: int):
                 counts[c] += mask.sum()
     counts = counts.clamp_min(1.0).unsqueeze(1)
     return sums / counts
+
+
+@torch.no_grad()
+def collect_classwise_knn_support(
+    model,
+    loader,
+    device,
+    num_classes: int,
+    k: int = 5,
+    quantile: float = 0.95,
+):
+    """Build an epoch-specific class-wise known-feature support bank.
+
+    Per-class radii are quantiles of leave-one-out mean-k-neighbor cosine
+    distances computed only from labeled known training examples.
+    """
+    if int(k) <= 0:
+        raise ValueError("k must be positive")
+    if not 0.5 <= float(quantile) < 1.0:
+        raise ValueError("quantile must be in [0.5, 1.0)")
+    was_training = model.training
+    model.eval()
+    feature_chunks = [[] for _ in range(int(num_classes))]
+    try:
+        for batch in tqdm(loader, desc="known-knn-bank", leave=False):
+            images, labels = batch[0].to(device), batch[1].to(device)
+            features = F.normalize(model(images)["features"].float(), dim=-1)
+            valid = (labels >= 0) & (labels < int(num_classes))
+            for cls in torch.unique(labels[valid]).tolist():
+                mask = labels == int(cls)
+                feature_chunks[int(cls)].append(features[mask].detach())
+    finally:
+        model.train(was_training)
+
+    banks = []
+    radii = torch.zeros(int(num_classes), dtype=torch.float32, device=device)
+    counts = torch.zeros(int(num_classes), dtype=torch.long)
+    for cls, chunks in enumerate(feature_chunks):
+        if not chunks:
+            banks.append(torch.empty(0, 0, dtype=torch.float32, device=device))
+            continue
+        bank = F.normalize(torch.cat(chunks, dim=0), dim=-1)
+        banks.append(bank.detach())
+        counts[cls] = bank.size(0)
+        if bank.size(0) <= 1:
+            radii[cls] = 0.0
+            continue
+        similarities = bank @ bank.T
+        similarities.fill_diagonal_(float("-inf"))
+        neighbor_count = min(int(k), bank.size(0) - 1)
+        distances = 1.0 - similarities.topk(neighbor_count, dim=-1).values.mean(dim=-1)
+        radii[cls] = torch.quantile(distances.clamp_min(0.0), float(quantile))
+    if not counts.any():
+        raise ValueError("Known training loader produced no class features")
+    return {"features_by_class": banks, "radii": radii, "counts": counts}
 
 
 def _odin_batch_score(
@@ -2230,6 +2519,8 @@ def collect_knn_feature_bank(
     max_samples: int = 0,
     seed: int = 0,
     feature_key: str = "features",
+    support_k: int = 10,
+    support_quantile: float = 0.95,
 ):
     """Collect normalized known-training vectors for KNN-OOD."""
     model.eval()
@@ -2254,7 +2545,63 @@ def collect_knn_feature_bank(
         indices = torch.randperm(len(bank), generator=generator)[:max_samples]
         bank = bank[indices]
         labels = labels[indices]
-    return {"features": bank.numpy(), "labels": labels.numpy()}
+    features = bank.numpy()
+    label_array = labels.numpy()
+    return {
+        "features": features,
+        "labels": label_array,
+        "class_support_radii": estimate_classwise_knn_radii(
+            features,
+            label_array,
+            k=support_k,
+            quantile=support_quantile,
+        ),
+    }
+
+
+def estimate_classwise_knn_radii(
+    features: np.ndarray,
+    labels: np.ndarray,
+    k: int = 10,
+    quantile: float = 0.95,
+) -> np.ndarray:
+    """Estimate per-class cosine support radii from leave-one-out train kNN.
+
+    Each training vector is excluded from its own neighborhood. Classes with
+    fewer than two bank samples use the pooled known-class radius as fallback.
+    """
+    features = np.asarray(features, dtype=np.float32)
+    labels = np.asarray(labels, dtype=np.int64)
+    if features.ndim != 2 or labels.ndim != 1 or len(features) != len(labels):
+        raise ValueError("kNN radius features and labels must be aligned 2-D/1-D arrays")
+    if not 0.5 <= float(quantile) < 1.0:
+        raise ValueError("kNN support quantile must be in [0.5, 1.0)")
+    if int(k) <= 0:
+        raise ValueError("kNN radius neighbor count must be positive")
+    if not len(features):
+        raise ValueError("cannot estimate kNN radii from an empty feature bank")
+    features = features / np.clip(np.linalg.norm(features, axis=1, keepdims=True), 1e-8, None)
+    unique_labels = np.unique(labels)
+    all_loo_distances = []
+    class_distances = {}
+    for class_index in unique_labels:
+        class_features = features[labels == class_index]
+        if len(class_features) < 2:
+            continue
+        similarities = class_features @ class_features.T
+        np.fill_diagonal(similarities, -np.inf)
+        neighbor_count = min(int(k), len(class_features) - 1)
+        nearest = np.partition(similarities, -neighbor_count, axis=1)[:, -neighbor_count:]
+        loo_distances = 1.0 - nearest.mean(axis=1)
+        class_distances[int(class_index)] = loo_distances
+        all_loo_distances.append(loo_distances)
+    if not all_loo_distances:
+        raise ValueError("at least one class needs two samples to estimate kNN support")
+    pooled_radius = float(np.quantile(np.concatenate(all_loo_distances), quantile))
+    radii = np.full(int(labels.max()) + 1, pooled_radius, dtype=np.float32)
+    for class_index, loo_distances in class_distances.items():
+        radii[class_index] = float(np.quantile(loo_distances, quantile))
+    return np.clip(radii, 1e-6, None)
 
 
 def attach_knn_distances(
@@ -2283,6 +2630,29 @@ def attach_knn_distances(
     neighbor_count = min(int(k), len(bank))
     distances = np.empty(len(queries), dtype=np.float32)
     support = np.empty(len(queries), dtype=np.float32) if bank_labels is not None else None
+    predicted_class_distance = (
+        np.empty(len(queries), dtype=np.float32)
+        if bank_labels is not None and "logits" in outputs
+        else None
+    )
+    predicted_class_relative_distance = (
+        np.empty(len(queries), dtype=np.float32)
+        if bank_labels is not None
+        and predicted_class_distance is not None
+        and isinstance(feature_bank, dict)
+        and "class_support_radii" in feature_bank
+        else None
+    )
+    predicted_classes = (
+        np.asarray(outputs["logits"]).argmax(axis=1)
+        if predicted_class_distance is not None
+        else None
+    )
+    predicted_class_support = (
+        np.empty(len(queries), dtype=np.float32)
+        if bank_labels is not None and predicted_classes is not None
+        else None
+    )
     batch_size = 256
     for start in range(0, len(queries), batch_size):
         similarities = queries[start : start + batch_size] @ bank.T
@@ -2300,9 +2670,45 @@ def attach_knn_distances(
             support[start : start + batch_size] = class_support.max(axis=1) / np.clip(
                 weights.sum(axis=1), 1e-12, None
             )
+            if predicted_class_support is not None:
+                predicted_class_support[start : start + len(nearest)] = (
+                    weights
+                    * (neighbor_labels == predicted_classes[start : start + len(nearest), None])
+                ).sum(axis=1) / np.clip(weights.sum(axis=1), 1e-12, None)
+            if predicted_class_distance is not None:
+                batch_predictions = predicted_classes[start : start + batch_size]
+                for class_index in np.unique(batch_predictions):
+                    rows = np.flatnonzero(batch_predictions == class_index)
+                    class_bank = bank[bank_labels == class_index]
+                    if len(class_bank) == 0:
+                        predicted_class_distance[start + rows] = distances[start + rows]
+                        if predicted_class_relative_distance is not None:
+                            radii = np.asarray(feature_bank["class_support_radii"], dtype=float)
+                            predicted_class_relative_distance[start + rows] = (
+                                distances[start + rows] / max(float(np.median(radii)), 1e-6)
+                            )
+                        continue
+                    class_similarities = queries[start + rows] @ class_bank.T
+                    class_k = min(int(k), len(class_bank))
+                    class_neighbors = np.partition(
+                        class_similarities, -class_k, axis=1
+                    )[:, -class_k:]
+                    predicted_class_distance[start + rows] = 1.0 - class_neighbors.mean(axis=1)
+                    if predicted_class_relative_distance is not None:
+                        radii = np.asarray(feature_bank["class_support_radii"], dtype=float)
+                        radius = radii[class_index] if class_index < len(radii) else np.median(radii)
+                        predicted_class_relative_distance[start + rows] = (
+                            predicted_class_distance[start + rows] / max(float(radius), 1e-6)
+                        )
     outputs["knn_distance"] = distances
     if support is not None:
         outputs["knn_class_support"] = support
+    if predicted_class_distance is not None:
+        outputs["knn_predicted_class_distance"] = predicted_class_distance
+    if predicted_class_support is not None:
+        outputs["knn_predicted_class_support"] = predicted_class_support
+    if predicted_class_relative_distance is not None:
+        outputs["knn_predicted_class_relative_distance"] = predicted_class_relative_distance
     return outputs
 
 
@@ -2726,6 +3132,7 @@ def compute_open_score(
         "normalized_entropy_mahalanobis",
         "normalized_entropy_mahalanobis_diag",
         "normalized_entropy_mahalanobis_shared",
+        "normalized_entropy_mahalanobis_knn",
         "classwise_mahalanobis",
         "normalized_entropy_classwise_mahalanobis",
         "relative_mahalanobis",
@@ -2856,6 +3263,96 @@ def compute_open_score(
             raise ValueError("normalized_entropy_knn requires --knn-ood and known-validation normalization")
         score = (
             (entropy - normalization["entropy"]["mean"]) / normalization["entropy"]["std"]
+            + (outputs["knn_distance"] - normalization["knn_distance"]["mean"])
+            / normalization["knn_distance"]["std"]
+        )
+    elif score_mode == "predicted_class_knn_distance":
+        if "knn_predicted_class_distance" not in outputs:
+            raise ValueError(
+                "predicted_class_knn_distance requires --knn-ood and labeled known training features"
+            )
+        score = np.asarray(outputs["knn_predicted_class_distance"], dtype=float)
+    elif score_mode == "normalized_entropy_predicted_class_knn_global":
+        if "knn_predicted_class_distance" not in outputs or normalization is None:
+            raise ValueError(
+                "normalized_entropy_predicted_class_knn_global requires --knn-ood "
+                "and known-validation normalization"
+            )
+        score = (
+            (entropy - normalization["entropy"]["mean"])
+            / max(float(normalization["entropy"]["std"]), 1e-6)
+            + (
+                outputs["knn_predicted_class_distance"]
+                - normalization["knn_predicted_class_distance"]["mean"]
+            )
+            / max(float(normalization["knn_predicted_class_distance"]["std"]), 1e-6)
+        )
+    elif score_mode == "normalized_entropy_predicted_class_knn":
+        if "knn_predicted_class_distance" not in outputs or normalization is None:
+            raise ValueError(
+                "normalized_entropy_predicted_class_knn requires --knn-ood "
+                "and known-validation normalization"
+            )
+        class_stats = normalization.get("knn_predicted_class_distance_classwise")
+        if class_stats is None:
+            raise ValueError(
+                "normalized_entropy_predicted_class_knn requires classwise "
+                "known-validation distance statistics"
+            )
+        predicted = np.asarray(outputs["logits"]).argmax(axis=1)
+        means = np.asarray(class_stats["mean"], dtype=float)
+        stds = np.asarray(class_stats["std"], dtype=float)
+        predicted = np.clip(predicted, 0, len(means) - 1)
+        class_distance_z = (
+            np.asarray(outputs["knn_predicted_class_distance"], dtype=float)
+            - means[predicted]
+        ) / np.maximum(stds[predicted], 1e-6)
+        score = (
+            (entropy - normalization["entropy"]["mean"])
+            / max(float(normalization["entropy"]["std"]), 1e-6)
+            + class_distance_z
+        )
+    elif score_mode == "normalized_entropy_relative_predicted_class_knn":
+        if "knn_predicted_class_relative_distance" not in outputs or normalization is None:
+            raise ValueError(
+                "normalized_entropy_relative_predicted_class_knn requires "
+                "--knn-ood and known-validation normalization"
+            )
+        distance_stats = normalization["knn_predicted_class_relative_distance"]
+        score = (
+            (entropy - normalization["entropy"]["mean"])
+            / max(float(normalization["entropy"]["std"]), 1e-6)
+            + (
+                outputs["knn_predicted_class_relative_distance"]
+                - distance_stats["mean"]
+            )
+            / max(float(distance_stats["std"]), 1e-6)
+        )
+    elif score_mode == "normalized_entropy_knn_conflict":
+        if "knn_predicted_class_support" not in outputs or normalization is None:
+            raise ValueError(
+                "normalized_entropy_knn_conflict requires --knn-ood "
+                "and known-validation normalization"
+            )
+        support_stats = normalization["knn_predicted_class_support"]
+        conflict = 1.0 - np.asarray(outputs["knn_predicted_class_support"], dtype=float)
+        score = (
+            (entropy - normalization["entropy"]["mean"])
+            / max(float(normalization["entropy"]["std"]), 1e-6)
+            + (conflict - (1.0 - support_stats["mean"]))
+            / max(float(support_stats["std"]), 1e-6)
+        )
+    elif score_mode == "normalized_entropy_mahalanobis_knn":
+        if "knn_distance" not in outputs or normalization is None or gaussian_stats is None:
+            raise ValueError(
+                "normalized_entropy_mahalanobis_knn requires --knn-ood, "
+                "Gaussian statistics, and known-validation normalization"
+            )
+        mahalanobis_stats = normalization["mahalanobis"]
+        mahalanobis = compute_mahalanobis_distance(outputs["features"], gaussian_stats)
+        score = (
+            (entropy - normalization["entropy"]["mean"]) / normalization["entropy"]["std"]
+            + (mahalanobis - mahalanobis_stats["mean"]) / mahalanobis_stats["std"]
             + (outputs["knn_distance"] - normalization["knn_distance"]["mean"])
             / normalization["knn_distance"]["std"]
         )
@@ -3025,6 +3522,39 @@ def fit_score_normalization(
     result["aleatoric"] = stats(outputs_known.get("aleatoric", np.zeros_like(entropy)))
     if "knn_distance" in outputs_known:
         result["knn_distance"] = stats(outputs_known["knn_distance"])
+    if "knn_predicted_class_distance" in outputs_known:
+        values = np.asarray(outputs_known["knn_predicted_class_distance"], dtype=float)
+        result["knn_predicted_class_distance"] = stats(values)
+        if "labels" in outputs_known and "logits" in outputs_known:
+            labels = np.asarray(outputs_known["labels"], dtype=int)
+            predicted = np.asarray(outputs_known["logits"]).argmax(axis=1)
+            num_classes = int(np.asarray(outputs_known["logits"]).shape[1])
+            fallback = stats(values)
+            means = np.full(num_classes, fallback["mean"], dtype=float)
+            stds = np.full(num_classes, fallback["std"], dtype=float)
+            counts = np.zeros(num_classes, dtype=np.int64)
+            for class_index in range(num_classes):
+                class_values = values[(labels == class_index) & (predicted == class_index)]
+                counts[class_index] = len(class_values)
+                if len(class_values) >= 2:
+                    class_stats = stats(class_values)
+                    means[class_index] = class_stats["mean"]
+                    stds[class_index] = class_stats["std"]
+            result["knn_predicted_class_distance_classwise"] = {
+                "mean": means.tolist(),
+                "std": stds.tolist(),
+                "count": counts.tolist(),
+                "fallback_mean": fallback["mean"],
+                "fallback_std": fallback["std"],
+            }
+    if "knn_predicted_class_relative_distance" in outputs_known:
+            result["knn_predicted_class_relative_distance"] = stats(
+                outputs_known["knn_predicted_class_relative_distance"]
+            )
+    if "knn_predicted_class_support" in outputs_known:
+        result["knn_predicted_class_support"] = stats(
+            outputs_known["knn_predicted_class_support"]
+        )
     if "vim_residual" in outputs_known:
         result["vim_residual"] = stats(outputs_known["vim_residual"])
     if prototypes is not None:

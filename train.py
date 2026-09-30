@@ -12,7 +12,12 @@ from sklearn.cluster import KMeans
 # Keep downloaded torchvision weights inside the project by default.
 os.environ.setdefault("TORCH_HOME", str(Path.cwd() / ".torch_cache"))
 
-from novel_discovery.data import TwoViewDataset, build_data_bundle, build_outlier_dataset
+from novel_discovery.data import (
+    TwoViewDataset,
+    build_data_bundle,
+    build_outlier_dataset,
+    build_transforms,
+)
 from novel_discovery.joint_discovery import NovelPrototypeHead, combine_known_novel_logits
 from novel_discovery.metrics import compute_auroc
 from novel_discovery.models import build_model
@@ -24,6 +29,7 @@ from novel_discovery.pipeline import (
     calibrate_coverage_threshold,
     collect_diagonal_gaussian_stats,
     collect_prototypes,
+    collect_classwise_knn_support,
     fit_score_normalization,
     evaluate_classification,
     extract_outputs,
@@ -92,6 +98,14 @@ def parse_args(argv=None):
                 "initial max-pool. Disabled by default for historical compatibility."
             ),
         )
+        p.add_argument(
+            "--freeze-bn-stats",
+            action="store_true",
+            help=(
+                "Keep BatchNorm running statistics fixed during training while "
+                "still training BatchNorm affine parameters. Disabled by default."
+            ),
+        )
         p.add_argument("--download", action="store_true")
         p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
         p.add_argument("--work-dir", default="./runs")
@@ -99,6 +113,25 @@ def parse_args(argv=None):
         p.add_argument("--limit-val", type=int, default=0)
         p.add_argument("--limit-test", type=int, default=0)
         p.add_argument("--limit-discovery", type=int, default=0)
+        p.add_argument(
+            "--calibration-ratio",
+            type=float,
+            default=0.0,
+            help=(
+                "Reserve this fraction of the limited known validation set for "
+                "threshold calibration; the remainder is used for checkpoint selection. "
+                "Use the same value in training and discover commands."
+            ),
+        )
+        p.add_argument(
+            "--calibration-overlap-control",
+            action="store_true",
+            help=(
+                "Diagnostic only: keep the calibration subset the same size, "
+                "but sample it from the model-selection subset to measure the "
+                "effect of validation overlap. Do not use as a final protocol."
+            ),
+        )
         p.add_argument("--discovery-pool-mode", choices=["unknown", "mixed"], default="unknown")
         p.add_argument(
             "--rejector-pool-selection",
@@ -220,6 +253,12 @@ def parse_args(argv=None):
     p.add_argument("--alpha-feat-kd", type=float, default=0.0)
     p.add_argument("--kd-mode", choices=["standard", "uncertainty"], default="uncertainty")
     p.add_argument("--alpha-supcon", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-raw-supcon",
+        type=float,
+        default=0.0,
+        help="Additional supervised contrastive loss directly on backbone features.",
+    )
     p.add_argument("--alpha-proto", type=float, default=0.0)
     p.add_argument(
         "--alpha-proto-repulsion", type=float, default=0.0,
@@ -272,6 +311,21 @@ def parse_args(argv=None):
     p.add_argument("--uncertainty-target-mode", choices=["confidence", "classification_error", "margin"], default="confidence")
     p.add_argument("--temperature", type=float, default=2.0)
     p.add_argument("--uncertainty-weight-mode", choices=["raw", "mean_normalized"], default="raw")
+    p.add_argument(
+        "--kd-uncertainty-source",
+        choices=["head", "mc_epistemic", "mc_predictive_entropy"],
+        default="head",
+        help=(
+            "Uncertainty used to weight KD: the learned teacher head, or "
+            "MC-Dropout epistemic/predictive entropy."
+        ),
+    )
+    p.add_argument(
+        "--kd-mc-samples",
+        type=int,
+        default=4,
+        help="Number of stochastic teacher passes for MC uncertainty KD.",
+    )
     p.add_argument("--uncertainty-weight-min", type=float, default=None)
     p.add_argument("--uncertainty-weight-max", type=float, default=None)
     p.add_argument("--teacher-ckpt", default="./runs/teacher.pt")
@@ -338,10 +392,96 @@ def parse_args(argv=None):
         help="Temperature for the smooth maximum over known-feature similarities.",
     )
     p.add_argument(
+        "--discovery-feature-candidate-gating",
+        action="store_true",
+        help=(
+            "In mixed discovery pools, apply feature margin/separation/boundary "
+            "losses only to high-risk candidates selected by discovery-select-ratio/mode."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-boundary",
+        type=float,
+        default=0.0,
+        help="Weight a hybrid known-prototype/local-centroid boundary loss for pure-unknown discovery features.",
+    )
+    p.add_argument(
+        "--discovery-boundary-margin",
+        type=float,
+        default=0.2,
+        help="Maximum hybrid cosine similarity allowed for pure-unknown features.",
+    )
+    p.add_argument(
+        "--discovery-boundary-prototype-weight",
+        type=float,
+        default=0.5,
+        help="Weight of global classifier prototypes versus current known-batch centroids.",
+    )
+    p.add_argument(
+        "--discovery-boundary-temperature",
+        type=float,
+        default=0.1,
+        help="Temperature for the local-centroid smooth maximum.",
+    )
+    p.add_argument(
+        "--alpha-discovery-knn-boundary",
+        type=float,
+        default=0.0,
+        help="Weight a class-conditional kNN support-boundary loss for a pure-unknown discovery pool.",
+    )
+    p.add_argument(
+        "--discovery-knn-k",
+        type=int,
+        default=5,
+        help="Number of same-class neighbors used in support distances.",
+    )
+    p.add_argument(
+        "--discovery-knn-quantile",
+        type=float,
+        default=0.95,
+        help="Known-training leave-one-out distance quantile defining each class support radius.",
+    )
+    p.add_argument(
+        "--discovery-knn-margin",
+        type=float,
+        default=0.02,
+        help="Extra cosine-distance margin beyond each known-class support radius.",
+    )
+    p.add_argument(
+        "--discovery-knn-warmup-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Number of initial student epochs with the KNN support-boundary "
+            "loss disabled; useful when early features are unstable."
+        ),
+    )
+    p.add_argument(
+        "--discovery-knn-ramp-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Linearly ramp the KNN support-boundary loss after warm-up "
+            "instead of applying its full weight immediately."
+        ),
+    )
+    p.add_argument(
         "--alpha-discovery-uncertainty-separation",
         type=float,
         default=0.0,
         help="Train the uncertainty head to separate known samples from a pure-unknown discovery pool.",
+    )
+    p.add_argument(
+        "--alpha-discovery-uncertainty-pu",
+        type=float,
+        default=0.0,
+        help="Weight non-negative PU uncertainty training on known labels and a mixed unlabeled discovery pool.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-known-prior",
+        type=float,
+        default=0.2,
+        help="Assumed known proportion in the mixed discovery pool for PU uncertainty training.",
     )
     p.add_argument(
         "--discovery-uncertainty-loss",
@@ -766,6 +906,12 @@ def parse_args(argv=None):
             "react_energy",
             "knn_distance",
             "normalized_entropy_knn",
+            "predicted_class_knn_distance",
+            "normalized_entropy_predicted_class_knn",
+            "normalized_entropy_predicted_class_knn_global",
+            "normalized_entropy_relative_predicted_class_knn",
+            "normalized_entropy_knn_conflict",
+            "normalized_entropy_mahalanobis_knn",
             "gaussian_nll",
             "openmax",
             "reciprocal",
@@ -836,6 +982,7 @@ def parse_args(argv=None):
     p.add_argument("--knn-k", type=int, default=10, help="Number of known training neighbors for KNN-OOD.")
     p.add_argument("--knn-feature", choices=["features", "proj"], default="features", help="Embedding used by KNN-OOD: backbone feature or projection head.")
     p.add_argument("--knn-bank-size", type=int, default=0, help="Optional maximum known training vectors in the KNN bank; 0 uses all.")
+    p.add_argument("--knn-support-quantile", type=float, default=0.95, help="Known-training leave-one-out quantile used for classwise kNN support radii.")
     p.add_argument("--vim-ood", action="store_true", help="Enable VIM-style principal-subspace residual scoring.")
     p.add_argument("--vim-rank", type=int, default=64, help="Known feature principal-subspace rank for VIM-OOD.")
 
@@ -956,6 +1103,14 @@ def save_checkpoint(model, path, extra=None):
     torch.save(payload, path)
 
 
+def save_command_config(run_dir, command: str, config: dict) -> None:
+    """Keep the legacy config.json while preserving each command's arguments."""
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    save_json(run_dir / "config.json", config)
+    save_json(run_dir / f"{command}_config.json", config)
+
+
 def scheduled_weight(epoch: int, warmup_epochs: int = 0, ramp_epochs: int = 0) -> float:
     """Return a loss multiplier using epoch-indexed warmup and linear ramp."""
     warmup_epochs = max(int(warmup_epochs), 0)
@@ -966,6 +1121,21 @@ def scheduled_weight(epoch: int, warmup_epochs: int = 0, ramp_epochs: int = 0) -
     if ramp_epochs <= 0:
         return 1.0
     return min(1.0, max(0.0, (epoch_number - warmup_epochs) / ramp_epochs))
+
+
+def clone_dataset_with_eval_transform(dataset, image_size: int):
+    """Shallow-clone Subset wrappers and use deterministic transforms on base data."""
+    cloned = copy.copy(dataset)
+    if hasattr(dataset, "indices") and hasattr(dataset, "dataset"):
+        cloned.dataset = clone_dataset_with_eval_transform(dataset.dataset, image_size)
+        return cloned
+    if hasattr(dataset, "base"):
+        cloned.base = copy.copy(dataset.base)
+        cloned.base.transform = build_transforms(image_size, train=False)
+        return cloned
+    raise TypeError(
+        "kNN support-bank refresh requires a dataset wrapper exposing a base dataset"
+    )
 
 
 def _checkpoint_parts(path_arg: str):
@@ -1069,6 +1239,7 @@ def _score_needs_shared_mahalanobis(score_mode: str, auto_calibrate: bool = Fals
         "mahalanobis",
         "entropy_mahalanobis",
         "normalized_entropy_mahalanobis",
+        "normalized_entropy_mahalanobis_knn",
         "relative_mahalanobis",
         "normalized_entropy_relative_mahalanobis",
         "classwise_mahalanobis",
@@ -1152,6 +1323,8 @@ def fit_teacher(args):
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
+        calibration_ratio=args.calibration_ratio,
+        calibration_overlap_control=args.calibration_overlap_control,
         known_split_mode=args.known_split_mode,
         mixed_known_pool_ratio=args.mixed_known_pool_ratio,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
@@ -1198,6 +1371,7 @@ def fit_teacher(args):
             alpha_proxy_anchor=args.alpha_proxy_anchor,
             proxy_anchor_alpha=args.proxy_anchor_alpha,
             proxy_anchor_margin=args.proxy_anchor_margin,
+            freeze_bn_stats=args.freeze_bn_stats,
         )
         val_stats = evaluate_classification(model, val_loader, device)
         history.append({"epoch": epoch + 1, "train": stats, "validation": val_stats})
@@ -1209,7 +1383,11 @@ def fit_teacher(args):
     if best_state is not None:
         model.load_state_dict(best_state)
     run_dir = ensure_dir(args.work_dir)
-    save_json(run_dir / "config.json", {**vars(args), "best_epoch": best_epoch, "best_val_known_acc": best_acc})
+    save_command_config(
+        run_dir,
+        args.command,
+        {**vars(args), "best_epoch": best_epoch, "best_val_known_acc": best_acc},
+    )
     save_json(run_dir / "train_history.json", history)
     proto_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
     prototypes = collect_prototypes(model, proto_loader, device, len(bundle.known_classes)).cpu()
@@ -1290,6 +1468,7 @@ def fit_student(args):
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
+        calibration_ratio=args.calibration_ratio,
         known_split_mode=args.known_split_mode,
         mixed_known_pool_ratio=args.mixed_known_pool_ratio,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
@@ -1329,24 +1508,47 @@ def fit_student(args):
         or args.alpha_discovery_uniform > 0.0
         or args.alpha_discovery_feature_margin > 0.0
         or args.alpha_discovery_feature_separation > 0.0
+        or args.alpha_discovery_boundary > 0.0
+        or args.alpha_discovery_knn_boundary > 0.0
         or args.alpha_discovery_uncertainty_separation > 0.0
+        or args.alpha_discovery_uncertainty_pu > 0.0
         or args.alpha_discovery_selective_unknown > 0.0
         or args.alpha_discovery_selective_energy > 0.0
         or args.joint_discovery
     )
     if uses_discovery_regularizer and not args.discovery_pool:
         raise ValueError("Discovery regularizers require --discovery-pool.")
+    if args.alpha_discovery_uncertainty_pu > 0.0:
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "PU uncertainty training requires --discovery-pool-mode mixed; "
+                "it must not treat a pure unknown pool as unlabeled mixture."
+            )
+        if not 0.0 < args.discovery_uncertainty_known_prior < 1.0:
+            raise ValueError("--discovery-uncertainty-known-prior must be in (0, 1).")
     if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
         if args.discovery_pool_mode == "mixed" and (
             args.alpha_discovery_unknown > 0.0
             or args.alpha_discovery_energy > 0.0
             or args.alpha_discovery_uniform > 0.0
-            or args.alpha_discovery_feature_margin > 0.0
-            or args.alpha_discovery_feature_separation > 0.0
+            or (
+                (
+                    args.alpha_discovery_feature_margin > 0.0
+                    or args.alpha_discovery_feature_separation > 0.0
+                    or args.alpha_discovery_boundary > 0.0
+                )
+                and not args.discovery_feature_candidate_gating
+            )
+            or (
+                args.alpha_discovery_knn_boundary > 0.0
+                and not args.discovery_feature_candidate_gating
+            )
             or args.alpha_discovery_uncertainty_separation > 0.0
         ):
             raise ValueError(
-                "discovery unknown/energy/uniform/feature-margin/uncertainty-separation losses require --discovery-pool-mode unknown."
+                "full-pool discovery unknown/energy/feature-boundary losses require "
+                "--discovery-pool-mode unknown; use --discovery-feature-candidate-gating "
+                "for feature losses on a mixed pool."
             )
         discovery_loader = build_loader(
             TwoViewDataset(bundle.discovery_pool),
@@ -1372,6 +1574,20 @@ def fit_student(args):
         pretrained=args.pretrained,
         cifar_stem=args.cifar_stem,
     ).to(device)
+    knn_support_loader = None
+    if args.alpha_discovery_knn_boundary > 0.0:
+        if args.discovery_knn_k <= 0:
+            raise ValueError("--discovery-knn-k must be positive")
+        if not 0.5 <= args.discovery_knn_quantile < 1.0:
+            raise ValueError("--discovery-knn-quantile must be in [0.5, 1.0)")
+        if args.discovery_knn_margin < 0.0:
+            raise ValueError("--discovery-knn-margin must be non-negative")
+        deterministic_known_train = clone_dataset_with_eval_transform(
+            bundle.train, args.image_size
+        )
+        knn_support_loader = build_loader(
+            deterministic_known_train, args.batch_size, False, args.num_workers
+        )
     novel_head = None
     if args.joint_discovery:
         novel_head = NovelPrototypeHead(
@@ -1476,6 +1692,33 @@ def fit_student(args):
                 candidates_only=args.joint_prototype_init == "kmeans_candidates",
             )
             print(f"novel prototype KMeans init: {prototype_init_stats}")
+        discovery_knn_boundary_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.discovery_knn_warmup_epochs,
+            ramp_epochs=args.discovery_knn_ramp_epochs,
+        )
+        discovery_knn_support = None
+        if (
+            args.alpha_discovery_knn_boundary > 0.0
+            and discovery_knn_boundary_weight > 0.0
+        ):
+            discovery_knn_support = collect_classwise_knn_support(
+                student,
+                knn_support_loader,
+                device,
+                len(bundle.known_classes),
+                k=args.discovery_knn_k,
+                quantile=args.discovery_knn_quantile,
+            )
+            observed_radii = discovery_knn_support["radii"][
+                discovery_knn_support["counts"].to(device) > 0
+            ]
+            print(
+                "known kNN support bank: "
+                f"samples={int(discovery_knn_support['counts'].sum())}, "
+                f"classes={int((discovery_knn_support['counts'] > 0).sum())}, "
+                f"radius_median={observed_radii.median().item():.4f}"
+            )
         selective_weight = scheduled_weight(
             epoch,
             warmup_epochs=args.discovery_selective_warmup_epochs,
@@ -1501,6 +1744,7 @@ def fit_student(args):
             alpha_kd=args.alpha_kd,
             alpha_feat_kd=args.alpha_feat_kd,
             alpha_supcon=args.alpha_supcon,
+            alpha_raw_supcon=args.alpha_raw_supcon,
             alpha_proto=args.alpha_proto,
             alpha_proto_repulsion=args.alpha_proto_repulsion,
             proto_repulsion_margin=args.proto_repulsion_margin,
@@ -1518,6 +1762,8 @@ def fit_student(args):
             uncertainty_target_mode=args.uncertainty_target_mode,
             temperature=args.temperature,
             kd_mode=args.kd_mode,
+            kd_uncertainty_source=args.kd_uncertainty_source,
+            kd_mc_samples=args.kd_mc_samples,
             uncertainty_weight_mode=args.uncertainty_weight_mode,
             uncertainty_weight_min=args.uncertainty_weight_min,
             uncertainty_weight_max=args.uncertainty_weight_max,
@@ -1531,12 +1777,26 @@ def fit_student(args):
             alpha_discovery_feature_separation=args.alpha_discovery_feature_separation,
             discovery_feature_separation_margin=args.discovery_feature_separation_margin,
             discovery_feature_separation_temperature=args.discovery_feature_separation_temperature,
+            discovery_feature_candidate_gating=args.discovery_feature_candidate_gating,
+            discovery_pool_mode=args.discovery_pool_mode,
+            alpha_discovery_boundary=args.alpha_discovery_boundary,
+            discovery_boundary_margin=args.discovery_boundary_margin,
+            discovery_boundary_prototype_weight=args.discovery_boundary_prototype_weight,
+            discovery_boundary_temperature=args.discovery_boundary_temperature,
+            alpha_discovery_knn_boundary=(
+                args.alpha_discovery_knn_boundary * discovery_knn_boundary_weight
+            ),
+            discovery_knn_support=discovery_knn_support,
+            discovery_knn_k=args.discovery_knn_k,
+            discovery_knn_margin=args.discovery_knn_margin,
             alpha_discovery_uncertainty_separation=(
                 args.alpha_discovery_uncertainty_separation
                 * uncertainty_separation_weight
             ),
             discovery_uncertainty_loss=args.discovery_uncertainty_loss,
             discovery_uncertainty_margin=args.discovery_uncertainty_margin,
+            alpha_discovery_uncertainty_pu=args.alpha_discovery_uncertainty_pu,
+            discovery_uncertainty_known_prior=args.discovery_uncertainty_known_prior,
             alpha_discovery_selective_unknown=args.alpha_discovery_selective_unknown * selective_weight,
             alpha_discovery_selective_energy=args.alpha_discovery_selective_energy * selective_weight,
             discovery_select_ratio=args.discovery_select_ratio,
@@ -1611,10 +1871,12 @@ def fit_student(args):
             alpha_outlier_uncertainty=args.alpha_outlier_uncertainty,
             alpha_outlier_feature_margin=args.alpha_outlier_feature_margin,
             outlier_feature_margin=args.outlier_feature_margin,
+            freeze_bn_stats=args.freeze_bn_stats,
         )
         stats["discovery_selective_weight"] = selective_weight
         stats["uncertainty_separation_weight"] = uncertainty_separation_weight
         stats["discovery_uniform_weight"] = discovery_uniform_weight
+        stats["discovery_knn_boundary_weight"] = discovery_knn_boundary_weight
         if (
             args.alpha_vos > 0.0
             and args.vos_mode == "gaussian"
@@ -1641,8 +1903,9 @@ def fit_student(args):
     if reciprocal_points is not None and best_reciprocal_state is not None:
         reciprocal_points.data.copy_(best_reciprocal_state)
     run_dir = ensure_dir(args.work_dir)
-    save_json(
-        run_dir / "config.json",
+    save_command_config(
+        run_dir,
+        args.command,
         {
             **vars(args),
             "best_epoch": best_epoch,
@@ -1704,6 +1967,8 @@ def discover(args):
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
+        calibration_ratio=args.calibration_ratio,
+        calibration_overlap_control=args.calibration_overlap_control,
         known_split_mode=args.known_split_mode,
         mixed_known_pool_ratio=args.mixed_known_pool_ratio,
         open_val_ratio=args.open_val_ratio,
@@ -1711,7 +1976,8 @@ def discover(args):
     device = resolve_device(args.device)
     print(f"device: {device}")
     test_loader = build_loader(bundle.test, args.batch_size, False, args.num_workers)
-    val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
+    calibration_dataset = bundle.calibration if bundle.calibration is not None else bundle.val
+    val_loader = build_loader(calibration_dataset, args.batch_size, False, args.num_workers)
     model = build_model(
         len(bundle.known_classes),
         backbone=args.student_backbone or args.backbone,
@@ -1731,7 +1997,14 @@ def discover(args):
         print(f"react activation cap: percentile={args.react_percentile:.2f}, value={react_clip_value:.6f}")
     knn_bank = None
     if args.knn_ood:
-        train_feature_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        if not 0.5 <= args.knn_support_quantile < 1.0:
+            raise ValueError("--knn-support-quantile must be in [0.5, 1.0)")
+        deterministic_train = clone_dataset_with_eval_transform(
+            bundle.train, args.image_size
+        )
+        train_feature_loader = build_loader(
+            deterministic_train, args.batch_size, False, args.num_workers
+        )
         knn_bank = collect_knn_feature_bank(
             model,
             train_feature_loader,
@@ -1739,6 +2012,8 @@ def discover(args):
             max_samples=args.knn_bank_size,
             seed=args.seed,
             feature_key=args.knn_feature,
+            support_k=args.knn_k,
+            support_quantile=args.knn_support_quantile,
         )
         print(f"knn feature bank: {len(knn_bank['features'])} vectors, k={args.knn_k}")
     vim_stats = None
@@ -2052,6 +2327,15 @@ def discover(args):
         else {}
     )
     calibration_report = {
+        "validation_protocol": {
+            "checkpoint_selection_samples": int(len(bundle.val)),
+            "threshold_calibration_samples": int(len(calibration_dataset)),
+            "requested_calibration_ratio": float(args.calibration_ratio),
+            "uses_disjoint_calibration_subset": bool(
+                bundle.calibration is not None and not args.calibration_overlap_control
+            ),
+            "calibration_overlap_control": bool(args.calibration_overlap_control),
+        },
         "temperature": float(temperature),
         "temperature_enabled": bool(args.temperature_calibration),
         "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
@@ -2276,8 +2560,9 @@ def discover(args):
             policy_report.get("known_accept_rate", float("nan"))
         )
     run_dir = ensure_dir(args.work_dir)
-    save_json(
-        run_dir / "config.json",
+    save_command_config(
+        run_dir,
+        args.command,
         {
             **vars(args),
             "discovery_pool_semantics": (
@@ -2309,6 +2594,16 @@ def discover(args):
         "odin_msp": detail["odin_msp"].tolist(),
         "react_energy": detail["react_energy"].tolist(),
         "knn_distance": detail["knn_distance"].tolist(),
+        "knn_predicted_class_distance": detail.get(
+            "knn_predicted_class_distance", np.zeros_like(detail["knn_distance"])
+        ).tolist(),
+        "knn_predicted_class_relative_distance": detail.get(
+            "knn_predicted_class_relative_distance",
+            np.zeros_like(detail["knn_distance"]),
+        ).tolist(),
+        "knn_predicted_class_support": detail.get(
+            "knn_predicted_class_support", np.zeros_like(detail["knn_distance"])
+        ).tolist(),
         "vim_residual": detail["vim_residual"].tolist(),
         "pred_known": detail["pred_known"].astype(int).tolist(),
         "true_known": detail["true_known"].astype(int).tolist(),
@@ -2363,6 +2658,7 @@ def inspect_data(args):
         limit_test=args.limit_test or None,
         limit_discovery=args.limit_discovery or None,
         discovery_pool_mode=args.discovery_pool_mode,
+        calibration_ratio=args.calibration_ratio,
         known_split_mode=args.known_split_mode,
         mixed_known_pool_ratio=args.mixed_known_pool_ratio,
     )
@@ -2371,6 +2667,7 @@ def inspect_data(args):
     print("novel classes:", len(bundle.novel_classes))
     print("train size:", len(bundle.train))
     print("val size:", len(bundle.val))
+    print("calibration size:", len(bundle.calibration) if bundle.calibration is not None else 0)
     print("test size:", len(bundle.test))
     print("discovery pool size:", len(bundle.discovery_pool) if bundle.discovery_pool is not None else 0)
     print("first known classes:", list(bundle.known_classes)[: min(args.sample_count, len(bundle.known_classes))])

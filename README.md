@@ -127,13 +127,62 @@
 - 已实现统一 known+novel 空间并完成 smoke test。在 mixed discovery pool、2 epoch、60/40 划分下，`unified_novel_mass` 的 AUROC `0.5378`、FPR95 `0.9260`、unknown reject rate `0.0663`、candidate purity `0.4643`、candidate ARI `-0.0118`。相同思路在纯未知 pool 上 AUROC 仅 `0.4874`，说明统一空间更适合 mixed unlabeled pool；但 ARI 仍接近 0，prototype 尚未稳定对应真实新类，不能作为最终方法结论。
  - 新增 joint candidate gating，支持 EMA + consensus 的 hard gate 和 EMA + entropy/uncertainty 的 soft weighting。mixed pool、2 epoch 快速结果中，hard gate 为 AUROC `0.5180`、FPR95 `0.9293`、unknown reject `0.0255`、candidate purity `0.4000`；soft gate 为 AUROC `0.5157`、FPR95 `0.9424`、unknown reject `0.0816`、candidate purity `0.3902`。两者都没有超过无门控统一空间，说明当前风险分数与 novel structure 的对应关系仍弱，门控暂不作为主方法。
  - 在 consensus 基础上加入 EMA selection model 后，3 epoch 快速消融结果为 AUROC `0.5712`、FPR95 `0.8832`、known accuracy `0.2928`、unknown reject rate `0.0561`、candidate purity `0.5500`。它在 AUROC、FPR95 和候选池纯度上是当前 mixed discovery 相关实验中最好的，但 known accuracy 和 unknown reject rate 下降。
- - 后续参数搜索显示：`alpha=0.03, ratio=0.15, decay=0.99` 的 AUROC `0.5276`、candidate purity `0.3864`；`alpha=0.03, ratio=0.25, decay=0.99` 的 AUROC `0.5569`、candidate purity `0.3529`；`alpha=0.05, ratio=0.25, decay=0.95` 的 AUROC `0.5656`、FPR95 `0.8947`、candidate purity `0.4902`。因此简单降低 selective energy 权重或降低筛选比例没有解决问题，`decay=0.95` 有一定折中但不如原 EMA 0.99 的候选池纯度。
+- 后续参数搜索显示：`alpha=0.03, ratio=0.15, decay=0.99` 的 AUROC `0.5276`、candidate purity `0.3864`；`alpha=0.03, ratio=0.25, decay=0.99` 的 AUROC `0.5569`、candidate purity `0.3529`；`alpha=0.05, ratio=0.25, decay=0.95` 的 AUROC `0.5656`、FPR95 `0.8947`、candidate purity `0.4902`。因此简单降低 selective energy 权重或降低筛选比例没有解决问题，`decay=0.95` 有一定折中但不如原 EMA 0.99 的候选池纯度。
+
 - 候选池纯度大约为 `0.43–0.50`，说明候选池中混入了较多被误拒的已知样本。
  - 候选池纯度大约为 `0.35–0.55`，不同筛选策略波动较大，说明候选池仍会混入较多被误拒的已知样本，且参数选择对聚类前候选质量影响明显。
 - auto-K 在当前特征空间中可能估计为 `2`，而真实未知类别数为 `40`，说明自动类别数估计仍不可靠。
 - 已吸收 `lky` 分支中较有价值的诊断功能：ImageFolder 双目录支持、温度校准 / ECE、uncertainty-error correlation、真实未知 oracle 聚类诊断和多 run 均值方差汇总；未合并其中会删除 Energy / discovery-energy 的回退改动。
 
 这些结果只能作为阶段性实验记录，不能作为最终论文结论。正式结论应在固定协议下至少运行 3 个随机种子，并报告均值和标准差。
+
+## 2026-09-30 今日实验总结
+
+今天停止了新的完整训练，集中复核已有尝试，并用统一的 CIFAR-100 semantic-hard 60/40 协议检查哪些方向真正改变了表征，而不是只改变了阈值。除特别说明外，测试标签只用于最终描述性统计，没有用于训练、阈值选择或模型选择。详细原始记录见 `analysis/` 目录中的同名实验报告。
+
+### 今天尝试了什么
+
+| 方向 | 思路来源 | 主要结果 | 判断 |
+| --- | --- | --- | --- |
+| CIFAR-style ResNet stem、冻结 BatchNorm running statistics | CIFAR 小图像常用网络结构和 BN 稳定化思路 | CIFAR stem：AUROC `0.5153 -> 0.4879`；冻结 BN：AUROC `0.5153 -> 0.4836`，known accuracy 明显下降 | 无效，停止作为主线 |
+| 直接对 backbone feature 使用 SupCon | Khosla et al. 的 Supervised Contrastive Learning | AUROC `0.5669 -> 0.5011`，unknown rejection `6.27% -> 4.82%`，接受已知准确率下降 | 说明普通类内紧凑目标不能直接解决开放集重叠 |
+| MC-Dropout 认知不确定性蒸馏 | Gal and Ghahramani 的 MC Dropout；与已有 uncertainty-head KD 对比 | MC-epistemic 加权 KD 的 AUROC、OSCR 和接受已知准确率变差 | 保留为消融，不作为默认方法；当前不确定性 KD 尚未证明优于标准 KD |
+| mixed-pool nnPU 不确定性约束 | Kiryo et al. 的 nnPU 风险估计 | 单次试验 AUROC `0.5445 -> 0.5819`，但 calibrated unknown rejection 和 OSCR 没有稳定提升；干净三 seed 结果仍是混合 | 有排序信号，但没有解决工作点上的未知拒绝 |
+| Gaussian class-conditional NLL、kNN/预测类局部距离等检测分数 | Lee et al. 的 Mahalanobis/OOD 建模和局部 support 思路 | NLL AUROC `0.4785 -> 0.4911`；若干 kNN 组合改善 AUROC 或候选纯度，但 FPR95、known coverage 与 unknown rejection 不稳定 | 仅改变分数，不能替代表征学习；保留为对照 |
+| hybrid/local feature boundary、candidate-gated feature separation | ARPL/VOS 的类边界与异常特征动机；可靠候选后再施加表征约束 | seed 42、123、3407 的结果方向不完全一致；部分实验改善 AUROC/特征距离，但 unknown rejection 仍约 `4%–6%` | 有候选价值，暂不升为默认方法 |
+| full-data 与训练轮数检查 | 排除数据量不足和欠训练造成的假象 | 使用完整已知训练集比只用 1200 张更好；但 5 -> 10 epoch 的完整测试中，KNN AUROC `0.5732 -> 0.5641`，unknown rejection `0.1140 -> 0.0585`，Mahalanobis unknown rejection `0.0903 -> 0.0588` | 数据规模重要，单纯增加 epoch 无效 |
+| class-wise KNN support-boundary loss + warm-up/ramp | SCAN 的邻域一致性、局部 support 约束，以及半监督学习中先稳定表征再逐步使用伪标签的思想 | 三个 seed 的完整 10000 张测试均改善 AUROC/FPR95/OSCR；但 seed 45 的 unknown rejection 略降 | 目前最有希望的候选，但仍不是已解决方案 |
+
+### 当前最有价值的候选结果
+
+候选方法只相对 matched baseline 增加 `alpha_discovery_knn_boundary=0.1`、两轮 warm-up 和两轮线性 ramp，其余 teacher、student、数据划分、检测器、校准规则和测试集固定。完整测试结果如下：
+
+| Seed | AUROC baseline -> candidate | FPR95 baseline -> candidate | Known acceptance baseline -> candidate | Unknown rejection baseline -> candidate |
+| --- | --- | --- | --- | --- |
+| 43 | `0.5652 -> 0.5988` | `0.8910 -> 0.8570` | `0.9212 -> 0.9458` | `0.0875 -> 0.0918` |
+| 44 | `0.5584 -> 0.6016` | `0.8790 -> 0.8357` | `0.9483 -> 0.9510` | `0.0598 -> 0.0700` |
+| 45 | `0.5928 -> 0.6036` | `0.8672 -> 0.8480` | `0.9255 -> 0.9327` | `0.1058 -> 0.1020` |
+| mean | `0.5721 -> 0.6013` | `0.8791 -> 0.8469` | `0.9317 -> 0.9432` | `0.0844 -> 0.0879` |
+
+这组结果的可取之处是：改进不只来自重新调阈值。全测试表征诊断中，最近已知训练样本距离和分类器原型距离的 AUROC/重叠度在多数 seed 上向正确方向变化，说明 support-boundary loss 确实影响了特征空间。它仍然不能被表述为“解决了未知检测”：AUROC 只有约 `0.60`，特征直方图重叠仍约 `0.83–0.86`，且未知拒绝率在 seed 45 没有提升。
+
+### 今天的最终判断
+
+1. **已经排除的方向**：只换 stem、冻结 BN、直接把 SupCon 加到 backbone、单纯增加 epoch，以及只替换 ODIN/Mahalanobis/NLL/kNN 分数，都不能稳定解决已知/未知重叠。
+2. **有研究价值但不能夸大的方向**：nnPU、candidate-gated feature separation、纯未知 Energy、consensus/EMA 和局部 kNN 分数有局部信号，但跨 seed 或工作点指标不稳定；它们应继续作为消融或辅助机制。
+3. **当前首选候选**：KNN support-boundary loss 的 warm-up/ramp 版本。下一步应在固定第三方 split 或更多 seed 上复核，并优先检查其对已知类误拒、类别条件 support 半径和未知类别分布的影响，而不是继续调阈值。
+4. **项目状态**：代码框架、标准 KD、可选不确定性 KD、开放集检测、候选筛选和聚类流程均可运行；但“基于不确定性知识蒸馏的新类发现”仍是研究中的实验框架，不应把当前 KNN 边界候选误写成已经完成的最终算法。蒸馏和不确定性模块仍需在相同协议下做 CE / 标准 KD / uncertainty KD 的多 seed 消融，联合新类发现模块也还没有完成完整 UNO/SimGCD 式周期伪标签训练。
+
+本节对应的详细记录：
+
+- `analysis/knn_boundary_followup_s43_20260930.md`
+- `analysis/raw_feature_supcon_pilot_s42_20260930.md`
+- `analysis/mc_epistemic_kd_pilot_s42_20260930.md`
+- `analysis/mixed_pool_nnpu_uncertainty_pilot_s42_20260930.md`
+- `analysis/semantic_hard_gaussian_score_and_data_scale_20260930.md`
+- `analysis/stem_and_bn_representation_pilots_s42_20260930.md`
+- `analysis/candidate_feature_sep_recheck_s123_20260930.md`
+- `analysis/candidate_feature_sep_recheck_s3407_20260930.md`
 
 ## 主要问题与处理方向
 

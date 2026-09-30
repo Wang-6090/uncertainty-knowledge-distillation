@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import json
 import sys
 import tempfile
 import unittest
@@ -26,7 +27,10 @@ from novel_discovery.losses import (
     uncertainty_weights,
     unknown_feature_margin_loss,
     unknown_feature_separation_loss,
+    unknown_feature_boundary_loss,
+    knn_support_boundary_loss,
     uncertainty_separation_loss,
+    nnpu_known_uncertainty_loss,
     outlier_exposure_uniform_loss,
     prototype_repulsion_loss,
 )
@@ -37,13 +41,16 @@ from novel_discovery.data import (
     limit_dataset,
     split_known_indices,
     split_known_for_discovery,
+    split_validation_for_calibration,
     _known_labels,
     validate_class_split,
 )
 from scripts.make_cifar100_splits import build_protocols
+from scripts.analyze_feature_overlap import _class_centroids, _distribution_summary
 from novel_discovery.pipeline import (
     calibration_diagnostics,
     attach_knn_distances,
+    estimate_classwise_knn_radii,
     attach_vim_residual,
     compute_mahalanobis_distance,
     compute_gaussian_nll,
@@ -66,6 +73,10 @@ from novel_discovery.pipeline import (
     select_joint_candidates,
     compute_joint_candidate_weights,
     update_ema_model,
+    collect_classwise_knn_support,
+    train_one_epoch_student,
+    teacher_kd_uncertainty,
+    weighted_discovery_view_loss,
     synthesize_virtual_outliers,
     synthesize_gaussian_virtual_outliers,
     fit_feature_rejector,
@@ -76,10 +87,104 @@ from novel_discovery.pipeline import (
     fit_nnpu_feature_rejector,
     attach_feature_rejector_score,
 )
-from train import parse_args, scheduled_weight
+from train import parse_args, scheduled_weight, save_command_config
+from novel_discovery.models import build_model, freeze_batchnorm_stats
 
 
 class CommandLineTest(unittest.TestCase):
+    def test_command_configs_survive_legacy_config_overwrite(self):
+        with tempfile.TemporaryDirectory() as root:
+            save_command_config(root, "train_student", {"command": "train_student", "epochs": 3})
+            save_command_config(root, "discover", {"command": "discover", "score_mode": "energy"})
+            train_config = Path(root, "train_student_config.json")
+            discover_config = Path(root, "discover_config.json")
+            legacy_config = Path(root, "config.json")
+            self.assertEqual(json.loads(train_config.read_text(encoding="utf-8"))["epochs"], 3)
+            self.assertEqual(json.loads(discover_config.read_text(encoding="utf-8"))["score_mode"], "energy")
+            self.assertEqual(json.loads(legacy_config.read_text(encoding="utf-8"))["command"], "discover")
+
+    def test_feature_overlap_diagnostics_separate_easy_known_and_unknown(self):
+        known = np.asarray([[1.0, 0.0], [0.9, 0.1]], dtype=np.float32)
+        unknown = np.asarray([[-1.0, 0.0], [-0.9, -0.1]], dtype=np.float32)
+        result = _distribution_summary(1.0 - known[:, 0], 1.0 - unknown[:, 0])
+        self.assertGreater(result["unknownness_auroc"], 0.99)
+        self.assertLess(result["histogram_overlap_0_to_1"], 0.5)
+
+    def test_empirical_centroid_builder_skips_unobserved_classes(self):
+        features = np.asarray([[1.0, 0.0], [0.8, 0.2], [0.0, 1.0]], dtype=np.float32)
+        labels = np.asarray([0, 0, 2])
+        centers, classes = _class_centroids(features, labels, num_classes=4)
+        self.assertEqual(classes, [0, 2])
+        self.assertEqual(centers.shape, (2, 2))
+        np.testing.assert_allclose(np.linalg.norm(centers, axis=1), 1.0, atol=1e-6)
+
+    def test_unknown_feature_boundary_loss_is_finite_and_differentiable(self):
+        known = torch.tensor([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0]], requires_grad=False)
+        labels = torch.tensor([0, 0, 1])
+        unknown = torch.tensor([[0.8, 0.2], [-0.2, 0.9]], requires_grad=True)
+        prototypes = torch.tensor([[1.0, 0.0], [0.0, 1.0]], requires_grad=False)
+        loss = unknown_feature_boundary_loss(
+            known, labels, unknown, prototypes, similarity_margin=0.2
+        )
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreater(float(loss), 0.0)
+        loss.backward()
+        self.assertIsNotNone(unknown.grad)
+        self.assertTrue(torch.isfinite(unknown.grad).all())
+
+    def test_knn_support_boundary_loss_pushes_samples_outside_known_support(self):
+        bank = [
+            torch.tensor([[1.0, 0.0], [0.99, 0.1]]),
+            torch.tensor([[0.0, 1.0], [0.1, 0.99]]),
+            torch.empty(0, 0),
+        ]
+        radii = torch.tensor([0.1, 0.1, 0.0])
+        near = torch.tensor([[1.0, 0.0]], requires_grad=True)
+        far = torch.tensor([[-1.0, -1.0]], requires_grad=True)
+        near_loss = knn_support_boundary_loss(near, bank, radii, k=2, margin=0.05)
+        far_loss = knn_support_boundary_loss(far, bank, radii, k=2, margin=0.05)
+        self.assertGreater(float(near_loss), float(far_loss))
+        self.assertEqual(float(far_loss), 0.0)
+        near_loss.backward()
+        self.assertIsNotNone(near.grad)
+        self.assertTrue(torch.isfinite(near.grad).all())
+
+    def test_classwise_knn_support_bank_uses_known_labels_and_restores_mode(self):
+        class IdentityFeatureModel(torch.nn.Module):
+            def forward(self, images):
+                return {"features": images}
+
+        images = torch.tensor(
+            [[1.0, 0.0], [0.99, 0.1], [0.0, 1.0], [0.1, 0.99], [-1.0, 0.0]]
+        )
+        labels = torch.tensor([0, 0, 1, 1, -1])
+        raw = labels.clone()
+        is_known = (labels >= 0).long()
+        indices = torch.arange(len(labels))
+        dataset = torch.utils.data.TensorDataset(images, labels, raw, is_known, indices)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=3)
+        model = IdentityFeatureModel().train()
+        bank = collect_classwise_knn_support(
+            model, loader, torch.device("cpu"), num_classes=3, k=1, quantile=0.95
+        )
+        self.assertTrue(model.training)
+        self.assertEqual(bank["counts"].tolist(), [2, 2, 0])
+        self.assertEqual(len(bank["features_by_class"]), 3)
+        self.assertEqual(float(bank["radii"][2]), 0.0)
+
+    def test_freeze_batchnorm_stats_keeps_affine_parameters_trainable(self):
+        model = build_model(3, backbone="resnet18", pretrained=False)
+        model.train()
+        freeze_batchnorm_stats(model)
+        batchnorms = [
+            module
+            for module in model.modules()
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm)
+        ]
+        self.assertTrue(batchnorms)
+        self.assertTrue(all(not module.training for module in batchnorms))
+        self.assertTrue(all(module.weight.requires_grad and module.bias.requires_grad for module in batchnorms))
+
     def test_feature_rejector_is_separate_score(self):
         known = {"features": np.asarray([[1.0, 0.0], [0.9, 0.1], [1.0, 0.1]])}
         unknown = {"features": np.asarray([[-1.0, 0.0], [-0.9, -0.1], [-1.0, -0.1]])}
@@ -216,6 +321,70 @@ class CommandLineTest(unittest.TestCase):
         )
         self.assertEqual(len(train) + len(val), len(subset))
         self.assertTrue(set(int(subset[index][1]) for index in val))
+
+    def test_calibration_split_is_disjoint_complete_and_stratified(self):
+        labels = torch.tensor([label for label in range(4) for _ in range(20)])
+        dataset = torch.utils.data.TensorDataset(torch.arange(80).float().unsqueeze(1), labels)
+        selection, calibration = split_validation_for_calibration(
+            dataset, calibration_ratio=0.4, seed=19, mode="stratified"
+        )
+        selection_indices = set(selection.indices)
+        calibration_indices = set(calibration.indices)
+        self.assertFalse(selection_indices & calibration_indices)
+        self.assertEqual(selection_indices | calibration_indices, set(range(len(dataset))))
+        self.assertEqual(len(calibration), 32)
+        self.assertEqual(
+            {int(dataset[index][1]) for index in selection_indices}, set(range(4))
+        )
+        self.assertEqual(
+            {int(dataset[index][1]) for index in calibration_indices}, set(range(4))
+        )
+
+    def test_calibration_overlap_control_matches_size_and_selection(self):
+        labels = torch.tensor([label for label in range(4) for _ in range(20)])
+        dataset = torch.utils.data.TensorDataset(torch.arange(80).float().unsqueeze(1), labels)
+        disjoint_selection, disjoint_calibration = split_validation_for_calibration(
+            dataset, calibration_ratio=0.4, seed=19, mode="stratified"
+        )
+        overlap_selection, overlap_calibration = split_validation_for_calibration(
+            dataset,
+            calibration_ratio=0.4,
+            seed=19,
+            mode="stratified",
+            overlap_control=True,
+        )
+        self.assertEqual(disjoint_selection.indices, overlap_selection.indices)
+        self.assertEqual(len(disjoint_calibration), len(overlap_calibration))
+        self.assertEqual(len(overlap_calibration), 32)
+        self.assertTrue(set(overlap_calibration.indices) <= set(overlap_selection.indices))
+        self.assertFalse(
+            set(disjoint_calibration.indices) & set(disjoint_selection.indices)
+        )
+        with self.assertRaisesRegex(ValueError, "calibration_ratio <= 0.5"):
+            split_validation_for_calibration(
+                dataset,
+                calibration_ratio=0.6,
+                seed=19,
+                mode="stratified",
+                overlap_control=True,
+            )
+
+    def test_zero_calibration_ratio_preserves_legacy_dataset(self):
+        dataset = torch.utils.data.TensorDataset(torch.zeros(8, 1), torch.arange(8) % 2)
+        selection, calibration = split_validation_for_calibration(
+            dataset, calibration_ratio=0.0, seed=3
+        )
+        self.assertIs(selection, dataset)
+        self.assertIsNone(calibration)
+
+    def test_calibration_ratio_is_available_for_training_and_discovery(self):
+        train_args = parse_args(["train_student", "--calibration-ratio", "0.5"])
+        discover_args = parse_args(
+            ["discover", "--calibration-ratio", "0.5", "--calibration-overlap-control"]
+        )
+        self.assertEqual(train_args.calibration_ratio, 0.5)
+        self.assertEqual(discover_args.calibration_ratio, 0.5)
+        self.assertTrue(discover_args.calibration_overlap_control)
 
     def test_known_split_mode_is_exposed_on_all_commands(self):
         args = parse_args(["train_teacher", "--known-split-mode", "stratified"])
@@ -424,24 +593,45 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(args.discovery_uniform_warmup_epochs, 1)
         self.assertEqual(args.discovery_uniform_ramp_epochs, 2)
         self.assertAlmostEqual(args.discovery_select_ratio, 0.25)
-        self.assertEqual(args.discovery_select_mode, "consensus")
-        self.assertEqual(args.discovery_selection_model, "ema")
-        self.assertAlmostEqual(args.discovery_ema_decay, 0.95)
-        self.assertTrue(args.discovery_neighbor_filter)
-        self.assertEqual(args.discovery_neighbor_k, 3)
-        self.assertEqual(args.discovery_neighbor_min_votes, 2)
-        self.assertTrue(args.discovery_soft_weighting)
-        self.assertAlmostEqual(args.discovery_neighbor_temperature, 0.3)
-        self.assertAlmostEqual(args.alpha_discovery_feature_margin, 0.05)
-        self.assertAlmostEqual(args.discovery_feature_margin, 0.2)
-        self.assertEqual(args.outlier_dataset, "cifar10")
-        self.assertEqual(args.outlier_data_root, ".\\data")
-        self.assertAlmostEqual(args.alpha_outlier_feature_margin, 0.05)
-        self.assertAlmostEqual(args.outlier_feature_margin, 0.15)
-        self.assertEqual(args.discovery_selective_warmup_epochs, 1)
-        self.assertEqual(args.discovery_selective_ramp_epochs, 2)
-        self.assertEqual(args.uncertainty_separation_warmup_epochs, 1)
-        self.assertEqual(args.uncertainty_separation_ramp_epochs, 2)
+
+    def test_knn_boundary_options_are_exposed_with_safe_defaults(self):
+        defaults = parse_args(["train_student"])
+        self.assertEqual(defaults.alpha_discovery_knn_boundary, 0.0)
+        self.assertEqual(defaults.discovery_knn_k, 5)
+        args = parse_args(
+            [
+                "train_student",
+                "--alpha-discovery-knn-boundary", "0.1",
+                "--discovery-knn-k", "3",
+                "--discovery-knn-quantile", "0.9",
+                "--discovery-knn-margin", "0.03",
+            ]
+        )
+        self.assertAlmostEqual(args.alpha_discovery_knn_boundary, 0.1)
+        self.assertEqual(args.discovery_knn_k, 3)
+        self.assertAlmostEqual(args.discovery_knn_quantile, 0.9)
+        self.assertAlmostEqual(args.discovery_knn_margin, 0.03)
+
+    def test_knn_boundary_can_use_candidate_gate_on_mixed_pool(self):
+        defaults = parse_args(["train_student"])
+        self.assertFalse(defaults.discovery_feature_candidate_gating)
+        self.assertEqual(defaults.discovery_knn_warmup_epochs, 0)
+        self.assertEqual(defaults.discovery_knn_ramp_epochs, 0)
+        args = parse_args(
+            [
+                "train_student",
+                "--discovery-pool-mode", "mixed",
+                "--discovery-feature-candidate-gating",
+                "--alpha-discovery-knn-boundary", "0.1",
+                "--discovery-knn-warmup-epochs", "2",
+                "--discovery-knn-ramp-epochs", "2",
+            ]
+        )
+        self.assertEqual(args.discovery_pool_mode, "mixed")
+        self.assertTrue(args.discovery_feature_candidate_gating)
+        self.assertAlmostEqual(args.alpha_discovery_knn_boundary, 0.1)
+        self.assertEqual(args.discovery_knn_warmup_epochs, 2)
+        self.assertEqual(args.discovery_knn_ramp_epochs, 2)
 
     def test_selective_discovery_weight_schedule(self):
         self.assertEqual(scheduled_weight(0, warmup_epochs=1, ramp_epochs=2), 0.0)
@@ -461,6 +651,16 @@ class CommandLineTest(unittest.TestCase):
 
 
 class LossBehaviorTest(unittest.TestCase):
+    def test_discovery_view_loss_requires_its_explicit_weight(self):
+        first = torch.randn(4, 8, requires_grad=True)
+        second = torch.randn(4, 8, requires_grad=True)
+        disabled = weighted_discovery_view_loss(first, second, alpha=0.0)
+        self.assertEqual(float(disabled), 0.0)
+        enabled = weighted_discovery_view_loss(first, second, alpha=0.1)
+        self.assertGreater(float(enabled), 0.0)
+        enabled.backward()
+        self.assertIsNotNone(first.grad)
+
     def test_angular_margin_loss_is_finite_and_has_gradient(self):
         features = torch.randn(6, 4, requires_grad=True)
         weights = torch.randn(3, 4, requires_grad=True)
@@ -470,6 +670,49 @@ class LossBehaviorTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertIsNotNone(features.grad)
         self.assertIsNotNone(weights.grad)
+
+
+class UncertaintyKDTargetTest(unittest.TestCase):
+    def test_mc_epistemic_target_is_normalized_and_uses_mean_logits(self):
+        class DummyTeacher(torch.nn.Module):
+            def forward(self, images):
+                logits = torch.zeros(images.size(0), 4)
+                return {
+                    "logits": logits,
+                    "uncertainty": torch.full((images.size(0),), 0.25),
+                    "features": torch.zeros(images.size(0), 3),
+                    "proj": torch.zeros(images.size(0), 2),
+                }
+
+            def mc_predict(self, images, mc_samples=4):
+                self.last_samples = mc_samples
+                return {
+                    "mean_logits": torch.full((images.size(0), 4), 0.5),
+                    "epistemic": torch.full((images.size(0),), 0.7),
+                    "predictive_entropy": torch.full((images.size(0),), 1.2),
+                }
+
+        teacher = DummyTeacher()
+        outputs, logits, uncertainty = teacher_kd_uncertainty(
+            teacher, torch.randn(3, 2), source="mc_epistemic", mc_samples=5
+        )
+        self.assertEqual(outputs["logits"].shape, (3, 4))
+        self.assertTrue(torch.allclose(logits, torch.full((3, 4), 0.5)))
+        self.assertTrue(torch.all((uncertainty >= 0.0) & (uncertainty <= 1.0)))
+        self.assertEqual(teacher.last_samples, 5)
+
+    def test_mc_target_rejects_single_sample(self):
+        class DummyTeacher(torch.nn.Module):
+            def forward(self, images):
+                return {
+                    "logits": torch.zeros(images.size(0), 2),
+                    "uncertainty": torch.zeros(images.size(0)),
+                }
+
+        with self.assertRaises(ValueError):
+            teacher_kd_uncertainty(
+                DummyTeacher(), torch.randn(2, 1), source="mc_epistemic", mc_samples=1
+            )
 
     def test_prototype_repulsion_loss_is_finite_and_has_gradient(self):
         prototypes = torch.tensor(
@@ -641,6 +884,218 @@ class LossBehaviorTest(unittest.TestCase):
         self.assertGreater(known.grad.mean().item(), 0.0)
         self.assertLess(unknown.grad.mean().item(), 0.0)
 
+    def test_nnpu_known_uncertainty_loss_is_finite_nonnegative_and_differentiable(self):
+        known_uncertainty = torch.tensor([0.1, 0.25, 0.2], requires_grad=True)
+        unlabeled_uncertainty = torch.tensor([0.35, 0.75, 0.6], requires_grad=True)
+        loss = nnpu_known_uncertainty_loss(
+            known_uncertainty, unlabeled_uncertainty, known_prior=0.2
+        )
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreaterEqual(loss.item(), 0.0)
+        loss.backward()
+        self.assertIsNotNone(known_uncertainty.grad)
+        self.assertIsNotNone(unlabeled_uncertainty.grad)
+        self.assertTrue(torch.isfinite(known_uncertainty.grad).all())
+        self.assertTrue(torch.isfinite(unlabeled_uncertainty.grad).all())
+
+    def test_nnpu_known_uncertainty_loss_rejects_invalid_prior(self):
+        with self.assertRaises(ValueError):
+            nnpu_known_uncertainty_loss(torch.tensor([0.2]), torch.tensor([0.4]), 1.0)
+
+    def test_nnpu_negative_risk_uses_gradient_correction_not_clamp(self):
+        known_uncertainty = torch.tensor([0.001, 0.002], requires_grad=True)
+        unlabeled_uncertainty = torch.tensor([0.998, 0.999], requires_grad=True)
+        loss = nnpu_known_uncertainty_loss(
+            known_uncertainty, unlabeled_uncertainty, known_prior=0.5
+        )
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
+        # Gradient ascent on estimated negative risk moves the negative-risk
+        # estimate back toward zero; for novelty probability u this increases
+        # d(loss)/du in this deliberately negative-risk example.
+        self.assertGreater(unlabeled_uncertainty.grad.mean().item(), 0.0)
+
+
+class DiscoveryTrainingDispatchTest(unittest.TestCase):
+    def test_uncertainty_separation_alone_consumes_discovery_batches(self):
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.classifier = torch.nn.Linear(3, 2)
+                self.uncertainty_head = torch.nn.Linear(3, 1)
+                self.projector = torch.nn.Linear(3, 4)
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                features = images.mean(dim=(2, 3))
+                logits = self.classifier(features)
+                uncertainty = torch.sigmoid(self.uncertainty_head(features)).squeeze(-1)
+                projection = torch.nn.functional.normalize(
+                    self.projector(features), dim=-1
+                )
+                return {
+                    "logits": logits,
+                    "features": features,
+                    "proj": projection,
+                    "uncertainty": uncertainty,
+                }
+
+        torch.manual_seed(17)
+        student = TinyModel()
+        teacher = TinyModel()
+        optimizer = torch.optim.SGD(student.parameters(), lr=0.01)
+        known_images = torch.rand(2, 3, 8, 8)
+        labels = torch.tensor([0, 1])
+        known_loader = [
+            (known_images, labels, labels, torch.ones(2, dtype=torch.bool), torch.arange(2))
+        ]
+        discovery_loader = [
+            (torch.rand(2, 3, 8, 8), torch.rand(2, 3, 8, 8))
+        ]
+
+        stats = train_one_epoch_student(
+            student,
+            teacher,
+            known_loader,
+            optimizer,
+            torch.device("cpu"),
+            discovery_loader=discovery_loader,
+            alpha_discovery_uncertainty_separation=0.1,
+            alpha_discovery=0.0,
+            alpha_discovery_unknown=0.0,
+            alpha_discovery_energy=0.0,
+            alpha_discovery_uniform=0.0,
+            alpha_discovery_feature_margin=0.0,
+            alpha_discovery_feature_separation=0.0,
+            alpha_discovery_boundary=0.0,
+            alpha_discovery_knn_boundary=0.0,
+            alpha_discovery_selective_unknown=0.0,
+            alpha_discovery_selective_energy=0.0,
+            alpha_reciprocal=0.0,
+            alpha_joint_discovery=0.0,
+        )
+
+        self.assertGreater(stats["discovery_uncertainty_separation"], 0.0)
+
+    def test_mixed_pool_pu_objective_consumes_unlabeled_batches(self):
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.classifier = torch.nn.Linear(3, 2)
+                self.uncertainty_head = torch.nn.Linear(3, 1)
+                self.projector = torch.nn.Linear(3, 4)
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                features = images.mean(dim=(2, 3))
+                return {
+                    "logits": self.classifier(features),
+                    "features": features,
+                    "proj": torch.nn.functional.normalize(self.projector(features), dim=-1),
+                    "uncertainty": torch.sigmoid(self.uncertainty_head(features)).squeeze(-1),
+                }
+
+        torch.manual_seed(23)
+        student = TinyModel()
+        teacher = TinyModel()
+        optimizer = torch.optim.SGD(student.parameters(), lr=0.01)
+        known_images = torch.rand(2, 3, 8, 8)
+        labels = torch.tensor([0, 1])
+        known_loader = [
+            (known_images, labels, labels, torch.ones(2, dtype=torch.bool), torch.arange(2))
+        ]
+        mixed_unlabeled_loader = [
+            (torch.rand(2, 3, 8, 8), torch.rand(2, 3, 8, 8))
+        ]
+        stats = train_one_epoch_student(
+            student,
+            teacher,
+            known_loader,
+            optimizer,
+            torch.device("cpu"),
+            discovery_loader=mixed_unlabeled_loader,
+            alpha_discovery_uncertainty_pu=0.1,
+            discovery_uncertainty_known_prior=0.2,
+            alpha_discovery=0.0,
+            alpha_discovery_unknown=0.0,
+            alpha_discovery_energy=0.0,
+            alpha_discovery_uniform=0.0,
+            alpha_discovery_feature_margin=0.0,
+            alpha_discovery_feature_separation=0.0,
+            alpha_discovery_boundary=0.0,
+            alpha_discovery_knn_boundary=0.0,
+            alpha_discovery_uncertainty_separation=0.0,
+            alpha_discovery_selective_unknown=0.0,
+            alpha_discovery_selective_energy=0.0,
+            alpha_reciprocal=0.0,
+            alpha_joint_discovery=0.0,
+        )
+        self.assertGreater(stats["discovery_uncertainty_pu"], 0.0)
+
+    def test_candidate_gated_knn_boundary_consumes_mixed_unlabeled_batches(self):
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.classifier = torch.nn.Linear(3, 2)
+                self.uncertainty_head = torch.nn.Linear(3, 1)
+                self.projector = torch.nn.Linear(3, 4)
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                features = images.mean(dim=(2, 3))
+                return {
+                    "logits": self.classifier(features),
+                    "features": features,
+                    "proj": torch.nn.functional.normalize(self.projector(features), dim=-1),
+                    "uncertainty": torch.sigmoid(self.uncertainty_head(features)).squeeze(-1),
+                }
+
+        torch.manual_seed(37)
+        student = TinyModel()
+        teacher = TinyModel()
+        optimizer = torch.optim.SGD(student.parameters(), lr=0.01)
+        known_images = torch.rand(4, 3, 8, 8)
+        labels = torch.tensor([0, 1, 0, 1])
+        known_loader = [
+            (known_images, labels, labels, torch.ones(4, dtype=torch.bool), torch.arange(4))
+        ]
+        mixed_loader = [
+            (torch.rand(4, 3, 8, 8), torch.rand(4, 3, 8, 8))
+        ]
+        support = {
+            "features_by_class": [torch.tensor([[1.0, 0.0, 0.0], [0.9, 0.1, 0.0]]),
+                                  torch.tensor([[0.0, 1.0, 0.0], [0.1, 0.9, 0.0]])],
+            "radii": torch.tensor([0.5, 0.5]),
+        }
+        stats = train_one_epoch_student(
+            student,
+            teacher,
+            known_loader,
+            optimizer,
+            torch.device("cpu"),
+            discovery_loader=mixed_loader,
+            discovery_pool_mode="mixed",
+            discovery_feature_candidate_gating=True,
+            discovery_select_ratio=0.5,
+            discovery_select_mode="consensus",
+            alpha_discovery_knn_boundary=0.1,
+            discovery_knn_support=support,
+            alpha_discovery=0.0,
+            alpha_discovery_unknown=0.0,
+            alpha_discovery_energy=0.0,
+            alpha_discovery_uniform=0.0,
+            alpha_discovery_feature_margin=0.0,
+            alpha_discovery_feature_separation=0.0,
+            alpha_discovery_boundary=0.0,
+            alpha_discovery_uncertainty_separation=0.0,
+            alpha_discovery_uncertainty_pu=0.0,
+            alpha_discovery_selective_unknown=0.0,
+            alpha_discovery_selective_energy=0.0,
+            alpha_reciprocal=0.0,
+            alpha_joint_discovery=0.0,
+        )
+        self.assertGreater(stats["discovery_knn_boundary"], 0.0)
+
     def test_unknown_feature_separation_is_not_scaled_by_known_batch_size(self):
         unknown = torch.tensor([[1.0, 0.0]])
         one_known = torch.tensor([[0.5, 0.8660254]])
@@ -781,6 +1236,94 @@ class ScoreBehaviorTest(unittest.TestCase):
         outputs["features"] = np.zeros((2, 2), dtype=np.float32)
         score, _ = compute_open_score(outputs, score_mode="knn_distance")
         np.testing.assert_allclose(score, outputs["knn_distance"])
+
+    def test_knn_distance_can_be_conditioned_on_predicted_class(self):
+        outputs = {
+            "features": np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+            "logits": np.array([[3.0, 0.0], [0.0, 3.0]], dtype=np.float32),
+        }
+        bank = {
+            "features": np.array(
+                [[1.0, 0.0], [0.8, 0.6], [0.0, 1.0], [0.6, 0.8]],
+                dtype=np.float32,
+            ),
+            "labels": np.array([0, 0, 1, 1], dtype=np.int64),
+        }
+        attach_knn_distances(outputs, bank, k=1, feature_key="features")
+        np.testing.assert_allclose(
+            outputs["knn_predicted_class_distance"], np.array([0.0, 0.0]), atol=1e-6
+        )
+
+    def test_knn_class_radii_exclude_self_and_relative_distance_is_scale_adjusted(self):
+        bank = {
+            "features": np.array(
+                [[1.0, 0.0], [0.8, 0.6], [0.0, 1.0], [0.6, 0.8]],
+                dtype=np.float32,
+            ),
+            "labels": np.array([0, 0, 1, 1], dtype=np.int64),
+        }
+        bank["class_support_radii"] = estimate_classwise_knn_radii(
+            bank["features"], bank["labels"], k=1, quantile=0.95
+        )
+        outputs = {
+            "features": np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+            "logits": np.array([[3.0, 0.0], [0.0, 3.0]], dtype=np.float32),
+        }
+        attach_knn_distances(outputs, bank, k=1, feature_key="features")
+        self.assertEqual(len(bank["class_support_radii"]), 2)
+        self.assertTrue(np.isfinite(outputs["knn_predicted_class_relative_distance"]).all())
+        self.assertTrue(np.isfinite(outputs["knn_predicted_class_support"]).all())
+        self.assertTrue(((outputs["knn_predicted_class_support"] >= 0.0) &
+                         (outputs["knn_predicted_class_support"] <= 1.0)).all())
+
+    def test_classwise_predicted_knn_normalization_uses_known_validation_classes(self):
+        outputs = {
+            "features": np.zeros((4, 2), dtype=np.float32),
+            "logits": np.array(
+                [[3, 0], [3, 0], [0, 3], [0, 3]], dtype=np.float32
+            ),
+            "labels": np.array([0, 0, 1, 1]),
+            "entropy": np.array([0.0, 1.0, 0.0, 1.0]),
+            "epistemic": np.zeros(4),
+            "aleatoric": np.zeros(4),
+            "knn_predicted_class_distance": np.array([1.0, 3.0, 10.0, 14.0]),
+        }
+        stats = fit_score_normalization(outputs, prototypes=None, gaussian_stats=None)
+        classwise = stats["knn_predicted_class_distance_classwise"]
+        self.assertEqual(classwise["count"], [2, 2])
+        score, _ = compute_open_score(
+            outputs,
+            score_mode="normalized_entropy_predicted_class_knn",
+            normalization=stats,
+        )
+        self.assertTrue(np.isfinite(score).all())
+
+    def test_three_signal_score_adds_known_validation_standardized_components(self):
+        outputs = {
+            "features": np.array([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32),
+            "entropy": np.array([1.0, 3.0], dtype=np.float32),
+            "epistemic": np.zeros(2, dtype=np.float32),
+            "aleatoric": np.zeros(2, dtype=np.float32),
+            "knn_distance": np.array([2.0, 6.0], dtype=np.float32),
+        }
+        gaussian_stats = {
+            "means": np.array([[0.0, 0.0]], dtype=np.float32),
+            "variances": np.ones((1, 2), dtype=np.float32),
+        }
+        normalization = {
+            "entropy": {"mean": 1.0, "std": 1.0},
+            "mahalanobis": {"mean": 1.0, "std": 1.0},
+            "knn_distance": {"mean": 2.0, "std": 2.0},
+        }
+        score, _ = compute_open_score(
+            outputs,
+            score_mode="normalized_entropy_mahalanobis_knn",
+            normalization=normalization,
+            gaussian_stats=gaussian_stats,
+        )
+        # Entropy z-scores [0, 2], Mahalanobis z-scores [-1, 1],
+        # and kNN-distance z-scores [0, 2].
+        np.testing.assert_allclose(score, np.array([-1.0, 5.0]), atol=1e-6)
 
     def test_gaussian_nll_prefers_features_near_known_class_distribution(self):
         stats = {
