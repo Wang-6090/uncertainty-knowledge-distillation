@@ -1801,3 +1801,60 @@ unknown rejection 为 `16.71% -> 8.86%`。
 `analysis/candidate_selector_teacher_vs_student_s42_20261001.md`、
 `analysis/candidate_selector_teacher_vs_student_two_seed_20261001.md`、
 `analysis/openmax_fixed_checkpoint_recheck_s42_20261001.md`。
+
+## 2026-10-01：轻量整体审计与下一步重点
+
+在继续增加算法之前，对当前程序、实验协议和已有结果做了一轮轻量审计。审计原则是：
+“代码里有开关”不等于“方法已经有效”，单个指标变化也不能代替 matched known
+coverage 和多 seed 对照。
+
+### 当前可以确认的内容
+
+1. 三 seed full-data 实验支持 `nnPU` 是目前最可靠的 mixed-pool 改进：AUROC、FPR95、
+   OSCR、known acceptance 和 accepted-known accuracy 均同方向改善。但平均 unknown
+   rejection 仍只有 `10.44%`，所以它改善的是不确定性排序和工作点，不是完整的已知/未知
+   特征分离。
+2. `normalized_entropy_min_class_knn` 和 `feature_pca` 分别改善了检测排序和聚类表示，
+   但二者都不能单独解决特征重叠。
+3. frozen teacher selector 对候选聚类有局部价值，但两 seed 的 AUROC 和未知拒绝率不
+   稳定，继续作为消融，不进入默认主流程。
+4. OpenMax、Angular、memory bank、各种 candidate-only boundary loss 没有形成稳定的
+   matched 工作点收益，暂不继续叠加。
+
+### 当前最核心的四个问题
+
+1. **已知表征和分类能力仍不足。** 当前最强 full-data nnPU 结果中，accepted-known
+   accuracy 约为 `50%`。这说明很多被接受为已知的样本仍然分类错误；在已知支持没有建好
+   之前，未知检测也很难可靠。
+2. **mixed pool 的未知伪标签仍然会污染。** 现有 joint 代码有 novel-only、unified、
+   residual、novel-mass、candidate gating 和 memory-bank 等选项，但还不是完整的
+   UNO/SimGCD 训练协议；novel 权重和 Sinkhorn 分配仍可能依赖同一个正在变化的学生模型。
+3. **原型和伪标签缺少稳定的全局更新。** 当前 KMeans 初始化主要是一次性的，批内邻域和
+   evolving head 可能造成原型漂移、类别空置和伪标签不稳定。
+4. **数据协议需要分层验证。** random 60/40 是当前主协议，semantic-hard 和
+   semantic-isolated 只能作为不同协议分别报告，不能混合比较或用单一 split 宣称泛化。
+
+### 重新确定的下一步重点
+
+下一步只优先做“表征学习和 mixed-pool GCD 目标”，暂时停止继续寻找新的 post-hoc
+检测分数。目标是形成如下可审计的单因素实验：
+
+- known head 只用已知标签训练；
+- novel prototype head 与 known head 解耦，不把所有样本强行放进同一个平衡 Softmax；
+- 用 EMA 或冻结 teacher 产生伪标签目标；
+- 周期性刷新 novel prototypes / 伪标签；
+- 同时记录 prototype occupancy、伪标签跨 epoch 稳定性、候选纯度、accepted-known
+  accuracy、AUROC、FPR95、OSCR 和 matched unknown rejection。
+
+本轮新增的 `--joint-prototype-refresh-epochs` 是这个方向的最小实现，默认关闭。toy
+smoke 已确认它会按计划执行，但目前没有 CIFAR 性能证据，不能宣称有效。
+
+### 下一轮实验判定标准
+
+先在相同 CIFAR split、teacher、训练数据量、epoch、检测器和阈值协议下，对比“一次性
+KMeans 初始化”和“周期性 prototype refresh”。只有同时改善至少一个排序指标和一个
+matched 工作点指标，且 accepted-known accuracy 没有明显下降，才保留该方向；如果只
+改变 loss 或候选数量，就判定为无效。若失败，则停止继续堆叠 prototype/memory 变体，
+转向完整、文献对齐的 UNO/SimGCD 式 mixed-pool GCD 目标。
+
+详细审计见 `analysis/lightweight_project_audit_20261001.md`。

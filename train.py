@@ -675,6 +675,15 @@ def parse_args(argv=None):
         help="Known-only warmup epochs before KMeans prototype initialization and joint loss.",
     )
     p.add_argument(
+        "--joint-prototype-refresh-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Refresh KMeans novel prototypes from the current unlabeled discovery "
+            "features every N epochs after warm-up; 0 disables periodic refresh."
+        ),
+    )
+    p.add_argument(
         "--joint-space",
         choices=["novel", "unified"],
         default="novel",
@@ -1813,12 +1822,11 @@ def fit_student(args):
     joint_memory_bank = {}
     prototype_init_stats = None
     prototype_warmup = max(int(args.joint_prototype_warmup_epochs), 0)
-    if (
-        novel_head is not None
-        and args.joint_prototype_init in {"kmeans", "kmeans_candidates"}
-        and prototype_warmup == 0
-    ):
-        prototype_init_stats = initialize_novel_head_kmeans(
+    prototype_refresh_epochs = max(int(args.joint_prototype_refresh_epochs), 0)
+    prototype_refresh_history = []
+
+    def refresh_novel_prototypes(epoch: int, reason: str):
+        stats = initialize_novel_head_kmeans(
             novel_head,
             student,
             discovery_loader,
@@ -1828,25 +1836,36 @@ def fit_student(args):
             candidate_ratio=args.joint_prototype_candidate_ratio,
             candidates_only=args.joint_prototype_init == "kmeans_candidates",
         )
-        print(f"novel prototype KMeans init: {prototype_init_stats}")
+        event = {"epoch": int(epoch), "reason": reason, **stats}
+        prototype_refresh_history.append(event)
+        print(f"novel prototype KMeans refresh: {event}")
+        return stats
+
+    if (
+        novel_head is not None
+        and args.joint_prototype_init in {"kmeans", "kmeans_candidates"}
+        and prototype_warmup == 0
+    ):
+        prototype_init_stats = refresh_novel_prototypes(0, "initial")
     for epoch in range(args.epochs):
         if (
             novel_head is not None
             and args.joint_prototype_init in {"kmeans", "kmeans_candidates"}
-            and epoch == prototype_warmup
-            and prototype_warmup > 0
-        ):
-            prototype_init_stats = initialize_novel_head_kmeans(
-                novel_head,
-                student,
-                discovery_loader,
-                device,
-                args.joint_num_novel,
-                args.seed,
-                candidate_ratio=args.joint_prototype_candidate_ratio,
-                candidates_only=args.joint_prototype_init == "kmeans_candidates",
+            and (
+                (
+                    prototype_warmup > 0
+                    and epoch == prototype_warmup
+                )
+                or (
+                    prototype_refresh_epochs > 0
+                    and epoch > 0
+                    and epoch >= prototype_warmup
+                    and (epoch - prototype_warmup) % prototype_refresh_epochs == 0
+                )
             )
-            print(f"novel prototype KMeans init: {prototype_init_stats}")
+        ):
+            reason = "warmup" if epoch == prototype_warmup and prototype_warmup > 0 else "periodic"
+            prototype_init_stats = refresh_novel_prototypes(epoch + 1, reason)
         discovery_knn_boundary_weight = scheduled_weight(
             epoch,
             warmup_epochs=args.discovery_knn_warmup_epochs,
@@ -2065,7 +2084,16 @@ def fit_student(args):
         ):
             vos_gaussian_stats = refresh_vos_gaussian_stats()
         val_stats = evaluate_classification(student, val_loader, device)
-        history.append({"epoch": epoch + 1, "train": stats, "validation": val_stats})
+        history.append({
+            "epoch": epoch + 1,
+            "train": stats,
+            "validation": val_stats,
+            "prototype_refresh": (
+                prototype_refresh_history[-1]
+                if prototype_refresh_history and prototype_refresh_history[-1]["epoch"] == epoch + 1
+                else None
+            ),
+        })
         print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
         if val_stats["known_acc"] > best_acc:
             best_acc = val_stats["known_acc"]
@@ -2092,6 +2120,7 @@ def fit_student(args):
             "best_epoch": best_epoch,
             "best_val_known_acc": best_acc,
             "prototype_init_stats": prototype_init_stats,
+            "prototype_refresh_history": prototype_refresh_history,
             "discovery_pool_semantics": (
                 "oracle_filtered_novel_only (training class labels select the pool)"
                 if args.discovery_pool_mode == "unknown"

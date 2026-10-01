@@ -117,6 +117,20 @@ class CommandLineTest(unittest.TestCase):
         )
         self.assertEqual(args.discovery_selection_model, "teacher")
 
+    def test_joint_prototype_refresh_is_opt_in(self):
+        args = parse_args(["train_student", "--dataset", "toy"])
+        self.assertEqual(args.joint_prototype_refresh_epochs, 0)
+        args = parse_args(
+            [
+                "train_student",
+                "--dataset",
+                "toy",
+                "--joint-prototype-refresh-epochs",
+                "2",
+            ]
+        )
+        self.assertEqual(args.joint_prototype_refresh_epochs, 2)
+
     def test_feature_overlap_diagnostics_separate_easy_known_and_unknown(self):
         known = np.asarray([[1.0, 0.0], [0.9, 0.1]], dtype=np.float32)
         unknown = np.asarray([[-1.0, 0.0], [-0.9, -0.1]], dtype=np.float32)
