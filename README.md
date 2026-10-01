@@ -186,6 +186,68 @@
 
 ## 主要问题与处理方向
 
+### 2026-10-01：KNN support-boundary 连续权重尝试
+
+为处理 mixed discovery pool 中候选污染的问题，新增可选参数
+`--discovery-knn-soft-weighting`。它参考 FixMatch 的置信度加权、Mean
+Teacher 的稳定模型和 SCAN 的邻域一致性，只对已经通过候选门控的样本按风险、邻域一致性和 EMA/student 一致性连续加权；默认关闭，旧实验不受影响。
+
+在 CIFAR-100 semantic-hard 60/40、seed=43、完整 10000 张测试和与现有
+hard KNN warm-up/ramp 完全相同的协议下，soft 版本结果为：AUROC `0.5991`、
+FPR95 `0.8582`、OSCR `0.3351`、known acceptance `0.9385`、unknown rejection
+`0.0938`。hard 版本为 `0.5988 / 0.8570 / 0.3308 / 0.9458 / 0.0918`。
+
+特征诊断显示，soft 版本的 classifier-prototype 距离 AUROC/重叠从
+`0.5956/0.8555` 改善到 `0.6105/0.8187`，但最近已知训练样本距离从
+`0.5990/0.8482` 变为 `0.5940/0.8490`，最终检测 AUROC 几乎不变。因此它只
+改善了部分全局原型几何，未解决局部 support overlap；当前保留为可选消融，
+不设为默认主方法。详细记录见
+`analysis/knn_boundary_soft_weighting_pilot_s43_20261001.md`。
+
+### 2026-10-01：所有已知类局部 support 的 kNN 检测对照
+
+此前 `predicted_class_knn_distance` 只计算模型预测类别内的 kNN 距离；当未知样本被
+高置信度错分到某个已知类时，可能漏掉它在另一个已知类 support 附近的情况。本轮新增
+所有已知类别逐类计算 kNN 距离、再取最小值的检测信号：`normalized_entropy_min_class_knn`。
+它只改变检测评分，不改变学生 checkpoint、数据划分、训练损失或阈值校准协议。
+
+在 seed=43/44 的 CIFAR-100 semantic-hard 60/40、完整测试集、MC=4、95% known coverage
+协议下，旧预测类 kNN 到新方法的结果如下：
+
+| seed | AUROC | FPR95 | OSCR | known acceptance | unknown rejection | accepted-known accuracy |
+|---:|---:|---:|---:|---:|---:|---:|
+| 43 | 0.5991 -> **0.6042** | 0.8582 -> **0.8560** | 0.3351 -> **0.3405** | 0.9385 -> 0.9070 | 0.0938 -> **0.1468** | 0.4729 -> **0.4859** |
+| 44 | 0.6016 -> **0.6061** | 0.8357 -> **0.8315** | 0.3475 -> **0.3528** | 0.9510 -> 0.9418 | 0.0700 -> **0.0878** | 0.4791 -> **0.4843** |
+
+两个 seed 的排序指标和未知拒绝率方向一致改善，说明“只看预测类 support”确实可能造成漏检；
+但提升幅度有限，seed=43 的工作点改善部分受到验证集阈值尺度变化影响，不能认为核心问题已经解决。
+该方法目前作为可选评分器保留，并在 `--knn-ood` 时进入自动评分候选，不替换默认评分器。详细记录见
+`analysis/min_class_knn_support_score_pilot_20261001.md`。后续重点应回到训练阶段的已知/未知表征分离
+或专门开放集检测头，而不是继续堆叠检测后处理分数。
+
+### 2026-10-01：联合新类发现权重稳定化尝试
+
+针对 mixed discovery pool 中 novel prototype 权重快速衰减和自举错误的问题，本轮比较了
+四种训练权重：原始 `joint_novel_mass`、增加 `--joint-novel-weight-floor 0.05`、使用
+EMA 模型计算 novel mass，以及只使用已知分类 residual `1-max softmax(known logits)`。
+floor 参数和日志 `joint_novel_weight_min` 已加入代码，但默认值仍为 `0`，不会改变历史配置。
+
+实验固定为 CIFAR-100 semantic-hard 60/40、seed=43、预训练 ResNet-34/ResNet-18、1200/300/1200/1000
+样本、2 epoch、mixed pool、相同 `unified_novel_mass` 检测和 95% known coverage 校准：
+
+| 方法 | AUROC | FPR95 | OSCR | known acceptance | unknown rejection | accepted-known accuracy |
+|---|---:|---:|---:|---:|---:|---:|
+| novel mass, floor=0 | 0.5503 | 0.8976 | 0.1733 | 0.9480 | 0.0727 | 0.2521 |
+| novel mass, floor=0.05 | 0.5258 | 0.8927 | 0.1729 | 0.9642 | 0.0156 | 0.2513 |
+| EMA novel mass | 0.5439 | 0.9138 | 0.1658 | 0.9528 | 0.0857 | 0.2423 |
+| known residual | **0.5700** | 0.9122 | 0.1642 | 0.9659 | 0.0416 | 0.2306 |
+
+floor 方案明确无效：虽然保证了 novel 学习路径，却把 mixed pool 中的已知噪声也持续送入 novel 头。
+EMA 只改善未知拒绝率，整体排序和已知分类下降；residual 提高 AUROC，但 FPR95、OSCR 和未知拒绝率变差。
+因此这三种权重都不进入默认主方法，也不再继续调节权重公式。详细记录见
+`analysis/joint_weight_stability_pilot_20261001.md`。下一步应停止叠加 novel 权重变体，转向显式的
+known-vs-unknown 表征或拒绝头，并把未知检测和新类聚类分开验证。
+
 ### 1. 未知检测能力不足
 
 原因可能包括已知分类准确率不足、已知与未知分数分布重叠、不确定性没有校准、特征空间类间分离不足以及阈值策略较简单。
@@ -726,6 +788,46 @@ python aggregate_multiseed.py --root .\runs `
 - Added `--skip-clustering` for detection-only experiments. It avoids running KMeans and clustering diagnostics when the goal is only AUROC/FPR95 comparison.
 - Fixed an efficiency bug: non-Mahalanobis scores no longer compute the high-dimensional Mahalanobis distance, and classwise novel-mass calibration no longer fits unnecessary Mahalanobis statistics.
 - The current priority remains improving unknown-class feature structure and clustering, followed by 3-seed ablation experiments.
+
+## Objectosphere 严格复核更新（2026-10-01）
+
+- 已完成 seed=42 和 seed=123 的严格一因素对照：CIFAR-100 随机 60/40、完整数据、预训练 ResNet-34/18、5 epoch、纯未知 discovery pool、相同检测器和 95% known coverage 阈值；唯一变量是 `alpha_discovery_objectosphere=0` 或 `0.01`。
+- seed=42：AUROC `0.6108 -> 0.6283`，FPR95 `0.8540 -> 0.8343`，OSCR `0.2845 -> 0.3306`，unknown rejection `7.48% -> 7.98%`。
+- seed=123：AUROC `0.6065 -> 0.6245`，FPR95 `0.8598 -> 0.8268`，OSCR `0.2950 -> 0.3563`，unknown rejection `8.43% -> 9.18%`，接收后 known 分类准确率 `41.93% -> 50.35%`。
+- 两个 seed 的 feature-norm histogram overlap 都下降（seed=42：`0.8202 -> 0.7853`；seed=123：`0.8148 -> 0.7714`），说明该损失确实改变了表示分布；但未知拒绝率仍然很低，不能说已经解决 known/unknown overlap。
+- 当前结论：Objectosphere 有可复现的小幅正向信号，保留为可选表示消融，不设为默认方法，也不继续只调它的权重。
+
+### Mixed pool 路径更新
+
+- 训练代码现在支持 `--discovery-pool-mode mixed` 与 Objectosphere 联用，但必须同时开启 `--discovery-feature-candidate-gating`。
+- known 项只使用有标签 known batch；unknown 项只使用两视图共同选出的高风险候选，避免把 mixed pool 中的已知样本整体当作 unknown。
+- 未开启 candidate gating 时仍会主动报错，防止污染训练目标。
+- toy smoke 已验证该路径能运行、候选比例和 `discovery_objectosphere` 损失均非零；这只是代码路径验证，不代表性能提升。
+- 尚未完成 CIFAR-100 mixed-pool 严格对照。下一步应固定 seed、teacher、backbone、epoch、检测器和阈值，只比较 mixed baseline 与 candidate-gated Objectosphere。
+
+### Mixed-pool pilot 结果（2026-10-01）
+
+- 已按预先定义的协议完成 CIFAR-100 mixed-pool 对照：seed=123、相同 teacher/split/backbone、1200 train、300 val、1000 test、3 epoch、MC=4、95% known coverage；唯一训练差异是 candidate-gated Objectosphere，权重 `0.01`。
+- mixed baseline -> Objectosphere：AUROC `0.5726 -> 0.5357`，FPR95 `0.8693 -> 0.9313`，OSCR `0.2360 -> 0.2038`，unknown rejection `9.43% -> 4.22%`，accepted-known accuracy `34.09% -> 34.05%`。
+- feature-norm histogram overlap 虽然从 `0.8281` 降到 `0.7722`，但开放集指标全面变差，说明“范数分布变开”不等于“检测边界有效”。
+- 结论：Objectosphere 的纯未知实验有小幅正向信号，但 candidate-gated mixed-pool 版本当前无效；不继续调该方向权重。代码保留为受保护的消融选项，后续优先研究更可靠的候选筛选或直接建模 mixed pool 的 PU/rejector 方法。
+
+### Mixed candidate / feature recheck（2026-10-01）
+
+- 新增可选 `--discovery-cross-view-gating`：mixed pool 中要求两个增强视图都独立选中候选，才施加 feature/Objectosphere 约束；默认关闭。
+- 新增可选候选模式 `prototype_distance` 和 `distance_consensus`：使用候选到最近已知分类原型的余弦距离，后者再融合 entropy、max-softmax risk 和 uncertainty 的秩分数；默认仍为 `entropy_uncertainty`。
+- 在相同 CIFAR-100 mixed pilot（seed=123、1200 train、300 val、1000 test、3 epoch、20% known pool、同一 teacher/检测器/95% known coverage）中：baseline 的 AUROC/FPR95/OSCR/unknown rejection 为 `0.5726/0.8693/0.2360/9.43%`；entropy + Objectosphere 为 `0.5357/0.9313/0.2038/4.22%`；entropy + cross-view 为 `0.5579/0.9229/0.2267/5.46%`；distance-consensus + cross-view + Objectosphere 为 `0.5528/0.9045/0.2285/7.20%`；distance-consensus + cross-view + feature separation 为 `0.5702/0.8710/0.2311/2.23%`。
+- 结论：cross-view 和 prototype-distance 能减少候选噪声造成的损害，但没有超过 mixed baseline；Objectosphere 和局部 feature repulsion 不应作为 mixed 默认方法。完整记录见 `analysis/mixed_candidate_representation_recheck_20261001.md`。
+- 有一组 feature-margin 实验的损失始终为 `0`，即没有真正参与训练，已明确标为无效证据；不能据此宣称该方法有效或无效。
+- 下一步不再继续调这些候选排斥损失，先做 full-data matched protocol，判断低预算是否掩盖了表征学习效果；若 full-data 仍失败，再优先研究直接 mixed-PU/rejector 目标或更强的预训练/度量表征。
+
+### Full-data mixed nnPU 复核（2026-10-01）
+
+- 已完成完整训练数据的严格对照：CIFAR-100 随机 60/40、seed=123、同一 teacher、预训练 ResNet-18、5 epoch、mixed pool 实际 known fraction `0.212598`、同一检测器和 95% known coverage；唯一训练变量是 `alpha_discovery_uncertainty_pu: 0 -> 0.1`。
+- baseline -> nnPU：AUROC `0.6077 -> 0.6533`，AUPR `0.4695 -> 0.5322`，FPR95 `0.8497 -> 0.8167`，OSCR `0.3137 -> 0.3728`，unknown rejection `7.88% -> 12.23%`，accepted-known accuracy `44.47% -> 50.61%`，known acceptance `94.22% -> 94.90%`。
+- 这是目前 mixed pool 完整训练预算下最有希望的结果，且比 1200 样本 pilot 更好；但目前只有一个 seed，不能作为最终论文结论。
+- 分布诊断并非全部改善：主 score overlap `0.8303 -> 0.7796`、entropy `0.7873 -> 0.7618`、epistemic `0.8282 -> 0.7969`，但 feature-norm overlap `0.7809 -> 0.8093` 变差，Mahalanobis overlap 仍为 `0.9165`。准确表述应是 nnPU 改善了 uncertainty/entropy 与综合 score 的排序和工作点，不是已经完全解决 embedding overlap。
+- 当前决策：暂不与 Objectosphere、candidate-only feature repulsion 叠加；先用 matching teacher 重复 seed=42 的 full-data baseline/nnPU 对照。若方向重复，再做三 seed 确认并单独评估聚类。
 
 ## Latest local validation update (2026-09-20)
 
@@ -1387,3 +1489,315 @@ L_repulsion = mean(ReLU(cos(w_i, w_j) - margin)), i != j
 新增 `scripts/diagnose_novel_mass.py` 直接评估 novel-mass 分数。CIFAR-100 60/40、seed=42、小样本 3 epoch 配对实验中，等权/加权 Sinkhorn 的 novel-mass AUROC 分别为 `0.5664/0.5749`，FPR95 为 `0.8711/0.8165`；但 test-known 标签只用于事后覆盖率诊断时，两组未知拒绝率均约 `0.0608`。项目原 Mahalanobis 检测器下，加权组 AUROC 和未知拒绝率反而下降。该单 seed 结果指标冲突，尚未证明加权 Sinkhorn 能解决低拒绝率问题。
 
 诊断脚本复用项目统一的阈值校准、FPR95 和 OSCR 实现；测试集标签只用于事后指标。测试集 known coverage 重校准是不可部署的诊断结果，不能用于模型选择。完整审计、协议和指标见 `analysis/method_fidelity_and_sinkhorn_audit_20260929.md`。下一步先用其他 seeds 复核真正单因素设置，再决定保留还是停止该方向。
+
+## 本轮审计与 Objectosphere 表征试验（2026-10-01）
+
+本轮先修正了 mixed discovery pool 的 nnPU 先验协议。由于 `limit-discovery` 会在 known/novel 拼接池上再次抽样，请求的 `mixed-known-pool-ratio` 不一定等于训练时实际看到的 known 比例。新增 `known_proportion(dataset)`，并支持 `--discovery-uncertainty-known-prior auto`，将抽样后的实际比例写入 `config.json` 后传入 nnPU；显式数字仍保留给真实部署场景。toy smoke 中请求比例为 `0.2`，实际抽样比例为 `0.01`；CIFAR-100 小规模协议的实际比例为 `0.210833`。
+
+固定 CIFAR-100 60/40、seed=42、同一 teacher/student、1200/300/1000、1200 mixed discovery、3 epoch 和 `normalized_entropy_mahalanobis` 后，手动先验 `0.2` 到自动先验 `0.210833` 的变化为：AUROC `0.5337 -> 0.5492`，FPR95 `0.9391 -> 0.9112`，但 unknown reject `0.0536 -> 0.0434`，OSCR 略降。因此这是实验协议修正和有限排序信号，不是核心问题的解决方案。
+
+随后新增可选的 `--alpha-discovery-objectosphere`。参考 Objectosphere 思路，纯未知 discovery 特征被拉向低范数，已知特征保持最小范数；同时新增 `feature_norm` 与 `normalized_entropy_feature_norm` 检测分数。该损失禁止用于 mixed pool，默认权重仍为 `0`。CIFAR-100 单 seed、3 epoch、`alpha=0.01` 的小规模结果显示，主 `normalized_entropy_mahalanobis` 的 AUROC `0.4901 -> 0.5870`、FPR95 `0.9589 -> 0.8865`，但 unknown reject `0.0510 -> 0.0281`；新范数分数有局部改善但工作点指标不一致。因此 Objectosphere 目前只保留为纯未知、可选表征消融，不能默认启用或宣称已解决已知/未知重叠。
+
+完整协议、命令、结果和下一步要求见 `analysis/protocol_and_objectosphere_pilot_20261001.md`。后续必须使用 full-data、matched known coverage 和至少 3 个 seed 复核，同时报告分数分布重叠和 unknown reject；不能只依据单 seed 的 AUROC/FPR95 调大损失权重。
+## 2026-10-01 strict Objectosphere recheck
+
+本轮先检查了实验配置，而不是直接相信已有数字。第一次 full-data Objectosphere 运行遗漏了 baseline 的 `alpha_feat_kd=0.1` 和 `alpha_proto=0.1`，不能作为单因素对比；第二次 treatment 又与旧 baseline 的 discovery-pool 设置不同。这两次结果均保留为审计记录，但不作为方法证据。
+
+随后重新训练了严格配对的 control/treatment：CIFAR-100 random 60/40、seed=42、完整 known 训练集、预训练 ResNet-34/ResNet-18、5 epochs、同一教师和同一 pure-unknown discovery pool，只改变 `alpha_discovery_objectosphere=0` 与 `0.01`。完整结果见 `analysis/objectosphere_full_strict_recheck_20261001.md`。
+
+| 指标 | control | Objectosphere | 变化 |
+| --- | ---: | ---: | ---: |
+| AUROC | 0.6108 | 0.6283 | +0.0175 |
+| FPR95 | 0.8540 | 0.8343 | -0.0197 |
+| OSCR | 0.2845 | 0.3306 | +0.0461 |
+| known acceptance | 95.12% | 94.65% | -0.47 pp |
+| unknown rejection | 7.475% | 7.975% | +0.50 pp |
+| accepted-known accuracy | 40.00% | 45.89% | +5.89 pp |
+
+修正后的特征诊断显示 score histogram overlap 从 `0.8202` 降至 `0.7940`，feature-norm overlap 从 `0.8202` 降至 `0.7853`。因此本轮有小幅一致的正向信号，但 unknown rejection 仍然很低，而且只有一个 seed、pure-unknown discovery pool；Objectosphere 目前只能作为可选消融，不能作为已经解决核心问题的主方法。
+
+本轮还修复了一个实验记录问题：检测过程计算了 `feature_norm`，但 `discovery_detail.json` 之前没有正确保存，导致旧的范数诊断被零值污染。现在两条 `run_discovery` 路径都会保存真实范数；toy smoke 已验证非零输出，测试为 `130 passed`。
+
+下一步应优先在第二个固定 seed 和 mixed discovery pool 上复核 Objectosphere。如果 pure-unknown 的信号无法迁移到 mixed 场景，就停止继续调它的权重，转向可靠的 mixed-pool known/novel 统一空间训练目标。不得把本轮 pure-unknown 结果直接写成真实开放环境结论。
+## 2026-10-01 full mixed-pool nnPU recheck (seed 42)
+
+本轮严格复核 mixed discovery pool 中的 nnPU 不确定性约束。实验目的不是继续调阈值，而是验证前一轮 seed=123 的正向结果能否在独立 seed 上复现。两组实验使用相同的 CIFAR-100 random 60/40 划分、相同的 ResNet-34 teacher、预训练 ResNet-18 student、完整训练集、5 epochs、mixed pool、`normalized_entropy_mahalanobis` 检测分数、MC=4，以及只用 known validation 校准到 95% known coverage 的阈值；唯一训练变量是 `alpha_discovery_uncertainty_pu` 从 `0` 改为 `0.1`。完整记录见 `analysis/full_mixed_nnpu_recheck_s42_20261001.md`。
+
+| 指标 | mixed baseline | mixed nnPU | 变化 |
+| --- | ---: | ---: | ---: |
+| AUROC | 0.5866 | 0.6498 | +0.0633 |
+| AUPR | 0.4486 | 0.5189 | +0.0703 |
+| FPR95 | 0.8667 | 0.8283 | -0.0383 |
+| OSCR | 0.2921 | 0.3735 | +0.0814 |
+| known acceptance | 94.50% | 95.45% | +0.95 pp |
+| unknown rejection | 6.33% | 9.45% | +3.13 pp |
+| accepted-known accuracy | 42.01% | 50.50% | +8.49 pp |
+
+这次 seed=42 与 seed=123 的完整 mixed-pool 结果方向一致：AUROC、FPR95、OSCR、未知拒绝率和接受后已知准确率均改善，而且已知接受率没有下降。treatment 日志中 `discovery_uncertainty_pu` 为非零，说明该损失确实参与了训练；两组检测都使用相同的验证集阈值校准规则，因此不能把结果解释为单纯移动测试阈值的收益。
+
+但目前仍不能宣称 nnPU 已经解决核心问题。当前只有两个 seed，未知拒绝率绝对值仍低，且该结果主要说明不确定性/检测排序改善，并不等价于已知和未知 embedding 已完全分离。下一步应使用第三个固定 seed 和匹配 teacher 做同样的 control/treatment 配对，报告三 seed 均值和标准差；若趋势保持，再恢复聚类评估，单独报告聚类 ACC/NMI/ARI、候选池纯度和估计类别数误差。下一轮仍不要把 nnPU 与 Objectosphere、feature repulsion、selective energy 或 candidate gating 叠加，以保持单因素归因。
+## 2026-10-01：mixed-pool nnPU 三 seed 复核与组合方向
+
+在 seed=42、123、3407 上完成了相同协议的 full-data mixed-pool baseline / nnPU 配对实验。每个 seed 使用匹配的 ResNet-34 teacher、预训练 ResNet-18 student、CIFAR-100 random 60/40 split、完整训练集、5 epochs、MC=4、`normalized_entropy_mahalanobis`，并只用 known validation 在 95% known coverage 处校准阈值；聚类暂时跳过。唯一训练变量是 `alpha_discovery_uncertainty_pu: 0 -> 0.1`，实际 mixed known prior 由程序自动测量并记录。完整复盘见 `analysis/full_mixed_nnpu_three_seed_summary_20261001.md`。
+
+| 指标 | baseline 均值 +/- 标准差 | nnPU 均值 +/- 标准差 | 平均变化 |
+| --- | ---: | ---: | ---: |
+| AUROC | 0.5977 +/- 0.0106 | 0.6491 +/- 0.0047 | +0.0514 |
+| FPR95 | 0.8632 +/- 0.0121 | 0.8272 +/- 0.0100 | -0.0360 |
+| OSCR | 0.3052 +/- 0.0115 | 0.3718 +/- 0.0023 | +0.0666 |
+| known acceptance | 94.61% +/- 0.46 pp | 95.24% +/- 0.30 pp | +0.63 pp |
+| unknown rejection | 7.11% +/- 0.78 pp | 10.44% +/- 1.55 pp | +3.33 pp |
+| accepted-known accuracy | 43.63% +/- 1.41 pp | 50.51% +/- 0.09 pp | +6.88 pp |
+
+三个 seed 的所有主要指标变化方向一致，说明 nnPU 已经是当前最有价值的 mixed-pool 主候选，而不是单个 seed 的偶然结果。它仍没有解决核心重叠：平均未知拒绝率只有 10.44%，之前的表征诊断也显示 feature / Mahalanobis 分布仍有较大重叠。因此准确结论是“不确定性排序和工作点改善”，不是“已知未知 embedding 已完全分离”。
+
+复盘后，下一种值得尝试的组合是 `nnPU + class-wise KNN support-boundary warm-up/ramp`：nnPU 作用于不确定性 head，KNN support-boundary 作用于已知类局部特征支持，两者作用位置互补。组合实验不会加入 Objectosphere、feature repulsion、selective energy 或 EMA candidate gating，因为这些方向在 mixed 场景中结果不稳定或容易受到候选污染影响。组合只与 nnPU-only 做单因素增量比较；若组合无效，就保留 nnPU 单项并停止继续堆叠损失；若有效，再做三 seed 确认。
+## 2026-10-01：nnPU 与 KNN 组合复盘、min-class kNN 检测改进
+
+在 nnPU 三 seed 复核后，先尝试了 `nnPU + class-wise KNN support-boundary warm-up/ramp`。该组合在 seed=42 中 AUROC `0.6498 -> 0.6349`、FPR95 `0.8283 -> 0.8340`、OSCR `0.3735 -> 0.3476`，未知拒绝率只从 `9.45%` 增至 `10.33%`，但接受后已知准确率从 `50.50%` 降到 `47.83%`。因此这是误伤已知样本的失败组合，不再继续叠加或调大 KNN 训练损失；完整记录见 `analysis/nnpu_knn_combo_recheck_s42_20261001.md`。
+
+随后保持三个 nnPU student checkpoint 完全不变，只把检测分数从 `normalized_entropy_mahalanobis` 换成 `normalized_entropy_min_class_knn`：对每个样本计算到所有 60 个已知类局部支持的最小 kNN 距离，而不是只计算预测类别距离。三 seed 结果如下：
+
+| 指标 | nnPU + Mahalanobis 均值 | nnPU + min-class kNN 均值 | 平均变化 |
+| --- | ---: | ---: | ---: |
+| AUROC | 0.6491 | 0.6903 | +0.0413 |
+| FPR95 | 0.8272 | 0.7681 | -0.0591 |
+| OSCR | 0.3718 | 0.4103 | +0.0385 |
+| known acceptance | 95.24% | 95.24% | -0.01 pp |
+| unknown rejection | 10.44% | 13.03% | +2.58 pp |
+| accepted-known accuracy | 50.51% | 51.53% | +1.02 pp |
+
+三个 seed 的方向全部一致，且已知接受率没有下降，说明该改进不是简单通过误拒已知样本换来的。它支持“未知样本可能被错误分类到某个已知类，预测类局部距离会漏检”的诊断。完整记录见 `analysis/full_mixed_nnpu_minclass_knn_recheck_20261001.md`。
+
+程序现在把 raw min-class kNN 加入 `--score-mode auto` 候选，并增加了单元测试；但当前 auto 选择逻辑会利用 open validation 的已知/未知标签按 AUROC 选分数，因此只能作为分析工具，不是无标签部署规则。本次 auto 实际选中了 `full`，没有自动选到 min-class kNN。当前可复现实验应显式使用 `--score-mode normalized_entropy_min_class_knn --knn-ood`，后续再单独设计不使用未知标签的自动校准策略。
+## 2026-10-01：聚类空间复核与当前推荐流程
+
+在三个 seed 上固定 nnPU student、显式 min-class kNN 检测、oracle `K=40`、KMeans 和 normalization，只比较 `projection_pca` 与 `feature_pca`。feature_pca 的候选聚类结果在三个 seed 上全部更好：
+
+| 指标 | projection_pca 均值 | feature_pca 均值 | 变化 |
+| --- | ---: | ---: | ---: |
+| 候选聚类 ACC | 0.1819 | 0.2006 | +0.0187 |
+| 候选聚类 NMI | 0.3698 | 0.3975 | +0.0278 |
+| 候选聚类 ARI | 0.0307 | 0.0521 | +0.0214 |
+| 候选池纯度 | 0.6470 | 0.6470 | 0 |
+
+候选池纯度不变而聚类指标提升，说明改进来自聚类表示本身。当前推荐实验流程更新为：训练使用 nnPU，检测显式使用 `--score-mode normalized_entropy_min_class_knn --knn-ood`，聚类显式使用 `--cluster-feature feature_pca`；`projection_pca` 保留为消融。完整记录见 `analysis/full_mixed_nnpu_cluster_feature_space_recheck_20261001.md`。
+
+这仍不是最终解决方案：即使 oracle K=40，平均 NMI 只有 0.3975、ARI 只有 0.0521；auto-K 在同一 seed 上因 silhouette / composite 分别选择 K=48 / K=29，说明类别数估计不稳定。下一步应转向真正的 known+novel GCD 训练目标、周期性伪标签更新和类别均衡分配，而不是继续堆叠阈值、KMeans 或后处理分数。
+
+## 2026-10-01：joint memory-bank 跨 batch 一致性尝试
+
+为解决当前 joint discovery 只使用批内邻域、批间伪标签不稳定的问题，新增了可选的 FIFO memory-bank 邻域一致性损失。它保存历史 batch 的 detached feature 和 novel logits，当前样本只与全局近邻的停梯度预测对齐；mixed pool 中还会按 residual novel weight 过滤样本。该机制默认关闭，不影响历史流程。相关参数为 `--alpha-joint-memory-neighbor`、`--joint-memory-size`、`--joint-memory-k`、`--joint-memory-temperature` 和 `--joint-memory-warmup-size`。
+
+在 CIFAR-100 random 60/40、seed=42、1200/300/1200 小规模配对实验中，固定 nnPU、`joint_mixed_residual`、预训练 ResNet、oracle `K=40`、min-class kNN 检测和 `feature_pca` 聚类，只改变 memory-bank 方案：
+
+| 方法 | AUROC | FPR95 | OSCR | unknown reject | candidate purity | candidate NMI |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| joint residual baseline | 0.59118 | 0.89091 | 0.15992 | 7.09% | 49.12% | 0.86994 |
+| memory, alpha=0.1 | 0.58799 | 0.88760 | 0.15454 | 6.08% | 44.44% | 0.86889 |
+| memory, alpha=0.05 + warm-up | 0.59261 | 0.88595 | 0.16142 | 6.84% | 47.37% | 0.84345 |
+
+结果说明 memory-bank 已正确参与训练，但没有改善核心的已知/未知重叠；warm-up 版本只带来可以忽略的 AUROC/FPR95 变化，同时降低候选纯度和 NMI。因此该方向保留为默认关闭的消融选项，不再继续调大权重或继续堆叠。完整记录见 `analysis/joint_memory_bank_pilot_20261001.md`。
+
+当前应回到真正的全局表征学习：参考 GCD/UNO/SimGCD 的 momentum teacher、周期性伪标签刷新、全局 memory queue 和类别均衡分配，但必须先实现与当前 nnPU 主流程的单因素对比。下一步不能把 stale mixed-pool 预测直接当成可靠伪标签，也不能继续只靠阈值、KMeans 或后处理分数解决核心问题。
+
+## 2026-10-01 Angular 复盘与协议审计
+
+当前复盘保留的主流程是 `nnPU + normalized_entropy_min_class_knn + feature_pca`。
+nnPU 和 min-class kNN 已在三个 seed 上表现出一致的正向变化；直接 Angular
+`alpha=0.05` 只完成了小规模单 seed 验证，暂时属于待复核候选，不应直接写成最终创新结论。
+
+本轮新增了可选的 `--angular-correct-only`，只对当前已正确分类的已知样本施加 Angular
+margin。CIFAR-100 random 60/40、seed=42 的对照中，该方法 AUROC 为 `0.5872`，
+FPR95 为 `0.8959`，未知拒绝率为 `5.06%`，候选纯度为 `0.4444`；直接 Angular
+对照分别为 `0.6084`、`0.8694`、`8.61%`、`0.6071`。因此该选项只保留为消融，默认关闭。
+
+新增的 `--angular-warmup-epochs`、`--angular-ramp-epochs` 以及 uncertainty 修正分数
+也已经完成小规模对照，但没有稳定改善未知检测，不能替代主流程。训练日志现在会记录
+`angular_active_ratio`，用于确认 Angular 实际作用于多少样本，避免把未生效或样本覆盖率
+不同的实验误判为算法改进。
+
+seed=123 的 Angular 复核必须使用与 seed=42 匹配的 teacher：相同 backbone、训练轮数、
+训练数据规模和数据协议。当前本地已有的 seed=123 teacher 是另一套 3 epoch/1200 样本
+配置，不能直接用于严格对照；在匹配 teacher 生成前，不报告 seed=123 的 Angular 结论。
+完整记录见 `analysis/angular_correct_only_pilot_20261001.md` 和
+`analysis/angular_schedule_and_uncertainty_score_20261001.md`。
+
+### seed=123 严格复核结果
+
+已使用与 seed=42 相同协议重新训练匹配的 ResNet-34 teacher，并在同一
+`nnPU + normalized_entropy_min_class_knn + feature_pca` 流程下比较
+`alpha_angular=0` 与 `alpha_angular=0.05`。两组只改变 Angular loss 权重，
+其余训练、检测和聚类条件完全一致。
+
+| 指标 | nnPU 基线 | nnPU + Angular | 变化 |
+| --- | ---: | ---: | ---: |
+| AUROC | 0.5672 | 0.5470 | -0.0202 |
+| AUPR | 0.4607 | 0.4379 | -0.0228 |
+| FPR95 | 0.8945 | 0.8928 | -0.0017 |
+| OSCR | 0.1523 | 0.1420 | -0.0103 |
+| known acceptance | 94.64% | 92.46% | -2.18 pp |
+| unknown rejection | 7.94% | 8.93% | +0.99 pp |
+| accepted-known accuracy | 22.48% | 22.28% | -0.20 pp |
+| candidate purity | 0.5000 | 0.4444 | -0.0556 |
+| candidate NMI | 0.8494 | 0.8184 | -0.0310 |
+
+这次复核说明 Angular 的拒绝率小幅增加来自更激进的拒绝，并没有形成更好的
+已知/未知排序或更纯的未知候选池。因此 Angular 不进入主流程，只保留为消融。
+当前更需要验证的是训练充分性：快速对比使用了 1200 个训练样本和 2 个 student
+epoch，学生特征可能尚未稳定。下一步应固定 nnPU 算法，增加训练样本或 epoch，
+保持检测器、阈值校准和聚类设置不变，再判断特征重叠是否主要来自欠训练。
+完整记录见 `analysis/angular_strict_recheck_s123_20261001.md`。
+
+## 2026-10-01：冻结 teacher 候选筛选器复核
+
+为减少 mixed discovery pool 中“高熵但其实是已知类”的候选污染，新增了
+`--discovery-selection-model teacher`。该模式只用冻结的 teacher 选择
+candidate-gated feature separation 的候选，不参与 student 反向传播，也不会被
+错误更新为 EMA；原有 `student` 和 `ema` 模式保持不变。
+
+在 CIFAR-100 random 60/40、seed=123、完整 known training partition、5 个
+student epoch、同一 teacher、同一 mixed pool、同一 nnPU 和 feature-separation
+权重下，只比较候选筛选器来源。检测固定为
+`normalized_entropy_min_class_knn + feature_pca`：
+
+| 指标 | student selector | frozen teacher selector | teacher - student |
+| --- | ---: | ---: | ---: |
+| AUROC | 0.6899 | 0.6696 | -0.0203 |
+| FPR95 | 0.7806 | 0.7722 | -0.0084 |
+| OSCR | 0.4160 | 0.4226 | +0.0066 |
+| known acceptance | 92.46% | 94.97% | +2.51 pp |
+| unknown rejection | 19.85% | 16.38% | -3.47 pp |
+| accepted-known accuracy | 53.44% | 54.32% | +0.88 pp |
+| candidate purity | 0.6400 | 0.6875 | +0.0475 |
+| candidate unknown NMI | 0.6941 | 0.7691 | +0.0750 |
+
+teacher selector 确实提高了候选池纯度和聚类质量，但 validation 阈值直接迁移到
+有限测试集时，student selector 的 known acceptance 只有 92.46%，因此不能直接把
+它的 19.85% unknown rejection 与 teacher 的 16.38% 比较。仅作为事后诊断，将两组
+测试 known score 分别校准到约 95% known acceptance 后，student selector 的未知
+拒绝率为 12.16%，teacher selector 为 16.38%，接受后已知准确率分别为 52.73% 和
+54.32%。该诊断使用测试 known 标签，不可部署，也不能用于选择模型，但说明 teacher
+selector 在公平工作点上有进一步研究价值。
+
+逐新类分析中，40 个未知类只有 9 个误接受率下降，16 个上升，15 个不变，平均
+误接受率变化为 `+0.0357`，所以它仍没有让所有未知类整体远离已知特征空间。
+该选项目前保留为有希望的候选纯度/工作点消融，不设为默认方案；需要在另一个
+seed、独立 known calibration set 和独立 open-validation set 上复核后，才考虑进入
+主流程。完整记录见
+`analysis/candidate_selector_teacher_vs_student_classwise_s123_20261001.json`
+和 `analysis/candidate_selector_teacher_vs_student_s123_20261001.md`。
+
+### seed=42 复核与两 seed 结论
+
+随后用完全相同的 full-data 协议在 seed=42 上复核。teacher selector 的
+AUROC 从 `0.6709` 略升到 `0.6753`，FPR95 从 `0.8132` 降到 `0.8000`，但候选
+纯度从 `0.7093` 降到 `0.6706`，raw unknown rejection 从 `15.44%` 降到
+`14.43%`。在测试 known 标签仅用于事后诊断的 matched 95% known coverage
+工作点上，student / teacher 的 unknown rejection 分别为 `16.71%` / `14.68%`。
+这与 seed=123 的 teacher 优势不一致，说明 selector 来源的收益具有 seed 敏感性。
+
+两个 seed 的 matched 工作点平均结果为：teacher selector 的 unknown rejection
+`15.53%`，student selector `14.44%`；候选纯度为 `0.6790` / `0.6747`，候选
+NMI 为 `0.7851` / `0.7389`。teacher 主要在候选池聚类质量上显示出较稳定的局部
+价值，但 AUROC 和未知拒绝率并未稳定占优。因此：
+
+- `teacher` 保留为稳定目标候选筛选和聚类质量消融，不设为默认主流程；
+- 当前主流程仍使用 `student` selector，以保持与三 seed nnPU 主比较的一致性；
+- 不再继续优先调 selector 来源或阈值，下一步应回到更强的表征学习目标，或严格
+  隔离的 mixed-pool GCD 目标，直接处理已知/未知特征重叠。
+
+完整 seed=42 记录见
+`analysis/candidate_selector_teacher_vs_student_s42_20261001.md`，两 seed 综合见
+`analysis/candidate_selector_teacher_vs_student_two_seed_20261001.md`。
+
+## 2026-10-01：固定 checkpoint 的 OpenMax 检测复核
+
+为确认问题是否只是检测器选择，保持
+`candidate_sep_student_s42_full/student.pt`、完整 known train bank、random
+60/40 split、验证集阈值协议和测试集完全不变，只把当前主分数
+`normalized_entropy_min_class_knn` 换成已有的 OpenMax-Weibull 分数。OpenMax
+参考 Bendale and Boult 的 OpenMax 思路，但当前实现是基于已知类特征距离尾部的
+轻量 Weibull 评分，不是原论文完整的 top-k activation 重校准。
+
+| 指标 | 主分数 | OpenMax-Weibull | 变化 |
+| --- | ---: | ---: | ---: |
+| AUROC | 0.6709 | 0.5668 | -0.1040 |
+| AUPR | 0.5639 | 0.4557 | -0.1081 |
+| FPR95 | 0.8132 | 0.9273 | +0.1140 |
+| OSCR | 0.3702 | 0.2823 | -0.0879 |
+| raw unknown rejection | 15.44% | 4.81% | -10.63 pp |
+
+在测试 known 标签仅用于事后诊断的 matched 95% known coverage 工作点上，主分数
+和 OpenMax 的 unknown rejection 分别为 `16.71%` 和 `8.86%`。因此 OpenMax
+没有改善当前表征，说明继续替换 post-hoc 检测分数不能解决已知/未知重叠。OpenMax
+保留为文献基线，不再作为下一轮主改进方向；后续代码修改应直接作用于表征学习或
+严格隔离的 mixed-pool GCD 训练目标。
+
+完整记录见 `analysis/openmax_fixed_checkpoint_recheck_s42_20261001.md`。
+
+## 2026-10-01 今日尝试总结与后续方向
+
+今天的所有对比都围绕同一个核心问题：已知与未知样本在特征和开放集分数上
+重叠严重，导致未知拒绝率低。实验过程中优先检查协议一致性，raw unknown
+rejection 不再单独作为结论，必要时同时报告 AUROC、FPR95、OSCR、known
+acceptance、accepted-known accuracy，以及 matched known coverage 的事后诊断。
+
+### 1. 冻结 teacher 候选筛选器
+
+思路来自 Mean Teacher / teacher-guided pseudo-labeling：在 mixed discovery pool
+中，用冻结 teacher 替代不断变化的 student 选择高风险候选，降低候选污染，再把
+候选交给 feature-separation 训练。该改动已落实为
+`--discovery-selection-model teacher`，并确认 teacher 不参与 student 反向传播、
+也不会被错误更新为 EMA。
+
+在 seed=123 和 seed=42 的 full-data 配对实验中，teacher selector 没有稳定改善
+AUROC 或未知拒绝率。两个 seed 的 matched 工作点平均 unknown rejection 为
+teacher `15.53%`、student `14.44%`，候选纯度为 `0.6790` / `0.6747`，候选 NMI
+为 `0.7851` / `0.7389`。seed=123 teacher 的工作点拒绝率更好，但 seed=42
+反而更差；逐类分析也显示它只改善部分未知类。
+
+判断：该方法对候选池质量和聚类有局部价值，可以保留为稳定目标消融；不能把它
+当作已知/未知特征已经分离的证据，也不设为默认主流程。下一步不再优先搜索
+student/EMA/teacher selector 或继续移动阈值。
+
+### 2. 固定 checkpoint 的 OpenMax-Weibull 检测器
+
+思路来自 Bendale and Boult 的 OpenMax：用已知类特征到类中心的距离拟合 Weibull
+尾部，作为 post-hoc 未知评分。此次严格固定同一个 student checkpoint、完整
+known train bank、random 60/40 split、验证集阈值协议和测试集，只替换检测分数，
+避免把训练变化误认为 OpenMax 效果。
+
+结果为主分数 `normalized_entropy_min_class_knn` 对比 OpenMax：AUROC
+`0.6709 -> 0.5668`，FPR95 `0.8132 -> 0.9273`，OSCR `0.3702 -> 0.2823`，
+raw unknown rejection `15.44% -> 4.81%`；matched 95% known coverage 的
+unknown rejection 为 `16.71% -> 8.86%`。
+
+判断：当前表征不适合仅靠 EVT/Weibull 尾部建模，OpenMax 没有缓解核心重叠。
+保留为文献检测基线，不再继续调 OpenMax 参数，也不纳入默认流程。
+
+### 3. 今天的代码与质量检查
+
+- 新增并复核 frozen teacher candidate selector 及其单元测试；
+- 新增 seed=42 selector 复核、两 seed 汇总和 OpenMax 固定 checkpoint 分析文档；
+- `137 passed`；`compileall` 通过；`git diff --check` 通过；
+- 中途发现一次实验命令把 `limit-train=1200` 和错误 split 路径带入 OpenMax 对照，
+  已将该结果作废并按 checkpoint 原始协议重跑，README 只记录修正后的结果。
+
+### 后续推荐
+
+1. 保持当前主流程 `nnPU + normalized_entropy_min_class_knn + feature_pca`，不要
+   再叠加新的 post-hoc 分数或阈值规则。
+2. 下一轮优先实现一个与当前主流程单因素隔离的 mixed-pool GCD 表征目标：明确区分
+   known anchor、novel prototype 空间和未知候选权重，避免已知和新类再次被迫放入同一
+   个错误的平衡 Softmax；伪标签应周期性刷新，并记录候选纯度、类别占用和跨 batch
+   稳定性。
+3. 对新目标先做 toy smoke 和小规模 CIFAR 配对实验，再用至少两个固定 seed、相同
+   teacher、相同数据预算和 matched known coverage 判断是否有效；若没有同时改善
+   排序和工作点指标，就停止该方向，不继续堆叠损失。
+4. teacher selector 只作为候选池/聚类消融保留；OpenMax 只作为文献检测基线保留。
+
+详细记录：
+`analysis/candidate_selector_teacher_vs_student_s42_20261001.md`、
+`analysis/candidate_selector_teacher_vs_student_two_seed_20261001.md`、
+`analysis/openmax_fixed_checkpoint_recheck_s42_20261001.md`。

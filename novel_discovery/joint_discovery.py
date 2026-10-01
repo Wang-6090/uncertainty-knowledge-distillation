@@ -64,6 +64,31 @@ def novel_mass_weights(
     return mass.clamp(min=float(floor), max=1.0)
 
 
+def bounded_novel_mass_weights(
+    novel_mass: torch.Tensor,
+    agreement: torch.Tensor | None = None,
+    floor: float = 0.0,
+) -> torch.Tensor:
+    """Keep a nonzero learning path while preserving relative novel evidence.
+
+    The floor is applied after optional two-view agreement. This avoids
+    discarding every mixed-pool sample when the current novel head is still
+    poorly initialized, while retaining larger weights for samples with
+    stronger novel evidence.
+    """
+    if novel_mass.ndim != 1:
+        raise ValueError("novel_mass must be a one-dimensional tensor")
+    floor = float(floor)
+    if not 0.0 <= floor < 1.0:
+        raise ValueError("floor must be in [0, 1)")
+    raw = novel_mass.clamp(0.0, 1.0)
+    if agreement is not None:
+        if agreement.shape != raw.shape:
+            raise ValueError("agreement must match novel_mass shape")
+        raw = raw * agreement.detach().to(raw).clamp(0.0, 1.0)
+    return floor + (1.0 - floor) * raw
+
+
 def neighbor_novel_support_weights(
     features: torch.Tensor,
     novel_mass: torch.Tensor,
@@ -343,6 +368,50 @@ def neighbor_consistency_loss(
     return per_sample.mean()
 
 
+def memory_neighbor_consistency_loss(
+    features: torch.Tensor,
+    logits: torch.Tensor,
+    memory_features: torch.Tensor | None,
+    memory_logits: torch.Tensor | None,
+    k: int = 5,
+    temperature: float = 0.2,
+    sample_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Match current assignments to detached neighbors from a global queue."""
+    if (
+        features.ndim != 2
+        or logits.ndim != 2
+        or features.size(0) == 0
+        or memory_features is None
+        or memory_logits is None
+        or memory_features.numel() == 0
+        or memory_logits.numel() == 0
+        or k <= 0
+    ):
+        return logits.new_tensor(0.0)
+    if memory_features.ndim != 2 or memory_logits.ndim != 2:
+        raise ValueError("memory features and logits must be two-dimensional")
+    if memory_features.size(0) != memory_logits.size(0):
+        raise ValueError("memory features and logits must have the same size")
+    if memory_features.size(1) != features.size(1) or memory_logits.size(1) != logits.size(1):
+        raise ValueError("memory feature/logit dimensions must match the query")
+    query = F.normalize(features.detach(), dim=-1)
+    bank = F.normalize(memory_features.detach().to(query), dim=-1)
+    neighbors = (query @ bank.T).topk(min(int(k), bank.size(0)), dim=-1).indices
+    target = F.softmax(
+        memory_logits.detach().to(logits)[neighbors] / max(float(temperature), 1e-6),
+        dim=-1,
+    ).mean(dim=1)
+    predicted = F.log_softmax(logits / max(float(temperature), 1e-6), dim=-1)
+    per_sample = F.kl_div(predicted, target, reduction="none").sum(dim=-1)
+    if sample_weights is None:
+        return per_sample.mean()
+    weights = sample_weights.detach().to(per_sample).reshape(-1).clamp_min(0.0)
+    if weights.numel() != per_sample.numel():
+        raise ValueError("sample_weights must match the query batch")
+    return (per_sample * weights).sum() / weights.sum().clamp_min(1e-8)
+
+
 def joint_discovery_loss(
     first_features: torch.Tensor,
     second_features: torch.Tensor,
@@ -361,6 +430,11 @@ def joint_discovery_loss(
     known_temperature: float = 1.0,
     sample_weights: torch.Tensor | None = None,
     weighted_assignments: bool = True,
+    memory_features: torch.Tensor | None = None,
+    memory_logits: torch.Tensor | None = None,
+    alpha_memory_neighbor: float = 0.0,
+    memory_neighbor_k: int = 5,
+    memory_temperature: float = 0.2,
 ) -> dict[str, torch.Tensor]:
     """Combine novel or unified-space pseudo-label objectives."""
     first_joint_logits = combine_known_novel_logits(
@@ -393,6 +467,18 @@ def joint_discovery_loss(
             second_features, second_joint_logits, k=neighbor_k, sample_weights=sample_weights
         )
     )
+    memory_neighbor = 0.5 * (
+        memory_neighbor_consistency_loss(
+            first_features, first_joint_logits, memory_features, memory_logits,
+            k=memory_neighbor_k, temperature=memory_temperature,
+            sample_weights=sample_weights,
+        )
+        + memory_neighbor_consistency_loss(
+            second_features, second_joint_logits, memory_features, memory_logits,
+            k=memory_neighbor_k, temperature=memory_temperature,
+            sample_weights=sample_weights,
+        )
+    )
     pseudo = prototype_pseudo_label_loss(
         first_joint_logits,
         second_joint_logits,
@@ -406,6 +492,7 @@ def joint_discovery_loss(
         + alpha_balance * balance
         + alpha_information * information
         + alpha_neighbor * neighbor
+        + float(alpha_memory_neighbor) * memory_neighbor
         + alpha_pseudo * pseudo
     )
     return {
@@ -414,5 +501,6 @@ def joint_discovery_loss(
         "balance": balance,
         "information": information,
         "neighbor": neighbor,
+        "memory_neighbor": memory_neighbor,
         "pseudo": pseudo,
     }

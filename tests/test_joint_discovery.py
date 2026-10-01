@@ -15,10 +15,12 @@ from novel_discovery.joint_discovery import (
     balanced_assignments,
     combine_known_novel_logits,
     joint_discovery_loss,
+    memory_neighbor_consistency_loss,
     information_maximization_loss,
     known_residual_weights,
     neighbor_novel_support_weights,
     novel_mass_weights,
+    bounded_novel_mass_weights,
     neighbor_consistency_loss,
     novel_consistency_loss,
     prototype_pseudo_label_loss,
@@ -95,6 +97,30 @@ class JointDiscoveryTest(unittest.TestCase):
         self.assertIsNotNone(first_logits.grad)
         self.assertIsNotNone(second_logits.grad)
 
+    def test_memory_neighbor_consistency_is_finite_and_differentiable(self):
+        features = torch.randn(4, 6, requires_grad=True)
+        logits = torch.randn(4, 3, requires_grad=True)
+        memory_features = torch.randn(8, 6)
+        memory_logits = torch.randn(8, 3)
+        loss = memory_neighbor_consistency_loss(
+            features, logits, memory_features, memory_logits, k=3
+        )
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        # Neighbor selection is intentionally detached; only current logits
+        # receive gradients from this consistency target.
+        self.assertIsNone(features.grad)
+        self.assertIsNotNone(logits.grad)
+
+    def test_memory_neighbor_consistency_empty_bank_is_zero(self):
+        loss = memory_neighbor_consistency_loss(
+            torch.randn(2, 4),
+            torch.randn(2, 3),
+            torch.empty(0, 4),
+            torch.empty(0, 3),
+        )
+        self.assertEqual(float(loss), 0.0)
+
     def test_empty_and_small_batches_are_safe(self):
         empty = torch.empty(0, 4)
         self.assertEqual(novel_consistency_loss(empty, empty).item(), 0.0)
@@ -126,6 +152,15 @@ class JointDiscoveryTest(unittest.TestCase):
         weights = novel_mass_weights(known, novel)
         self.assertLess(float(weights[0]), float(weights[1]))
         self.assertTrue(torch.all((weights >= 0.0) & (weights <= 1.0)))
+
+    def test_bounded_novel_mass_weights_preserve_relative_evidence(self):
+        masses = torch.tensor([0.0, 0.5, 1.0])
+        agreement = torch.tensor([0.0, 0.5, 1.0])
+        weights = bounded_novel_mass_weights(masses, agreement, floor=0.05)
+        self.assertTrue(torch.allclose(weights, torch.tensor([0.05, 0.2875, 1.0])))
+        self.assertGreaterEqual(float(weights.min()), 0.05)
+        with self.assertRaises(ValueError):
+            bounded_novel_mass_weights(masses, floor=1.0)
 
     def test_neighbor_support_downweights_isolated_novel_mass(self):
         features = torch.tensor(

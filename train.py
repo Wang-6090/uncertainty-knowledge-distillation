@@ -17,6 +17,7 @@ from novel_discovery.data import (
     build_data_bundle,
     build_outlier_dataset,
     build_transforms,
+    known_proportion,
 )
 from novel_discovery.joint_discovery import NovelPrototypeHead, combine_known_novel_logits
 from novel_discovery.metrics import compute_auroc
@@ -234,6 +235,23 @@ def parse_args(argv=None):
     )
     p.add_argument("--angular-margin", type=float, default=0.2)
     p.add_argument("--angular-scale", type=float, default=16.0)
+    p.add_argument(
+        "--angular-correct-only",
+        action="store_true",
+        help="Apply angular-margin loss only to currently correctly classified known samples.",
+    )
+    p.add_argument(
+        "--angular-warmup-epochs",
+        type=int,
+        default=0,
+        help="Known-class warm-up epochs before enabling the angular-margin loss.",
+    )
+    p.add_argument(
+        "--angular-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp the angular-margin weight after warm-up.",
+    )
     p.add_argument("--energy-margin", type=float, default=1.0)
     p.add_argument("--energy-temperature", type=float, default=1.0)
     # Keep the validated baseline as the default; ``strong`` remains an
@@ -304,6 +322,23 @@ def parse_args(argv=None):
     )
     p.add_argument("--angular-margin", type=float, default=0.2)
     p.add_argument("--angular-scale", type=float, default=16.0)
+    p.add_argument(
+        "--angular-correct-only",
+        action="store_true",
+        help="Apply angular-margin loss only to currently correctly classified known samples.",
+    )
+    p.add_argument(
+        "--angular-warmup-epochs",
+        type=int,
+        default=0,
+        help="Known-class warm-up epochs before enabling the angular-margin loss.",
+    )
+    p.add_argument(
+        "--angular-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp the angular-margin weight after warm-up.",
+    )
     p.add_argument("--energy-margin", type=float, default=1.0)
     p.add_argument("--energy-temperature", type=float, default=1.0)
     p.add_argument("--pseudo-mode", choices=["legacy", "strong"], default="legacy")
@@ -374,6 +409,17 @@ def parse_args(argv=None):
         help="Maximum cosine similarity allowed between a discovery feature and its nearest known prototype.",
     )
     p.add_argument(
+        "--alpha-discovery-objectosphere",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight an Objectosphere-style feature-norm loss; on mixed pools it "
+            "requires candidate gating and is disabled by default."
+        ),
+    )
+    p.add_argument("--objectosphere-known-radius", type=float, default=10.0)
+    p.add_argument("--objectosphere-unknown-weight", type=float, default=1.0)
+    p.add_argument(
         "--alpha-discovery-feature-separation",
         type=float,
         default=0.0,
@@ -397,6 +443,14 @@ def parse_args(argv=None):
         help=(
             "In mixed discovery pools, apply feature margin/separation/boundary "
             "losses only to high-risk candidates selected by discovery-select-ratio/mode."
+        ),
+    )
+    p.add_argument(
+        "--discovery-cross-view-gating",
+        action="store_true",
+        help=(
+            "Require both augmented views to independently select a mixed-pool "
+            "candidate before applying feature/Objectosphere losses."
         ),
     )
     p.add_argument(
@@ -448,6 +502,14 @@ def parse_args(argv=None):
         help="Extra cosine-distance margin beyond each known-class support radius.",
     )
     p.add_argument(
+        "--discovery-knn-soft-weighting",
+        action="store_true",
+        help=(
+            "Use continuous risk/neighbor/EMA weights for candidate-gated KNN "
+            "support-boundary loss instead of equal hard-gate weights."
+        ),
+    )
+    p.add_argument(
         "--discovery-knn-warmup-epochs",
         type=int,
         default=0,
@@ -479,9 +541,11 @@ def parse_args(argv=None):
     )
     p.add_argument(
         "--discovery-uncertainty-known-prior",
-        type=float,
-        default=0.2,
-        help="Assumed known proportion in the mixed discovery pool for PU uncertainty training.",
+        default="auto",
+        help=(
+            "Known proportion in the mixed discovery pool for PU uncertainty "
+            "training, or 'auto' to measure it after dataset splitting and limiting."
+        ),
     )
     p.add_argument(
         "--discovery-uncertainty-loss",
@@ -522,7 +586,10 @@ def parse_args(argv=None):
     p.add_argument("--discovery-select-ratio", type=float, default=0.25)
     p.add_argument(
         "--discovery-select-mode",
-        choices=["entropy", "max_softmax", "energy", "entropy_uncertainty", "consensus"],
+        choices=[
+            "entropy", "max_softmax", "energy", "entropy_uncertainty", "consensus",
+            "prototype_distance", "distance_consensus",
+        ],
         default="entropy_uncertainty",
     )
     p.add_argument(
@@ -539,9 +606,12 @@ def parse_args(argv=None):
     )
     p.add_argument(
         "--discovery-selection-model",
-        choices=["student", "ema"],
+        choices=["student", "ema", "teacher"],
         default="student",
-        help="Model used to select high-risk discovery samples; ema follows Mean Teacher-style smoothing.",
+        help=(
+            "Model used to select high-risk discovery samples; ema follows "
+            "Mean Teacher-style smoothing, teacher uses the frozen teacher checkpoint."
+        ),
     )
     p.add_argument(
         "--discovery-ema-decay",
@@ -681,6 +751,15 @@ def parse_args(argv=None):
         ),
     )
     p.add_argument(
+        "--joint-novel-weight-floor",
+        type=float,
+        default=0.0,
+        help=(
+            "Lower bound for final novel-mass times two-view-agreement weights. "
+            "Use a small positive value to keep mixed-pool novel learning alive."
+        ),
+    )
+    p.add_argument(
         "--joint-novel-neighbor-support",
         action="store_true",
         help=(
@@ -689,6 +768,26 @@ def parse_args(argv=None):
         ),
     )
     p.add_argument("--joint-novel-neighbor-k", type=int, default=5)
+    p.add_argument(
+        "--alpha-joint-memory-neighbor",
+        type=float,
+        default=0.0,
+        help="Weight cross-batch memory-bank neighbor consistency for novel discovery.",
+    )
+    p.add_argument(
+        "--joint-memory-size",
+        type=int,
+        default=4096,
+        help="Maximum number of detached discovery embeddings kept in the FIFO bank.",
+    )
+    p.add_argument("--joint-memory-k", type=int, default=5)
+    p.add_argument("--joint-memory-temperature", type=float, default=0.2)
+    p.add_argument(
+        "--joint-memory-warmup-size",
+        type=int,
+        default=256,
+        help="Minimum bank size before cross-batch consistency becomes active.",
+    )
     p.add_argument(
         "--joint-weighted-sinkhorn",
         action=argparse.BooleanOptionalAction,
@@ -910,7 +1009,12 @@ def parse_args(argv=None):
             "normalized_entropy_predicted_class_knn",
             "normalized_entropy_predicted_class_knn_global",
             "normalized_entropy_relative_predicted_class_knn",
+            "normalized_entropy_min_class_knn",
+            "normalized_entropy_min_class_relative_knn",
+            "normalized_entropy_uncertainty_min_class_knn",
             "normalized_entropy_knn_conflict",
+            "feature_norm",
+            "normalized_entropy_feature_norm",
             "normalized_entropy_mahalanobis_knn",
             "gaussian_nll",
             "openmax",
@@ -1347,6 +1451,11 @@ def fit_teacher(args):
     best_epoch = 0
     history = []
     for epoch in range(args.epochs):
+        angular_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.angular_warmup_epochs,
+            ramp_epochs=args.angular_ramp_epochs,
+        )
         stats = train_one_epoch_teacher(
             model,
             train_loader,
@@ -1365,14 +1474,16 @@ def fit_teacher(args):
             energy_margin=args.energy_margin,
             energy_temperature=args.energy_temperature,
             proxy_temperature=args.proxy_temperature,
-            alpha_angular=args.alpha_angular,
+            alpha_angular=args.alpha_angular * angular_weight,
             angular_margin=args.angular_margin,
             angular_scale=args.angular_scale,
+            angular_correct_only=args.angular_correct_only,
             alpha_proxy_anchor=args.alpha_proxy_anchor,
             proxy_anchor_alpha=args.proxy_anchor_alpha,
             proxy_anchor_margin=args.proxy_anchor_margin,
             freeze_bn_stats=args.freeze_bn_stats,
         )
+        stats["angular_weight"] = angular_weight
         val_stats = evaluate_classification(model, val_loader, device)
         history.append({"epoch": epoch + 1, "train": stats, "validation": val_stats})
         print(f"[teacher][{epoch+1}/{args.epochs}] {stats} {val_stats}")
@@ -1410,6 +1521,8 @@ def fit_teacher(args):
 
 
 def fit_student(args):
+    if not 0.0 <= args.joint_novel_weight_floor < 1.0:
+        raise ValueError("--joint-novel-weight-floor must be in [0, 1)")
     if args.joint_mixed_known_consistency or args.alpha_joint_known_consistency > 0.0:
         if (
             not args.joint_discovery
@@ -1507,6 +1620,7 @@ def fit_student(args):
         or args.alpha_discovery_energy > 0.0
         or args.alpha_discovery_uniform > 0.0
         or args.alpha_discovery_feature_margin > 0.0
+        or args.alpha_discovery_objectosphere > 0.0
         or args.alpha_discovery_feature_separation > 0.0
         or args.alpha_discovery_boundary > 0.0
         or args.alpha_discovery_knn_boundary > 0.0
@@ -1524,8 +1638,39 @@ def fit_student(args):
                 "PU uncertainty training requires --discovery-pool-mode mixed; "
                 "it must not treat a pure unknown pool as unlabeled mixture."
             )
-        if not 0.0 < args.discovery_uncertainty_known_prior < 1.0:
-            raise ValueError("--discovery-uncertainty-known-prior must be in (0, 1).")
+        requested_prior = str(args.discovery_uncertainty_known_prior).strip().lower()
+        if requested_prior != "auto":
+            try:
+                prior_value = float(args.discovery_uncertainty_known_prior)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "--discovery-uncertainty-known-prior must be 'auto' or a value in (0, 1)."
+                ) from exc
+            if not 0.0 < prior_value < 1.0:
+                raise ValueError("--discovery-uncertainty-known-prior must be in (0, 1).")
+        elif bundle.discovery_pool is None or known_proportion(bundle.discovery_pool) is None:
+            raise ValueError(
+                "Cannot infer the mixed-pool known prior; provide an explicit "
+                "--discovery-uncertainty-known-prior value."
+            )
+    resolved_discovery_uncertainty_known_prior = None
+    if args.alpha_discovery_uncertainty_pu > 0.0:
+        measured_prior = known_proportion(bundle.discovery_pool)
+        resolved_discovery_uncertainty_known_prior = (
+            float(measured_prior)
+            if str(args.discovery_uncertainty_known_prior).strip().lower() == "auto"
+            else float(args.discovery_uncertainty_known_prior)
+        )
+        if not 0.0 < resolved_discovery_uncertainty_known_prior < 1.0:
+            raise ValueError(
+                "The resolved mixed-pool known prior must be in (0, 1); "
+                f"got {resolved_discovery_uncertainty_known_prior}."
+            )
+        print(
+            "mixed discovery known prior: "
+            f"requested={args.discovery_uncertainty_known_prior} "
+            f"resolved={resolved_discovery_uncertainty_known_prior:.6f}"
+        )
     if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
         if args.discovery_pool_mode == "mixed" and (
             args.alpha_discovery_unknown > 0.0
@@ -1544,6 +1689,10 @@ def fit_student(args):
                 and not args.discovery_feature_candidate_gating
             )
             or args.alpha_discovery_uncertainty_separation > 0.0
+            or (
+                args.alpha_discovery_objectosphere > 0.0
+                and not args.discovery_feature_candidate_gating
+            )
         ):
             raise ValueError(
                 "full-pool discovery unknown/energy/feature-boundary losses require "
@@ -1603,6 +1752,11 @@ def fit_student(args):
             parameter.requires_grad_(False)
     teacher_ckpt = resolve_input_checkpoint(args.teacher_ckpt, args.work_dir, "teacher.pt")
     load_checkpoint(teacher, teacher_ckpt, device)
+    if args.discovery_selection_model == "teacher":
+        teacher.eval()
+        for parameter in teacher.parameters():
+            parameter.requires_grad_(False)
+        discovery_selection_model = teacher
     vos_gaussian_stats = None
 
     def refresh_vos_gaussian_stats():
@@ -1656,6 +1810,7 @@ def fit_student(args):
     best_reciprocal_state = None
     best_epoch = 0
     history = []
+    joint_memory_bank = {}
     prototype_init_stats = None
     prototype_warmup = max(int(args.joint_prototype_warmup_epochs), 0)
     if (
@@ -1734,6 +1889,11 @@ def fit_student(args):
             warmup_epochs=args.discovery_uniform_warmup_epochs,
             ramp_epochs=args.discovery_uniform_ramp_epochs,
         )
+        angular_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.angular_warmup_epochs,
+            ramp_epochs=args.angular_ramp_epochs,
+        )
         stats = train_one_epoch_student(
             student,
             teacher,
@@ -1774,10 +1934,14 @@ def fit_student(args):
             alpha_discovery_uniform=args.alpha_discovery_uniform * discovery_uniform_weight,
             alpha_discovery_feature_margin=args.alpha_discovery_feature_margin,
             discovery_feature_margin=args.discovery_feature_margin,
+            alpha_discovery_objectosphere=args.alpha_discovery_objectosphere,
+            objectosphere_known_radius=args.objectosphere_known_radius,
+            objectosphere_unknown_weight=args.objectosphere_unknown_weight,
             alpha_discovery_feature_separation=args.alpha_discovery_feature_separation,
             discovery_feature_separation_margin=args.discovery_feature_separation_margin,
             discovery_feature_separation_temperature=args.discovery_feature_separation_temperature,
             discovery_feature_candidate_gating=args.discovery_feature_candidate_gating,
+            discovery_cross_view_gating=args.discovery_cross_view_gating,
             discovery_pool_mode=args.discovery_pool_mode,
             alpha_discovery_boundary=args.alpha_discovery_boundary,
             discovery_boundary_margin=args.discovery_boundary_margin,
@@ -1789,6 +1953,7 @@ def fit_student(args):
             discovery_knn_support=discovery_knn_support,
             discovery_knn_k=args.discovery_knn_k,
             discovery_knn_margin=args.discovery_knn_margin,
+            discovery_knn_soft_weighting=args.discovery_knn_soft_weighting,
             alpha_discovery_uncertainty_separation=(
                 args.alpha_discovery_uncertainty_separation
                 * uncertainty_separation_weight
@@ -1796,7 +1961,11 @@ def fit_student(args):
             discovery_uncertainty_loss=args.discovery_uncertainty_loss,
             discovery_uncertainty_margin=args.discovery_uncertainty_margin,
             alpha_discovery_uncertainty_pu=args.alpha_discovery_uncertainty_pu,
-            discovery_uncertainty_known_prior=args.discovery_uncertainty_known_prior,
+            discovery_uncertainty_known_prior=(
+                resolved_discovery_uncertainty_known_prior
+                if resolved_discovery_uncertainty_known_prior is not None
+                else 0.2
+            ),
             alpha_discovery_selective_unknown=args.alpha_discovery_selective_unknown * selective_weight,
             alpha_discovery_selective_energy=args.alpha_discovery_selective_energy * selective_weight,
             discovery_select_ratio=args.discovery_select_ratio,
@@ -1806,9 +1975,10 @@ def fit_student(args):
             energy_margin=args.energy_margin,
             energy_temperature=args.energy_temperature,
             proxy_temperature=args.proxy_temperature,
-            alpha_angular=args.alpha_angular,
+            alpha_angular=args.alpha_angular * angular_weight,
             angular_margin=args.angular_margin,
             angular_scale=args.angular_scale,
+            angular_correct_only=args.angular_correct_only,
             alpha_proxy_anchor=args.alpha_proxy_anchor,
             proxy_anchor_alpha=args.proxy_anchor_alpha,
             proxy_anchor_margin=args.proxy_anchor_margin,
@@ -1816,6 +1986,9 @@ def fit_student(args):
             alpha_reciprocal=args.alpha_reciprocal,
             reciprocal_margin=args.reciprocal_margin,
             discovery_selection_model=discovery_selection_model,
+            discovery_selection_model_updates_ema=(
+                args.discovery_selection_model == "ema"
+            ),
             discovery_ema_decay=args.discovery_ema_decay,
             discovery_neighbor_filter=args.discovery_neighbor_filter,
             discovery_neighbor_k=args.discovery_neighbor_k,
@@ -1847,10 +2020,17 @@ def fit_student(args):
             joint_residual_temperature=args.joint_residual_temperature,
             joint_residual_floor=args.joint_residual_floor,
             joint_novel_mass=args.joint_novel_mass,
+            joint_novel_weight_floor=args.joint_novel_weight_floor,
             joint_novel_neighbor_support=args.joint_novel_neighbor_support,
             joint_novel_neighbor_k=args.joint_novel_neighbor_k,
             joint_novel_ema_weights=args.joint_novel_ema_weights,
             joint_weighted_sinkhorn=args.joint_weighted_sinkhorn,
+            alpha_joint_memory_neighbor=args.alpha_joint_memory_neighbor,
+            joint_memory_size=args.joint_memory_size,
+            joint_memory_k=args.joint_memory_k,
+            joint_memory_temperature=args.joint_memory_temperature,
+            joint_memory_warmup_size=args.joint_memory_warmup_size,
+            joint_memory_bank=joint_memory_bank,
             alpha_joint_novel_margin=args.alpha_joint_novel_margin,
             joint_novel_margin=args.joint_novel_margin,
             joint_candidate_gating=args.joint_candidate_gating,
@@ -1876,6 +2056,7 @@ def fit_student(args):
         stats["discovery_selective_weight"] = selective_weight
         stats["uncertainty_separation_weight"] = uncertainty_separation_weight
         stats["discovery_uniform_weight"] = discovery_uniform_weight
+        stats["angular_weight"] = angular_weight
         stats["discovery_knn_boundary_weight"] = discovery_knn_boundary_weight
         if (
             args.alpha_vos > 0.0
@@ -1916,6 +2097,8 @@ def fit_student(args):
                 if args.discovery_pool_mode == "unknown"
                 else "unlabeled_mixed_known_and_novel"
             ),
+            "discovery_pool_known_proportion": known_proportion(bundle.discovery_pool),
+            "discovery_uncertainty_known_prior_resolved": resolved_discovery_uncertainty_known_prior,
         },
     )
     save_json(run_dir / "train_history.json", history)
@@ -2356,6 +2539,11 @@ def discover(args):
     }
     threshold = None
     if (args.score_mode == "auto" or args.auto_calibrate_score) and outputs_open_val is not None:
+        print(
+            "warning: automatic score selection uses open-validation known/unknown "
+            "labels and is diagnostic-only; use an explicit score mode for deployment."
+        )
+        calibration_report["auto_score_selection_uses_open_labels"] = True
         candidate_modes = [
             "full",
             "entropy_proto",
@@ -2400,7 +2588,14 @@ def discover(args):
         if args.react_percentile > 0.0:
             candidate_modes.append("react_energy")
         if args.knn_ood:
-            candidate_modes.extend(["knn_distance", "normalized_entropy_knn"])
+            candidate_modes.extend(
+                [
+                    "knn_distance",
+                    "normalized_entropy_knn",
+                    "normalized_entropy_min_class_knn",
+                    "normalized_entropy_min_class_relative_knn",
+                ]
+            )
         if args.vim_ood:
             candidate_modes.append("vim_residual")
         if novel_head is not None:
@@ -2460,6 +2655,7 @@ def discover(args):
             }
         )
     else:
+        calibration_report["auto_score_selection_uses_open_labels"] = False
         if selected_score_mode == "auto":
             selected_score_mode = "full"
         scores_val, _ = compute_open_score(
@@ -2584,6 +2780,7 @@ def discover(args):
     save_json(run_dir / "discovery_detail.json", {
         "score_mode": detail["score_mode"],
         "score": detail["score"].tolist(),
+        "feature_norm": detail["feature_norm"].tolist(),
         "entropy": detail["entropy"].tolist(),
         "epistemic": detail["epistemic"].tolist(),
         "aleatoric": detail["aleatoric"].tolist(),
@@ -2600,6 +2797,12 @@ def discover(args):
         "knn_predicted_class_relative_distance": detail.get(
             "knn_predicted_class_relative_distance",
             np.zeros_like(detail["knn_distance"]),
+        ).tolist(),
+        "knn_min_class_distance": detail.get(
+            "knn_min_class_distance", np.zeros_like(detail["knn_distance"])
+        ).tolist(),
+        "knn_min_class_relative_distance": detail.get(
+            "knn_min_class_relative_distance", np.zeros_like(detail["knn_distance"])
         ).tolist(),
         "knn_predicted_class_support": detail.get(
             "knn_predicted_class_support", np.zeros_like(detail["knn_distance"])

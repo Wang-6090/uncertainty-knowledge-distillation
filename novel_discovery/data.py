@@ -238,6 +238,57 @@ def _known_labels(dataset: Dataset) -> list[int]:
     return [int(dataset[index][1]) for index in range(len(dataset))]
 
 
+def known_proportion(dataset: Dataset) -> float | None:
+    """Return the known-sample fraction of an open-set dataset when available.
+
+    This is dataset-protocol metadata, not per-example supervision.  It lets
+    PU experiments use the actual composition after sampling/limiting instead
+    of silently assuming that the requested mixed-pool ratio survived those
+    operations unchanged.
+    """
+    if dataset is None or len(dataset) == 0:
+        return None
+    if isinstance(dataset, Subset):
+        flags = known_proportion(dataset.dataset)
+        if flags is None:
+            return None
+        # A subset can change the composition, so inspect its selected rows.
+        base_flags = _known_flags(dataset.dataset)
+        return float(sum(base_flags[int(index)] for index in dataset.indices)) / len(dataset)
+    if isinstance(dataset, ConcatDataset):
+        child_sizes = [len(child) for child in dataset.datasets]
+        child_props = [known_proportion(child) for child in dataset.datasets]
+        if any(prop is None for prop in child_props):
+            return None
+        known_count = sum(size * float(prop) for size, prop in zip(child_sizes, child_props))
+        return float(known_count) / len(dataset)
+    flags = _known_flags(dataset)
+    return float(sum(flags)) / len(flags) if flags else None
+
+
+def _known_flags(dataset: Dataset) -> list[bool]:
+    """Read known/unknown protocol flags without applying image transforms."""
+    if isinstance(dataset, Subset):
+        base_flags = _known_flags(dataset.dataset)
+        return [base_flags[int(index)] for index in dataset.indices]
+    if isinstance(dataset, ConcatDataset):
+        flags: list[bool] = []
+        for child in dataset.datasets:
+            flags.extend(_known_flags(child))
+        return flags
+    if hasattr(dataset, "allowed_indices") and hasattr(dataset, "base"):
+        allowed_indices = list(dataset.allowed_indices)
+        known_to_idx = getattr(dataset, "known_to_idx", {})
+        if hasattr(dataset.base, "targets"):
+            return [int(dataset.base.targets[index]) in known_to_idx for index in allowed_indices]
+        if hasattr(dataset.base, "samples"):
+            return [
+                dataset.base.classes[int(dataset.base.samples[index][1])] in known_to_idx
+                for index in allowed_indices
+            ]
+    return [bool(dataset[index][3]) for index in range(len(dataset))]
+
+
 def split_known_dataset(dataset: Dataset, val_ratio: float, seed: int, mode: str = "random"):
     labels = _known_labels(dataset) if mode == "stratified" else None
     train_indices, val_indices = split_known_indices(len(dataset), val_ratio, seed, labels=labels)

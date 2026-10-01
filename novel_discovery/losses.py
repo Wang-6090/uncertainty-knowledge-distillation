@@ -365,12 +365,42 @@ def unknown_feature_boundary_loss(
     return F.relu(hybrid_max - float(similarity_margin)).mean()
 
 
+def objectosphere_loss(
+    known_features: torch.Tensor,
+    unknown_features: torch.Tensor,
+    known_radius: float = 10.0,
+    unknown_weight: float = 1.0,
+) -> torch.Tensor:
+    """Separate known and pure-unknown samples by feature norm.
+
+    Known features retain a minimum radius while auxiliary unknown features
+    are pulled toward the origin, following the Objectosphere objective. The
+    terms are normalized by the target radius to reduce backbone-scale
+    sensitivity.
+    """
+    if known_features.numel() == 0 or unknown_features.numel() == 0:
+        reference = known_features if known_features.numel() else unknown_features
+        return reference.new_tensor(0.0)
+    radius = float(known_radius)
+    if radius <= 0.0:
+        raise ValueError("known_radius must be positive")
+    if float(unknown_weight) < 0.0:
+        raise ValueError("unknown_weight must be non-negative")
+    known_norm = known_features.norm(dim=-1)
+    unknown_norm = unknown_features.norm(dim=-1)
+    scale = radius * radius
+    known_penalty = F.relu(radius - known_norm).pow(2).mean() / scale
+    unknown_penalty = unknown_norm.pow(2).mean() / scale
+    return known_penalty + float(unknown_weight) * unknown_penalty
+
+
 def knn_support_boundary_loss(
     unknown_features: torch.Tensor,
     support_features_by_class: list[torch.Tensor],
     support_radii: torch.Tensor,
     k: int = 5,
     margin: float = 0.02,
+    sample_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Push pure-unknown features outside known class-conditional kNN support.
 
@@ -402,8 +432,20 @@ def knn_support_boundary_loss(
         )
     if not class_violations:
         return unknown_features.new_tensor(0.0)
-    # A sample is outside known support only when it violates no class region.
-    return torch.stack(class_violations, dim=1).max(dim=1).values.mean()
+    # A sample is penalized when it remains inside at least one known class
+    # support region. Optional weights let reliable candidates contribute more
+    # without changing the default hard-gated behavior.
+    violations = torch.stack(class_violations, dim=1).max(dim=1).values
+    if sample_weights is None:
+        return violations.mean()
+    weights = sample_weights.to(device=violations.device, dtype=violations.dtype).flatten()
+    if weights.numel() != violations.numel():
+        raise ValueError("sample_weights must contain one value per unknown feature")
+    weights = weights.clamp_min(0.0)
+    normalizer = weights.sum()
+    if normalizer <= 0:
+        return violations.new_tensor(0.0)
+    return (violations * weights).sum() / normalizer
 
 
 def proxy_contrastive_loss(
@@ -557,6 +599,7 @@ def angular_margin_loss(
     classifier_weight: torch.Tensor,
     margin: float = 0.2,
     scale: float = 16.0,
+    sample_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """ArcFace-style auxiliary loss for tighter known-class features.
 
@@ -565,6 +608,10 @@ def angular_margin_loss(
     and historical default training remain unchanged.
     """
     valid = labels >= 0
+    if sample_mask is not None:
+        if sample_mask.ndim != 1 or sample_mask.numel() != labels.numel():
+            raise ValueError("sample_mask must contain one boolean value per label")
+        valid = valid & sample_mask.to(device=labels.device, dtype=torch.bool)
     if valid.sum() == 0:
         return features.new_tensor(0.0)
     margin = float(margin)
