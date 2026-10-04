@@ -1858,3 +1858,68 @@ matched 工作点指标，且 accepted-known accuracy 没有明显下降，才�
 转向完整、文献对齐的 UNO/SimGCD 式 mixed-pool GCD 目标。
 
 详细审计见 `analysis/lightweight_project_audit_20261001.md`。
+
+## 2026-10-05：实验协议审计与 matched split 复核
+
+### 发现的协议问题
+
+之前部分 `audit_current_*` 实验不能作为算法效果证据。student 使用的是
+`splits_cifar100_60_40.json`，但 teacher checkpoint 来自
+`splits_cifar100_protocols/cifar100_60_40_random.json`。两份 split 的 known 类别不相同，
+而 KD 按 logit 下标对齐，因此 teacher 的第 `i` 个 logit 与 student 的第 `i` 个 logit
+可能对应不同的真实类别。这不是随机波动，而是实验协议错误。相关历史结果保留用于诊断，
+但不再用于证明某个算法有效。
+
+同学的 `quick_lky` 结果也不能直接与当前结果比较，原因包括：训练/验证/测试样本数量不同、
+`discovery_pool_mode` 分别为 `unknown` 和 `mixed`、MC 次数不同，以及纯未知池属于受控上限协议。
+后续比较必须同时固定 split 文件、teacher checkpoint、数据规模、训练轮数、discovery pool、
+MC 次数、评分器和阈值策略。
+
+### 代码修复
+
+- teacher 和 student checkpoint 现在保存 `known_classes` 与 `novel_classes`。
+- 加载 checkpoint 时会校验当前 split；known 类别不匹配会直接报错，避免错误语义的 logits
+  静默进入 KD。
+- 旧 checkpoint 如果只有 `known_classes` 仍可兼容加载，但新实验必须使用包含完整类别元数据的
+  checkpoint。
+- `tests/test_core_behaviors.py` 新增 split 不匹配检查；当前核心测试和编译检查已通过。
+
+### matched split 实验
+
+本轮重新用当前主 split `splits_cifar100_60_40.json` 训练同一个 teacher，再固定所有条件，
+只改变 `alpha_discovery_uncertainty_pu`：baseline 为 `0`，nnPU 为 `0.1`。两组均为 seed 42、
+完整 CIFAR-100 数据、pretrained backbone、5 个 student epochs、mixed discovery pool、
+known pool ratio `0.2`、同一 teacher、同一 `normalized_entropy_mahalanobis` 评分器、MC=8、
+known-only validation 95 分位阈值。
+
+| 方法 | AUROC | FPR95 | OSCR | known acceptance | unknown rejection | accepted-known accuracy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| matched baseline | 0.5453 | 0.8963 | 0.2478 | 94.32% | 6.18% | 38.59% |
+| matched nnPU | 0.5809 | 0.8908 | 0.3399 | 95.32% | 5.90% | 50.57% |
+
+这组结果是有效的单因素对照。nnPU 对未知/已知排序、OSCR 和已知分类有明显帮助，但
+unknown rejection 从 `6.18%` 降为 `5.90%`，因此不能声称已经解决核心问题。当前核心问题仍是
+已知与未知特征/分数重叠；高拒绝率如果伴随大量 known 误拒绝，也不能算真正改进。
+
+### 下一步验证
+
+下一步固定上述两个 checkpoint、数据协议、阈值和 MC 次数，只把检测器换成
+`normalized_entropy_min_class_knn --knn-ood`。这个实验回答：当前问题主要来自训练表征，还是
+Mahalanobis/entropy 评分器没有利用好已有表征。若两个 checkpoint 的 kNN 结果都同步提升，优先
+改检测器；若 nnPU 仍不能超过 baseline，优先改表征学习和 mixed-pool GCD 目标；若只有拒绝率提升
+而 accepted-known accuracy 明显下降，则判定为误拒绝，不保留为主方案。
+
+本次 kNN 对照结果如下。除评分器外，其他条件与上一表完全相同：
+
+| 方法 | AUROC | FPR95 | OSCR | known acceptance | unknown rejection | accepted-known accuracy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| matched baseline + min-class kNN | 0.5925 | 0.8600 | 0.2908 | 95.20% | 7.53% | 39.81% |
+| matched nnPU + min-class kNN | 0.6183 | 0.8430 | 0.3821 | 94.57% | 9.05% | 51.97% |
+
+这说明 min-class kNN 比当前 Mahalanobis/entropy 评分器更能利用已知类特征库，nnPU 与该评分器
+结合后是目前最有希望的工作点。相对同一 checkpoint 的 Mahalanobis/entropy，nnPU+kNN 的
+AUROC 从 `0.5809` 提升到 `0.6183`，FPR95 从 `0.8908` 降到 `0.8430`，unknown rejection
+从 `5.90%` 提升到 `9.05%`。但是约九成未知样本仍被接受，说明特征空间重叠依然严重；这组
+结果应表述为“有效改善但未解决核心问题”。后续不能只继续调 percentile，应优先研究让未知
+样本远离 known prototypes / class support 的表征目标，并继续报告 matched known coverage、
+accepted-known accuracy 和多 seed 方差。

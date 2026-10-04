@@ -1105,8 +1105,36 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def load_checkpoint(model, path, device):
+def load_checkpoint(
+    model,
+    path,
+    device,
+    expected_known_classes=None,
+    expected_novel_classes=None,
+):
     ckpt = torch.load(path, map_location=device)
+    if expected_known_classes is not None or expected_novel_classes is not None:
+        checkpoint_known = ckpt.get("known_classes")
+        checkpoint_novel = ckpt.get("novel_classes")
+        if checkpoint_known is None:
+            raise ValueError(
+                "Checkpoint is missing known_classes metadata; "
+                "refusing to load it for a split-dependent experiment."
+            )
+        if expected_known_classes is not None and list(checkpoint_known) != list(expected_known_classes):
+            raise ValueError(
+                "Checkpoint known_classes do not match the current split. "
+                f"checkpoint={list(checkpoint_known)} current={list(expected_known_classes)}"
+            )
+        if (
+            expected_novel_classes is not None
+            and checkpoint_novel is not None
+            and list(checkpoint_novel) != list(expected_novel_classes)
+        ):
+            raise ValueError(
+                "Checkpoint novel_classes do not match the current split. "
+                f"checkpoint={list(checkpoint_novel)} current={list(expected_novel_classes)}"
+            )
     model.load_state_dict(ckpt["model"])
     return ckpt
 
@@ -1521,6 +1549,7 @@ def fit_teacher(args):
         ckpt_path,
         extra={
             "known_classes": list(bundle.known_classes),
+            "novel_classes": list(bundle.novel_classes),
             "prototypes": prototypes,
             "gaussian_stats": gaussian_stats,
         },
@@ -1760,7 +1789,13 @@ def fit_student(args):
         for parameter in discovery_selection_model.parameters():
             parameter.requires_grad_(False)
     teacher_ckpt = resolve_input_checkpoint(args.teacher_ckpt, args.work_dir, "teacher.pt")
-    load_checkpoint(teacher, teacher_ckpt, device)
+    load_checkpoint(
+        teacher,
+        teacher_ckpt,
+        device,
+        expected_known_classes=bundle.known_classes,
+        expected_novel_classes=bundle.novel_classes,
+    )
     if args.discovery_selection_model == "teacher":
         teacher.eval()
         for parameter in teacher.parameters():
@@ -2143,6 +2178,7 @@ def fit_student(args):
         student_ckpt,
         extra={
             "known_classes": list(bundle.known_classes),
+            "novel_classes": list(bundle.novel_classes),
             "prototypes": prototypes,
             "gaussian_stats": gaussian_stats,
             "joint_novel_head": novel_head.state_dict() if novel_head is not None else None,
@@ -2199,7 +2235,13 @@ def discover(args):
         cifar_stem=args.cifar_stem,
     ).to(device)
     ckpt_path = resolve_input_checkpoint(args.student_ckpt, args.work_dir, "student.pt")
-    ckpt = load_checkpoint(model, ckpt_path, device)
+    ckpt = load_checkpoint(
+        model,
+        ckpt_path,
+        device,
+        expected_known_classes=bundle.known_classes,
+        expected_novel_classes=bundle.novel_classes,
+    )
     react_clip_value = None
     if args.react_percentile > 0.0:
         train_stats_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)

@@ -89,11 +89,29 @@ from novel_discovery.pipeline import (
     fit_nnpu_feature_rejector,
     attach_feature_rejector_score,
 )
-from train import parse_args, scheduled_weight, save_command_config
+from train import load_checkpoint, parse_args, scheduled_weight, save_checkpoint, save_command_config
 from novel_discovery.models import build_model, freeze_batchnorm_stats
 
 
 class CommandLineTest(unittest.TestCase):
+    def test_checkpoint_rejects_mismatched_class_split(self):
+        with tempfile.TemporaryDirectory() as root:
+            model = build_model(2, backbone="resnet18", pretrained=False)
+            path = Path(root, "model.pt")
+            save_checkpoint(
+                model,
+                path,
+                extra={"known_classes": [4, 9], "novel_classes": [1, 2, 3]},
+            )
+            with self.assertRaisesRegex(ValueError, "known_classes"):
+                load_checkpoint(
+                    build_model(2, backbone="resnet18", pretrained=False),
+                    path,
+                    torch.device("cpu"),
+                    expected_known_classes=[0, 1],
+                    expected_novel_classes=[2, 3, 4],
+                )
+
     def test_command_configs_survive_legacy_config_overwrite(self):
         with tempfile.TemporaryDirectory() as root:
             save_command_config(root, "train_student", {"command": "train_student", "epochs": 3})

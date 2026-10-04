@@ -3,6 +3,13 @@ from __future__ import annotations
 import torch
 from torch.nn import functional as F
 
+from .uncertainty_kd import (
+    feature_distillation_loss as _feature_distillation_loss,
+    kl_distillation_loss,
+    uncertainty_calibration_loss,
+    uncertainty_weights as _uncertainty_weights,
+)
+
 
 def uncertainty_weights(
     uncertainty: torch.Tensor,
@@ -10,24 +17,12 @@ def uncertainty_weights(
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
 ) -> torch.Tensor:
-    """Convert teacher uncertainty to per-sample distillation weights.
-
-    ``raw`` preserves the original behavior. ``mean_normalized`` keeps the
-    batch-average KD strength close to one, so ablations compare where the KD
-    signal is allocated instead of also changing the total KD strength.
-    """
-    weights = torch.exp(-uncertainty.detach())
-    if mode == "mean_normalized":
-        weights = weights / weights.mean().clamp_min(1e-6)
-    elif mode != "raw":
-        raise ValueError(f"Unsupported uncertainty weight mode: {mode}")
-    if uncertainty_weight_min is not None or uncertainty_weight_max is not None:
-        min_value = -float("inf") if uncertainty_weight_min is None else float(uncertainty_weight_min)
-        max_value = float("inf") if uncertainty_weight_max is None else float(uncertainty_weight_max)
-        if min_value > max_value:
-            raise ValueError("uncertainty_weight_min must be <= uncertainty_weight_max")
-        weights = weights.clamp(min=min_value, max=max_value)
-    return weights
+    return _uncertainty_weights(
+        uncertainty,
+        mode=mode,
+        uncertainty_weight_min=uncertainty_weight_min,
+        uncertainty_weight_max=uncertainty_weight_max,
+    )
 
 
 def classification_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -40,30 +35,12 @@ def uncertainty_alignment_loss(
     labels: torch.Tensor,
     target_mode: str = "confidence",
 ) -> torch.Tensor:
-    probs = logits.softmax(dim=-1)
-    true_conf = probs.gather(1, labels.unsqueeze(1)).squeeze(1)
-    if target_mode == "confidence":
-        target = (1.0 - true_conf).detach()
-        return F.mse_loss(uncertainty, target)
-    if target_mode == "classification_error":
-        # Learn uncertainty as an error probability on known samples. The
-        # target is detached because it is a supervision signal, not a path
-        # through which the classifier should optimize its own predictions.
-        pred = logits.argmax(dim=-1)
-        target = (pred != labels).float().detach()
-        return F.binary_cross_entropy(uncertainty.clamp(1e-6, 1.0 - 1e-6), target)
-    if target_mode == "margin":
-        # Continuous uncertainty target from the decision margin. A sample
-        # becomes uncertain when the strongest competing class approaches or
-        # exceeds the true-class logit. Detach the target so this auxiliary
-        # task does not distort the classifier through its own target.
-        true_logit = logits.gather(1, labels.unsqueeze(1)).squeeze(1)
-        other_logits = logits.clone()
-        other_logits.scatter_(1, labels.unsqueeze(1), float("-inf"))
-        strongest_other = other_logits.max(dim=-1).values
-        target = torch.sigmoid((strongest_other - true_logit).detach())
-        return F.mse_loss(uncertainty, target)
-    raise ValueError(f"Unsupported uncertainty target mode: {target_mode}")
+    return uncertainty_calibration_loss(
+        uncertainty,
+        logits,
+        labels,
+        target_mode=target_mode,
+    )
 
 
 def distillation_loss(
@@ -76,18 +53,16 @@ def distillation_loss(
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
 ) -> torch.Tensor:
-    student_log_prob = F.log_softmax(student_logits / temperature, dim=-1)
-    teacher_prob = F.softmax(teacher_logits / temperature, dim=-1).detach()
-    per_sample = F.kl_div(student_log_prob, teacher_prob, reduction="none").sum(dim=1) * (temperature**2)
-    if teacher_uncertainty is not None and uncertainty_weighted:
-        weight = uncertainty_weights(
-            teacher_uncertainty,
-            mode=uncertainty_weight_mode,
-            uncertainty_weight_min=uncertainty_weight_min,
-            uncertainty_weight_max=uncertainty_weight_max,
-        )
-        per_sample = per_sample * weight
-    return per_sample.mean()
+    return kl_distillation_loss(
+        student_logits,
+        teacher_logits,
+        teacher_uncertainty=teacher_uncertainty,
+        temperature=temperature,
+        uncertainty_weighted=uncertainty_weighted,
+        uncertainty_weight_mode=uncertainty_weight_mode,
+        uncertainty_weight_min=uncertainty_weight_min,
+        uncertainty_weight_max=uncertainty_weight_max,
+    )
 
 
 def energy_score(logits: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
@@ -169,23 +144,14 @@ def feature_distillation_loss(
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
 ) -> torch.Tensor:
-    """Distill relationally useful normalized representations.
-
-    The projection head has a fixed dimension, so this remains valid when the
-    teacher and student use different encoder backbones.
-    """
-    per_sample = 1.0 - F.cosine_similarity(
-        student_projection, teacher_projection.detach(), dim=-1
+    return _feature_distillation_loss(
+        student_projection,
+        teacher_projection,
+        teacher_uncertainty=teacher_uncertainty,
+        uncertainty_weight_mode=uncertainty_weight_mode,
+        uncertainty_weight_min=uncertainty_weight_min,
+        uncertainty_weight_max=uncertainty_weight_max,
     )
-    if teacher_uncertainty is not None:
-        weight = uncertainty_weights(
-            teacher_uncertainty,
-            mode=uncertainty_weight_mode,
-            uncertainty_weight_min=uncertainty_weight_min,
-            uncertainty_weight_max=uncertainty_weight_max,
-        )
-        per_sample = per_sample * weight
-    return per_sample.mean()
 
 
 def supervised_contrastive_loss(features: torch.Tensor, labels: torch.Tensor, temperature: float = 0.2) -> torch.Tensor:
