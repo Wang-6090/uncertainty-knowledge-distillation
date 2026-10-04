@@ -1923,3 +1923,87 @@ AUROC 从 `0.5809` 提升到 `0.6183`，FPR95 从 `0.8908` 降到 `0.8430`，unk
 结果应表述为“有效改善但未解决核心问题”。后续不能只继续调 percentile，应优先研究让未知
 样本远离 known prototypes / class support 的表征目标，并继续报告 matched known coverage、
 accepted-known accuracy 和多 seed 方差。
+
+## 2026-10-05：joint discovery 与候选特征分离复核
+
+本轮继续围绕同一个核心问题做严格单因素复核：已知与未知样本在特征和开放集分数上重叠，
+导致未知拒绝率低。实验固定 CIFAR-100 random 60/40 split、teacher/student 协议、训练
+数据预算、检测器、阈值校准和聚类设置；只改变 joint discovery 或候选特征分离机制。结果
+不能与早期 split 不匹配的历史实验混合使用。
+
+### 1. 无门控 `joint_mixed_residual`
+
+该尝试的动机是让混合 discovery pool 中的样本都参与 novel head，并用 residual novel
+weight 减弱低风险样本的影响。结果为：AUROC `0.5630`、FPR95 `0.8880`、OSCR `0.2257`、
+unknown rejection `5.60%`。相对于当前严格基线 `nnPU + projection kNN` 的 AUROC
+`0.6198`、FPR95 `0.8407`、OSCR `0.3836`、unknown rejection `9.10%`，无门控 joint
+明显退化。
+
+结论：residual 权重没有阻止 known 样本污染 novel head，反而把混合池中的错误伪标签
+传播到表征空间。该模式不进入主流程，也不再继续通过调 residual 温度或损失权重挽救。
+
+### 2. 完整数据候选门控 joint discovery
+
+该尝试只允许候选门控后的一部分高风险样本参与联合 novel discovery，目的是减少 known
+污染。结果为：AUROC `0.6320`、FPR95 `0.8198`、OSCR `0.3735`、unknown rejection
+`7.50%`、accepted-known accuracy `49.85%`。它对排序指标有局部改善，但 OSCR、未知
+拒绝率和已知分类工作点仍不优于严格基线，因此不能称为核心问题已解决。
+
+结论：候选门控可能改善候选池组成，但“高风险”并不等于“可靠未知”。它适合作为候选
+纯度消融，不能直接作为 mixed-pool GCD 的完整训练目标。后续若重用，应配合冻结/EMA
+教师、跨 batch 稳定性和独立 open-validation，而不是把一次筛选结果当成真伪标签。
+
+### 3. 候选门控 feature separation
+
+本尝试只对 mixed pool 中最高风险约 25% 的样本施加 feature separation loss，分别检查
+projection 空间和实际用于 kNN 的 backbone feature 空间。结果如下：
+
+| 方法 | AUROC | FPR95 | OSCR | unknown rejection |
+| --- | ---: | ---: | ---: | ---: |
+| projection kNN 基线 | 0.6198 | 0.8407 | 0.3836 | 9.10% |
+| candidate separation + projection kNN | 0.6208 | 0.8543 | 0.3870 | 8.33% |
+| candidate separation + feature kNN | 0.6185 | 0.8668 | 0.3846 | 8.00% |
+| features kNN 基线 | 0.6183 | 0.8430 | 未单独记录 | 9.05% |
+
+projection 结果的 AUROC/OSCR 只有极小变化，FPR95 和 unknown rejection 反而变差；
+features 空间也没有改善。说明当前 separation loss 没有把未知样本整体推离 known
+support，可能只是改变了少量候选样本或分数尺度，不能作为有效解决方案。
+
+### 4. 本轮代码审计工具
+
+训练过程新增了已知验证集表征几何诊断：`feature_within_mean`、`feature_within_q95`、
+`nearest_center_distance` 和 `center_margin`。这些量只使用 known validation labels，
+用于观察类内紧凑度与类中心间隔，不使用测试未知标签，也不替代开放集指标。新增可选参数
+`--save-epoch-checkpoints`，可保存 `teacher_epoch_N.pt` 和 `student_epoch_N.pt`，用于
+核对“最终 checkpoint 表现差”究竟来自训练不足、表征退化还是检测器问题；默认关闭，
+不改变原有训练流程和模型选择。
+
+### 当前判断与后续方向
+
+本轮没有找到可以进入默认主流程的新方法。当前应保留的主线仍是：
+
+```text
+mixed nnPU uncertainty
++ normalized_entropy_min_class_knn
++ projection kNN
++ known-only validation threshold
+```
+
+下一步应停止继续堆叠阈值、OpenMax、残差权重和候选后处理，转向真正隔离的 mixed-pool
+GCD 表征目标：known classification head 只由已知标签监督，novel prototype 空间与
+known head 解耦；由 EMA/冻结 teacher 产生伪标签；周期性刷新 prototype 和伪标签；
+记录 prototype occupancy、伪标签跨 epoch 稳定性、候选纯度和 matched known coverage。
+先做 toy smoke 和小规模 CIFAR 单因素配对，只有排序指标与 matched 工作点至少各有一项
+改善且 accepted-known accuracy 不明显下降，才进入多 seed 完整实验。
+
+本轮三组结果均应作为“已验证但未采用”的负结果保存，不能从小幅 AUROC 变化推断未知
+特征已经分离。详细实验日志见对应的 `analysis/` 记录；后续新增实验必须同时注明 split、
+teacher checkpoint、数据预算、epoch、评分器、阈值协议和唯一改变因素。
+
+### 代码验证
+
+- `pytest -q`：`148 passed`；
+- `python -m compileall -q train.py novel_discovery`：通过；
+- `git diff --check`：通过；
+- toy teacher/student smoke：通过，确认几何指标会输出，且 `--save-epoch-checkpoints`
+  会保存每轮 checkpoint；该 smoke 只验证可运行性，不作为性能结论。

@@ -33,6 +33,7 @@ from novel_discovery.pipeline import (
     collect_classwise_knn_support,
     fit_score_normalization,
     evaluate_classification,
+    evaluate_representation_geometry,
     extract_outputs,
     compute_open_score,
     compute_predicted_classwise_mahalanobis,
@@ -114,6 +115,14 @@ def parse_args(argv=None):
         p.add_argument("--limit-val", type=int, default=0)
         p.add_argument("--limit-test", type=int, default=0)
         p.add_argument("--limit-discovery", type=int, default=0)
+        p.add_argument(
+            "--save-epoch-checkpoints",
+            action="store_true",
+            help=(
+                "Save teacher_epoch_N.pt/student_epoch_N.pt for checkpoint audit; "
+                "disabled by default and does not change model selection."
+            ),
+        )
         p.add_argument(
             "--calibration-ratio",
             type=float,
@@ -1522,8 +1531,27 @@ def fit_teacher(args):
         )
         stats["angular_weight"] = angular_weight
         val_stats = evaluate_classification(model, val_loader, device)
-        history.append({"epoch": epoch + 1, "train": stats, "validation": val_stats})
-        print(f"[teacher][{epoch+1}/{args.epochs}] {stats} {val_stats}")
+        geometry_stats = evaluate_representation_geometry(
+            model, val_loader, device, len(bundle.known_classes)
+        )
+        history.append({
+            "epoch": epoch + 1,
+            "train": stats,
+            "validation": val_stats,
+            "validation_geometry": geometry_stats,
+        })
+        print(f"[teacher][{epoch+1}/{args.epochs}] {stats} {val_stats} {geometry_stats}")
+        if args.save_epoch_checkpoints:
+            epoch_dir = ensure_dir(args.work_dir)
+            save_checkpoint(
+                model,
+                epoch_dir / f"teacher_epoch_{epoch + 1}.pt",
+                extra={
+                    "known_classes": list(bundle.known_classes),
+                    "novel_classes": list(bundle.novel_classes),
+                    "epoch": epoch + 1,
+                },
+            )
         if val_stats["known_acc"] > best_acc:
             best_acc = val_stats["known_acc"]
             best_state = copy.deepcopy(model.state_dict())
@@ -2119,17 +2147,36 @@ def fit_student(args):
         ):
             vos_gaussian_stats = refresh_vos_gaussian_stats()
         val_stats = evaluate_classification(student, val_loader, device)
+        geometry_stats = evaluate_representation_geometry(
+            student, val_loader, device, len(bundle.known_classes)
+        )
         history.append({
             "epoch": epoch + 1,
             "train": stats,
             "validation": val_stats,
+            "validation_geometry": geometry_stats,
             "prototype_refresh": (
                 prototype_refresh_history[-1]
                 if prototype_refresh_history and prototype_refresh_history[-1]["epoch"] == epoch + 1
                 else None
             ),
         })
-        print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
+        print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats} {geometry_stats}")
+        if args.save_epoch_checkpoints:
+            epoch_dir = ensure_dir(args.work_dir)
+            save_checkpoint(
+                student,
+                epoch_dir / f"student_epoch_{epoch + 1}.pt",
+                extra={
+                    "known_classes": list(bundle.known_classes),
+                    "novel_classes": list(bundle.novel_classes),
+                    "epoch": epoch + 1,
+                    "joint_novel_head": novel_head.state_dict() if novel_head is not None else None,
+                    "reciprocal_points": (
+                        reciprocal_points.detach().cpu() if reciprocal_points is not None else None
+                    ),
+                },
+            )
         if val_stats["known_acc"] > best_acc:
             best_acc = val_stats["known_acc"]
             best_state = copy.deepcopy(student.state_dict())

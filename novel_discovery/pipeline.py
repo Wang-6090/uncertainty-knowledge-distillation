@@ -2215,6 +2215,76 @@ def evaluate_classification(model, loader, device):
 
 
 @torch.no_grad()
+def evaluate_representation_geometry(model, loader, device, num_classes: int):
+    """Measure known-only feature geometry without using unknown labels.
+
+    The values are diagnostics for checkpoint selection, not an open-set
+    benchmark.  Class centers are computed from the validation features, then
+    each sample is compared with its own center and each class center with its
+    nearest *other* class center.
+    """
+    was_training = model.training
+    model.eval()
+    feature_chunks = []
+    label_chunks = []
+    try:
+        for batch in loader:
+            images, labels = batch[0].to(device), batch[1].to(device)
+            outputs = model(images)
+            valid = (labels >= 0) & (labels < int(num_classes))
+            if valid.any():
+                feature_chunks.append(F.normalize(outputs["features"][valid].float(), dim=-1).cpu())
+                label_chunks.append(labels[valid].cpu())
+    finally:
+        model.train(was_training)
+
+    if not feature_chunks:
+        return {
+            "geometry_samples": 0,
+            "feature_within_mean": float("nan"),
+            "feature_within_q95": float("nan"),
+            "nearest_center_distance": float("nan"),
+            "center_margin": float("nan"),
+        }
+
+    features = torch.cat(feature_chunks, dim=0).numpy()
+    labels = torch.cat(label_chunks, dim=0).numpy()
+    centers = []
+    within_distances = []
+    for cls in range(int(num_classes)):
+        class_features = features[labels == cls]
+        if len(class_features) == 0:
+            centers.append(np.zeros(features.shape[1], dtype=np.float32))
+            continue
+        center = class_features.mean(axis=0)
+        center /= max(float(np.linalg.norm(center)), 1e-6)
+        centers.append(center)
+        within_distances.extend((1.0 - class_features @ center).tolist())
+
+    centers = np.asarray(centers, dtype=np.float32)
+    center_similarities = centers @ centers.T
+    np.fill_diagonal(center_similarities, -np.inf)
+    available_classes = np.flatnonzero(np.isfinite(center_similarities).any(axis=1))
+    if len(available_classes) < 2:
+        nearest_center_distance = float("nan")
+    else:
+        nearest_center_distance = float(
+            np.mean(1.0 - np.max(center_similarities[available_classes], axis=1))
+        )
+    within_mean = float(np.mean(within_distances)) if within_distances else float("nan")
+    within_q95 = float(np.quantile(within_distances, 0.95)) if within_distances else float("nan")
+    return {
+        "geometry_samples": int(len(features)),
+        "feature_within_mean": within_mean,
+        "feature_within_q95": within_q95,
+        "nearest_center_distance": nearest_center_distance,
+        "center_margin": float(nearest_center_distance - within_mean)
+        if np.isfinite(nearest_center_distance) and np.isfinite(within_mean)
+        else float("nan"),
+    }
+
+
+@torch.no_grad()
 def collect_prototypes(model, loader, device, num_classes: int):
     model.eval()
     sums = None
