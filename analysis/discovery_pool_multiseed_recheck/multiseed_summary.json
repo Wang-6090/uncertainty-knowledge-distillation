@@ -1,0 +1,420 @@
+{
+  "runs": [
+    {
+      "run_dir": "runs\\revised_ms_s123_F_discovery_pool_detect_auto",
+      "seed": 123,
+      "method": "F_discovery_pool",
+      "cluster_k_mode": "auto",
+      "cluster_k": 11,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 123,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s123_F_discovery_pool_detect_auto",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "limit_discovery": 0,
+        "discovery_pool_mode": "unknown",
+        "student_ckpt": ".\\runs\\revised_ms_s123_F_discovery_pool\\student.pt",
+        "num_novel": 40,
+        "cluster_k": "auto",
+        "threshold_percentile": 95.0,
+        "mc_samples": 8,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false
+      },
+      "metrics": {
+        "auroc": 0.6375272916666667,
+        "aupr": 0.4976483866549264,
+        "fpr95": 0.8401666666666666,
+        "oscr": 0.4132578333333333,
+        "known_ratio": 0.9369,
+        "known_class_correct": 3178,
+        "known_class_wrong": 2519,
+        "known_class_accuracy_after_accept": 0.557837458311392,
+        "known_class_accuracy_all_known": 0.5296666666666666,
+        "known_correct": 5697,
+        "known_rejected": 303,
+        "unknown_correct_reject": 328,
+        "unknown_false_accept": 3672,
+        "total": 10000,
+        "known_accept_rate": 0.9495,
+        "unknown_reject_rate": 0.082,
+        "cluster_acc": 0.12519809825673534,
+        "cluster_nmi": 0.3461571081869234,
+        "cluster_ari": 0.04733186075296943,
+        "cluster_unknown_only_acc": 0.18597560975609756,
+        "cluster_unknown_only_nmi": 0.3592192815585757,
+        "cluster_unknown_only_ari": 0.06721856948137647,
+        "cluster_candidate_count": 631,
+        "cluster_true_unknown_count": 328,
+        "cluster_false_reject_count": 303,
+        "cluster_true_k": 40,
+        "cluster_k_abs_error": 29
+      }
+    },
+    {
+      "run_dir": "runs\\revised_ms_s123_F_discovery_pool_detect_oracle",
+      "seed": 123,
+      "method": "F_discovery_pool",
+      "cluster_k_mode": "oracle",
+      "cluster_k": 40,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 123,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s123_F_discovery_pool_detect_oracle",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "limit_discovery": 0,
+        "discovery_pool_mode": "unknown",
+        "student_ckpt": ".\\runs\\revised_ms_s123_F_discovery_pool\\student.pt",
+        "num_novel": 40,
+        "cluster_k": "oracle",
+        "threshold_percentile": 95.0,
+        "mc_samples": 8,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false
+      },
+      "metrics": {
+        "auroc": 0.6375272916666667,
+        "aupr": 0.4976483866549264,
+        "fpr95": 0.8401666666666666,
+        "oscr": 0.4132578333333333,
+        "known_ratio": 0.9369,
+        "known_class_correct": 3178,
+        "known_class_wrong": 2519,
+        "known_class_accuracy_after_accept": 0.557837458311392,
+        "known_class_accuracy_all_known": 0.5296666666666666,
+        "known_correct": 5697,
+        "known_rejected": 303,
+        "unknown_correct_reject": 328,
+        "unknown_false_accept": 3672,
+        "total": 10000,
+        "known_accept_rate": 0.9495,
+        "unknown_reject_rate": 0.082,
+        "cluster_acc": 0.21077654516640254,
+        "cluster_nmi": 0.5123971975491876,
+        "cluster_ari": 0.07440387654330455,
+        "cluster_unknown_only_acc": 0.2804878048780488,
+        "cluster_unknown_only_nmi": 0.5256154149300893,
+        "cluster_unknown_only_ari": 0.08877394049666602,
+        "cluster_candidate_count": 631,
+        "cluster_true_unknown_count": 328,
+        "cluster_false_reject_count": 303,
+        "cluster_true_k": 40,
+        "cluster_k_abs_error": 0
+      }
+    },
+    {
+      "run_dir": "runs\\revised_ms_s42_F_discovery_pool_detect_auto",
+      "seed": 42,
+      "method": "F_discovery_pool",
+      "cluster_k_mode": "auto",
+      "cluster_k": 12,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 42,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s42_F_discovery_pool_detect_auto",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "limit_discovery": 0,
+        "discovery_pool_mode": "unknown",
+        "student_ckpt": ".\\runs\\revised_ms_s42_F_discovery_pool\\student.pt",
+        "num_novel": 40,
+        "cluster_k": "auto",
+        "threshold_percentile": 95.0,
+        "mc_samples": 8,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false
+      },
+      "metrics": {
+        "auroc": 0.6419291874999999,
+        "aupr": 0.5065842226023882,
+        "fpr95": 0.8425,
+        "oscr": 0.403515375,
+        "known_ratio": 0.9343,
+        "known_class_correct": 3087,
+        "known_class_wrong": 2619,
+        "known_class_accuracy_after_accept": 0.5410094637223974,
+        "known_class_accuracy_all_known": 0.5145,
+        "known_correct": 5706,
+        "known_rejected": 294,
+        "unknown_correct_reject": 363,
+        "unknown_false_accept": 3637,
+        "total": 10000,
+        "known_accept_rate": 0.951,
+        "unknown_reject_rate": 0.09075,
+        "cluster_acc": 0.1263318112633181,
+        "cluster_nmi": 0.33156745555635986,
+        "cluster_ari": 0.03787544981085546,
+        "cluster_unknown_only_acc": 0.20385674931129477,
+        "cluster_unknown_only_nmi": 0.3610615948063479,
+        "cluster_unknown_only_ari": 0.08052813720766522,
+        "cluster_candidate_count": 657,
+        "cluster_true_unknown_count": 363,
+        "cluster_false_reject_count": 294,
+        "cluster_true_k": 40,
+        "cluster_k_abs_error": 28
+      }
+    },
+    {
+      "run_dir": "runs\\revised_ms_s42_F_discovery_pool_detect_oracle",
+      "seed": 42,
+      "method": "F_discovery_pool",
+      "cluster_k_mode": "oracle",
+      "cluster_k": 40,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 42,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s42_F_discovery_pool_detect_oracle",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "limit_discovery": 0,
+        "discovery_pool_mode": "unknown",
+        "student_ckpt": ".\\runs\\revised_ms_s42_F_discovery_pool\\student.pt",
+        "num_novel": 40,
+        "cluster_k": "oracle",
+        "threshold_percentile": 95.0,
+        "mc_samples": 8,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false
+      },
+      "metrics": {
+        "auroc": 0.6419291874999999,
+        "aupr": 0.5065842226023882,
+        "fpr95": 0.8425,
+        "oscr": 0.403515375,
+        "known_ratio": 0.9343,
+        "known_class_correct": 3087,
+        "known_class_wrong": 2619,
+        "known_class_accuracy_after_accept": 0.5410094637223974,
+        "known_class_accuracy_all_known": 0.5145,
+        "known_correct": 5706,
+        "known_rejected": 294,
+        "unknown_correct_reject": 363,
+        "unknown_false_accept": 3637,
+        "total": 10000,
+        "known_accept_rate": 0.951,
+        "unknown_reject_rate": 0.09075,
+        "cluster_acc": 0.2009132420091324,
+        "cluster_nmi": 0.49815582443650136,
+        "cluster_ari": 0.06132152209684361,
+        "cluster_unknown_only_acc": 0.2727272727272727,
+        "cluster_unknown_only_nmi": 0.5077861887327632,
+        "cluster_unknown_only_ari": 0.09206992402789285,
+        "cluster_candidate_count": 657,
+        "cluster_true_unknown_count": 363,
+        "cluster_false_reject_count": 294,
+        "cluster_true_k": 40,
+        "cluster_k_abs_error": 0
+      }
+    }
+  ],
+  "summary": [
+    {
+      "method": "F_discovery_pool",
+      "cluster_k_mode": "auto",
+      "seeds": [
+        42,
+        123
+      ],
+      "runs": [
+        "runs\\revised_ms_s123_F_discovery_pool_detect_auto",
+        "runs\\revised_ms_s42_F_discovery_pool_detect_auto"
+      ],
+      "metrics": {
+        "auroc": {
+          "mean": 0.6397282395833332,
+          "std": 0.003112610393826771,
+          "count": 2
+        },
+        "aupr": {
+          "mean": 0.5021163046286573,
+          "std": 0.006318590194020781,
+          "count": 2
+        },
+        "fpr95": {
+          "mean": 0.8413333333333333,
+          "std": 0.0016499158227686647,
+          "count": 2
+        },
+        "oscr": {
+          "mean": 0.40838660416666667,
+          "std": 0.006888958352927377,
+          "count": 2
+        },
+        "known_class_accuracy_all_known": {
+          "mean": 0.5220833333333332,
+          "std": 0.010724452847995967,
+          "count": 2
+        },
+        "known_accept_rate": {
+          "mean": 0.95025,
+          "std": 0.001060660171779783,
+          "count": 2
+        },
+        "unknown_reject_rate": {
+          "mean": 0.08637500000000001,
+          "std": 0.006187184335382286,
+          "count": 2
+        },
+        "cluster_acc": {
+          "mean": 0.12576495476002672,
+          "std": 0.000801656154874066,
+          "count": 2
+        },
+        "cluster_nmi": {
+          "mean": 0.33886228187164164,
+          "std": 0.01031644231022764,
+          "count": 2
+        },
+        "cluster_ari": {
+          "mean": 0.04260365528191244,
+          "std": 0.0066866923028554605,
+          "count": 2
+        },
+        "cluster_k": {
+          "mean": 11.5,
+          "std": 0.7071067811865476,
+          "count": 2
+        }
+      }
+    },
+    {
+      "method": "F_discovery_pool",
+      "cluster_k_mode": "oracle",
+      "seeds": [
+        42,
+        123
+      ],
+      "runs": [
+        "runs\\revised_ms_s123_F_discovery_pool_detect_oracle",
+        "runs\\revised_ms_s42_F_discovery_pool_detect_oracle"
+      ],
+      "metrics": {
+        "auroc": {
+          "mean": 0.6397282395833332,
+          "std": 0.003112610393826771,
+          "count": 2
+        },
+        "aupr": {
+          "mean": 0.5021163046286573,
+          "std": 0.006318590194020781,
+          "count": 2
+        },
+        "fpr95": {
+          "mean": 0.8413333333333333,
+          "std": 0.0016499158227686647,
+          "count": 2
+        },
+        "oscr": {
+          "mean": 0.40838660416666667,
+          "std": 0.006888958352927377,
+          "count": 2
+        },
+        "known_class_accuracy_all_known": {
+          "mean": 0.5220833333333332,
+          "std": 0.010724452847995967,
+          "count": 2
+        },
+        "known_accept_rate": {
+          "mean": 0.95025,
+          "std": 0.001060660171779783,
+          "count": 2
+        },
+        "unknown_reject_rate": {
+          "mean": 0.08637500000000001,
+          "std": 0.006187184335382286,
+          "count": 2
+        },
+        "cluster_acc": {
+          "mean": 0.20584489358776747,
+          "std": 0.006974408547404394,
+          "count": 2
+        },
+        "cluster_nmi": {
+          "mean": 0.5052765109928444,
+          "std": 0.010070171501388179,
+          "count": 2
+        },
+        "cluster_ari": {
+          "mean": 0.06786269932007408,
+          "std": 0.00925062154297851,
+          "count": 2
+        },
+        "cluster_k": {
+          "mean": 40.0,
+          "std": 0.0,
+          "count": 2
+        }
+      }
+    }
+  ]
+}

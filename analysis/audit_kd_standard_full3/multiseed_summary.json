@@ -1,0 +1,1035 @@
+{
+  "runs": [
+    {
+      "run_dir": "runs\\revised_ms_s123_B_standard_kd_detect_auto",
+      "seed": 123,
+      "method": "B_standard_kd",
+      "cluster_k_mode": "auto",
+      "cluster_k": 2,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 123,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s123_B_standard_kd_detect_auto",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "student_ckpt": ".\\runs\\revised_ms_s123_B_standard_kd\\student.pt",
+        "num_novel": 40,
+        "cluster_k": "auto",
+        "threshold_percentile": 95.0,
+        "mc_samples": 8,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false
+      },
+      "metrics": {
+        "auroc": 0.598835,
+        "fpr95": 0.8818333333333334,
+        "known_ratio": 0.9465,
+        "known_class_correct": 2569,
+        "known_class_wrong": 3147,
+        "known_class_accuracy_after_accept": 0.4494401679496151,
+        "known_class_accuracy_all_known": 0.42816666666666664,
+        "known_correct": 5716,
+        "known_rejected": 284,
+        "unknown_correct_reject": 251,
+        "unknown_false_accept": 3749,
+        "total": 10000,
+        "known_accept_rate": 0.9526666666666667,
+        "unknown_reject_rate": 0.06275,
+        "cluster_acc": 0.056074766355140186,
+        "cluster_nmi": 0.09668590061562415,
+        "cluster_ari": 0.008418977776055655
+      }
+    },
+    {
+      "run_dir": "runs\\revised_ms_s123_B_standard_kd_detect_oracle",
+      "seed": 123,
+      "method": "B_standard_kd",
+      "cluster_k_mode": "oracle",
+      "cluster_k": 40,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 123,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s123_B_standard_kd_detect_oracle",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "student_ckpt": ".\\runs\\revised_ms_s123_B_standard_kd\\student.pt",
+        "num_novel": 40,
+        "cluster_k": "oracle",
+        "threshold_percentile": 95.0,
+        "mc_samples": 8,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false
+      },
+      "metrics": {
+        "auroc": 0.598835,
+        "fpr95": 0.8818333333333334,
+        "known_ratio": 0.9465,
+        "known_class_correct": 2569,
+        "known_class_wrong": 3147,
+        "known_class_accuracy_after_accept": 0.4494401679496151,
+        "known_class_accuracy_all_known": 0.42816666666666664,
+        "known_correct": 5716,
+        "known_rejected": 284,
+        "unknown_correct_reject": 251,
+        "unknown_false_accept": 3749,
+        "total": 10000,
+        "known_accept_rate": 0.9526666666666667,
+        "unknown_reject_rate": 0.06275,
+        "cluster_acc": 0.19065420560747665,
+        "cluster_nmi": 0.5208723263123203,
+        "cluster_ari": 0.05049968118514117
+      }
+    },
+    {
+      "run_dir": "runs\\revised_ms_s3407_B_standard_kd_detect_auto",
+      "seed": 3407,
+      "method": "B_standard_kd",
+      "cluster_k_mode": "auto",
+      "cluster_k": 44,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 3407,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s3407_B_standard_kd_detect_auto",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "limit_discovery": 0,
+        "discovery_pool_mode": "unknown",
+        "student_ckpt": ".\\runs\\revised_ms_s3407_B_standard_kd\\student.pt",
+        "novel_head_ckpt": "",
+        "novel_known_temperature": null,
+        "num_novel": 40,
+        "cluster_k": "auto",
+        "cluster_method": "kmeans",
+        "cluster_feature": "projection_pca",
+        "cluster_selection": "silhouette",
+        "max_auto_clusters": 50,
+        "cluster_pca_dim": 32,
+        "cluster_normalize": false,
+        "cluster_no_whiten": false,
+        "cluster_n_init": 10,
+        "cluster_stability_repeats": 5,
+        "skip_clustering": false,
+        "threshold_percentile": 95.0,
+        "threshold_policy": "global",
+        "target_known_coverage": 0.95,
+        "threshold_min_class_samples": 5,
+        "candidate_purify": "none",
+        "candidate_keep_ratio": 1.0,
+        "mc_samples": 8,
+        "temperature_calibration": false,
+        "calibration_bins": 15,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false,
+        "auto_score_fast": false,
+        "odin_epsilon": 0.0,
+        "odin_temperature": 1000.0,
+        "react_percentile": 0.0,
+        "knn_ood": false,
+        "knn_k": 10,
+        "knn_feature": "features",
+        "knn_bank_size": 0,
+        "vim_ood": false,
+        "vim_rank": 64,
+        "discovery_pool_semantics": "oracle_filtered_novel_only (training class labels select the pool)"
+      },
+      "metrics": {
+        "auroc": 0.5523744583333333,
+        "aupr": 0.42520553980293324,
+        "fpr95": 0.9003333333333333,
+        "oscr": 0.296196875,
+        "known_ratio": 0.9488,
+        "known_class_correct": 2582,
+        "known_class_wrong": 3106,
+        "known_class_accuracy_after_accept": 0.4539381153305204,
+        "known_class_accuracy_all_known": 0.43033333333333335,
+        "threshold_type": "global",
+        "known_correct": 5688,
+        "known_rejected": 312,
+        "unknown_correct_reject": 200,
+        "unknown_false_accept": 3800,
+        "total": 10000,
+        "known_accept_rate": 0.948,
+        "unknown_reject_rate": 0.05,
+        "cluster_all_unknown_oracle_acc": 0.2555,
+        "cluster_all_unknown_oracle_nmi": 0.3299786651122804,
+        "cluster_all_unknown_oracle_ari": 0.12444562010256231,
+        "cluster_candidate_unknown_oracle_acc": 0.32,
+        "cluster_candidate_unknown_oracle_nmi": 0.5802587759040039,
+        "cluster_candidate_unknown_oracle_ari": 0.10630144662049408,
+        "cluster_acc": 0.271484375,
+        "cluster_nmi": 0.5585120174815539,
+        "cluster_ari": 0.09179985047782341,
+        "cluster_unknown_only_acc": 0.35,
+        "cluster_unknown_only_nmi": 0.592977687650711,
+        "cluster_unknown_only_ari": 0.11773167586246358,
+        "cluster_candidate_count": 512,
+        "cluster_candidate_count_before_purification": 512,
+        "cluster_candidate_removed_count": 0,
+        "cluster_candidate_true_unknown_count_before_purification": 200,
+        "cluster_candidate_false_reject_count_before_purification": 312,
+        "cluster_candidate_purity_before_purification": 0.390625,
+        "cluster_candidate_unknown_recall": 1.0,
+        "cluster_true_unknown_count": 200,
+        "cluster_false_reject_count": 312,
+        "cluster_candidate_purity": 0.390625,
+        "cluster_true_k": 40,
+        "cluster_k_abs_error": 4,
+        "cluster_k": 44,
+        "cluster_method": "kmeans",
+        "cluster_feature": "projection_pca",
+        "cluster_selection": "silhouette",
+        "cluster_pca_dim": 32,
+        "cluster_normalized": true,
+        "cluster_n_init": 10,
+        "cluster_stability_repeats": 5,
+        "max_auto_clusters": 50,
+        "cluster_diagnostics": [
+          {
+            "k": 2,
+            "silhouette": 0.024819083511829376,
+            "calinski_harabasz": 13.689277815388822,
+            "davies_bouldin": 5.9719760841973795,
+            "internal_score": 0.25,
+            "selection_score": 0.0
+          },
+          {
+            "k": 3,
+            "silhouette": 0.025894826278090477,
+            "calinski_harabasz": 12.436450275635087,
+            "davies_bouldin": 5.35472461137078,
+            "internal_score": 0.26451390315737033,
+            "selection_score": 0.029224504063655055
+          },
+          {
+            "k": 4,
+            "silhouette": 0.027455123141407967,
+            "calinski_harabasz": 11.674964683478716,
+            "davies_bouldin": 5.0373357654756825,
+            "internal_score": 0.2818348598592909,
+            "selection_score": 0.07161279934452018
+          },
+          {
+            "k": 5,
+            "silhouette": 0.03231232985854149,
+            "calinski_harabasz": 11.668497441084911,
+            "davies_bouldin": 4.475818458003492,
+            "internal_score": 0.38465779107317455,
+            "selection_score": 0.2035676326884125
+          },
+          {
+            "k": 6,
+            "silhouette": 0.034309022128582,
+            "calinski_harabasz": 11.045529690203596,
+            "davies_bouldin": 4.106863226086942,
+            "internal_score": 0.4158241486416383,
+            "selection_score": 0.2578114009848795
+          },
+          {
+            "k": 7,
+            "silhouette": 0.035428084433078766,
+            "calinski_harabasz": 10.778649209299312,
+            "davies_bouldin": 3.9056389537260086,
+            "internal_score": 0.4356059629207405,
+            "selection_score": 0.28821275890329384
+          },
+          {
+            "k": 8,
+            "silhouette": 0.03640880808234215,
+            "calinski_harabasz": 10.407339375032468,
+            "davies_bouldin": 3.7145484620227496,
+            "internal_score": 0.4494362982057438,
+            "selection_score": 0.3148558962518594
+          },
+          {
+            "k": 9,
+            "silhouette": 0.04145311191678047,
+            "calinski_harabasz": 10.437438422562717,
+            "davies_bouldin": 3.56890625525436,
+            "internal_score": 0.5285475214307972,
+            "selection_score": 0.4518935622546935
+          },
+          {
+            "k": 10,
+            "silhouette": 0.039808616042137146,
+            "calinski_harabasz": 9.856995919847868,
+            "davies_bouldin": 3.3764719435363433,
+            "internal_score": 0.49999096764624895,
+            "selection_score": 0.4072178480612197
+          },
+          {
+            "k": 11,
+            "silhouette": 0.04321696609258652,
+            "calinski_harabasz": 9.835511628928254,
+            "davies_bouldin": 3.2894364723370244,
+            "internal_score": 0.5513314937547225,
+            "selection_score": 0.49981186126189986
+          },
+          {
+            "k": 12,
+            "silhouette": 0.041860535740852356,
+            "calinski_harabasz": 9.409642392859656,
+            "davies_bouldin": 3.309059132309711,
+            "internal_score": 0.5177314645965383,
+            "selection_score": 0.46296196966179354
+          },
+          {
+            "k": 13,
+            "silhouette": 0.048320576548576355,
+            "calinski_harabasz": 9.543415114581203,
+            "davies_bouldin": 3.0539724041671175,
+            "internal_score": 0.6266747878331799,
+            "selection_score": 0.638460699244591
+          },
+          {
+            "k": 14,
+            "silhouette": 0.044272955507040024,
+            "calinski_harabasz": 9.143010762978985,
+            "davies_bouldin": 3.0831013856411644,
+            "internal_score": 0.5567218305566646,
+            "selection_score": 0.5284997296833945
+          },
+          {
+            "k": 15,
+            "silhouette": 0.04735267907381058,
+            "calinski_harabasz": 8.953612976636363,
+            "davies_bouldin": 3.015540127977942,
+            "internal_score": 0.596840612212626,
+            "selection_score": 0.6121660081979506
+          },
+          {
+            "k": 16,
+            "silhouette": 0.048102766275405884,
+            "calinski_harabasz": 8.936697701097053,
+            "davies_bouldin": 2.9233986170615376,
+            "internal_score": 0.6125587506839053,
+            "selection_score": 0.6325434879808797
+          },
+          {
+            "k": 17,
+            "silhouette": 0.04963185638189316,
+            "calinski_harabasz": 8.67085835333445,
+            "davies_bouldin": 2.8759442837027023,
+            "internal_score": 0.627796309463257,
+            "selection_score": 0.6740839950911881
+          },
+          {
+            "k": 18,
+            "silhouette": 0.052611853927373886,
+            "calinski_harabasz": 8.792355304201733,
+            "davies_bouldin": 2.8386801665152475,
+            "internal_score": 0.6746938895684852,
+            "selection_score": 0.755041035295394
+          },
+          {
+            "k": 19,
+            "silhouette": 0.052584536373615265,
+            "calinski_harabasz": 8.469608243489072,
+            "davies_bouldin": 2.797731633593375,
+            "internal_score": 0.6665060292123179,
+            "selection_score": 0.7542989043828129
+          },
+          {
+            "k": 20,
+            "silhouette": 0.05241018906235695,
+            "calinski_harabasz": 8.411885444575686,
+            "davies_bouldin": 2.684180289089991,
+            "internal_score": 0.6697500825023717,
+            "selection_score": 0.7495624433382593
+          },
+          {
+            "k": 21,
+            "silhouette": 0.052632711827754974,
+            "calinski_harabasz": 8.34423514600544,
+            "davies_bouldin": 2.684510528873907,
+            "internal_score": 0.6705460172387365,
+            "selection_score": 0.7556076780036365
+          },
+          {
+            "k": 22,
+            "silhouette": 0.052047524601221085,
+            "calinski_harabasz": 8.015110534134973,
+            "davies_bouldin": 2.729748854146271,
+            "internal_score": 0.6488847833766164,
+            "selection_score": 0.7397100052363089
+          },
+          {
+            "k": 23,
+            "silhouette": 0.05568753182888031,
+            "calinski_harabasz": 8.035160876817,
+            "davies_bouldin": 2.625672333528105,
+            "internal_score": 0.7058503113462181,
+            "selection_score": 0.8385974059726308
+          },
+          {
+            "k": 24,
+            "silhouette": 0.05611933395266533,
+            "calinski_harabasz": 8.00634638817756,
+            "davies_bouldin": 2.5752281130423125,
+            "internal_score": 0.7141054937983998,
+            "selection_score": 0.8503280941232098
+          },
+          {
+            "k": 25,
+            "silhouette": 0.05573003366589546,
+            "calinski_harabasz": 7.76931553296505,
+            "davies_bouldin": 2.575453495804549,
+            "internal_score": 0.7010771792625856,
+            "selection_score": 0.839752045490105
+          },
+          {
+            "k": 26,
+            "silhouette": 0.05475256219506264,
+            "calinski_harabasz": 7.679435449172285,
+            "davies_bouldin": 2.5485795699378153,
+            "internal_score": 0.6866438691509879,
+            "selection_score": 0.8131972594693293
+          },
+          {
+            "k": 27,
+            "silhouette": 0.05758371949195862,
+            "calinski_harabasz": 7.630762700416099,
+            "davies_bouldin": 2.5035832736281893,
+            "internal_score": 0.7264837148634122,
+            "selection_score": 0.8901107842662984
+          },
+          {
+            "k": 28,
+            "silhouette": 0.05818110704421997,
+            "calinski_harabasz": 7.5500744898821806,
+            "davies_bouldin": 2.4908017606333286,
+            "internal_score": 0.7328119390508541,
+            "selection_score": 0.9063399010181756
+          },
+          {
+            "k": 29,
+            "silhouette": 0.058371949940919876,
+            "calinski_harabasz": 7.455835302892026,
+            "davies_bouldin": 2.4885427091097356,
+            "internal_score": 0.7324818316901414,
+            "selection_score": 0.9115244945706945
+          },
+          {
+            "k": 30,
+            "silhouette": 0.05808453634381294,
+            "calinski_harabasz": 7.431346470781622,
+            "davies_bouldin": 2.4235590039173234,
+            "internal_score": 0.732068104336768,
+            "selection_score": 0.903716382724593
+          },
+          {
+            "k": 31,
+            "silhouette": 0.05699323117733002,
+            "calinski_harabasz": 7.318303820483925,
+            "davies_bouldin": 2.419962359260989,
+            "internal_score": 0.7137974787838534,
+            "selection_score": 0.8740690978226306
+          },
+          {
+            "k": 32,
+            "silhouette": 0.05647934973239899,
+            "calinski_harabasz": 7.154349708579941,
+            "davies_bouldin": 2.4394777537329992,
+            "internal_score": 0.7001856691105957,
+            "selection_score": 0.860108575989125
+          },
+          {
+            "k": 33,
+            "silhouette": 0.057171598076820374,
+            "calinski_harabasz": 7.157437996653508,
+            "davies_bouldin": 2.35974729924126,
+            "internal_score": 0.7149510792463898,
+            "selection_score": 0.878914758274613
+          },
+          {
+            "k": 34,
+            "silhouette": 0.060418516397476196,
+            "calinski_harabasz": 7.137815842370848,
+            "davies_bouldin": 2.3784635173289237,
+            "internal_score": 0.7571806165757323,
+            "selection_score": 0.9671231856351469
+          },
+          {
+            "k": 35,
+            "silhouette": 0.05701768770813942,
+            "calinski_harabasz": 6.957309070434853,
+            "davies_bouldin": 2.3561561603960537,
+            "internal_score": 0.7065747504209482,
+            "selection_score": 0.8747335038557815
+          },
+          {
+            "k": 36,
+            "silhouette": 0.05956737697124481,
+            "calinski_harabasz": 6.922104811974667,
+            "davies_bouldin": 2.3554535373694785,
+            "internal_score": 0.7401071931492934,
+            "selection_score": 0.9440004388217151
+          },
+          {
+            "k": 37,
+            "silhouette": 0.060925405472517014,
+            "calinski_harabasz": 6.913102176119772,
+            "davies_bouldin": 2.3237210796248795,
+            "internal_score": 0.7603545542510359,
+            "selection_score": 0.9808937470536907
+          },
+          {
+            "k": 38,
+            "silhouette": 0.05661895126104355,
+            "calinski_harabasz": 6.714051583118799,
+            "davies_bouldin": 2.335683548379839,
+            "internal_score": 0.6945812454211936,
+            "selection_score": 0.8639011048065349
+          },
+          {
+            "k": 39,
+            "silhouette": 0.05667388066649437,
+            "calinski_harabasz": 6.548845196977331,
+            "davies_bouldin": 2.34248304832063,
+            "internal_score": 0.6894941724381071,
+            "selection_score": 0.8653933617690345
+          },
+          {
+            "k": 40,
+            "silhouette": 0.059417422860860825,
+            "calinski_harabasz": 6.660259288707734,
+            "davies_bouldin": 2.2800490358430756,
+            "internal_score": 0.7345122988961882,
+            "selection_score": 0.9399266633377209
+          },
+          {
+            "k": 41,
+            "silhouette": 0.058296117931604385,
+            "calinski_harabasz": 6.565914011497454,
+            "davies_bouldin": 2.2941925436681876,
+            "internal_score": 0.7152728389587921,
+            "selection_score": 0.9094643804487114
+          },
+          {
+            "k": 42,
+            "silhouette": 0.060705214738845825,
+            "calinski_harabasz": 6.52763336787614,
+            "davies_bouldin": 2.268876570062686,
+            "internal_score": 0.7484196027993457,
+            "selection_score": 0.9749118662613908
+          },
+          {
+            "k": 43,
+            "silhouette": 0.060330282896757126,
+            "calinski_harabasz": 6.415451198451424,
+            "davies_bouldin": 2.233219360564846,
+            "internal_score": 0.7420235907707194,
+            "selection_score": 0.964726162498029
+          },
+          {
+            "k": 44,
+            "silhouette": 0.06162869930267334,
+            "calinski_harabasz": 6.28518584006105,
+            "davies_bouldin": 2.236961363315152,
+            "internal_score": 0.7551678956684145,
+            "selection_score": 1.0
+          },
+          {
+            "k": 45,
+            "silhouette": 0.05988647788763046,
+            "calinski_harabasz": 6.285292249585642,
+            "davies_bouldin": 2.2233792040940776,
+            "internal_score": 0.7324023904275188,
+            "selection_score": 0.9526693941892151
+          },
+          {
+            "k": 46,
+            "silhouette": 0.06129181757569313,
+            "calinski_harabasz": 6.349376195704439,
+            "davies_bouldin": 2.2180730758896097,
+            "internal_score": 0.7539305126558542,
+            "selection_score": 0.9908479966513531
+          },
+          {
+            "k": 47,
+            "silhouette": 0.060114070773124695,
+            "calinski_harabasz": 6.177750233929916,
+            "davies_bouldin": 2.211240111078552,
+            "internal_score": 0.7327899164334991,
+            "selection_score": 0.9588523678661869
+          },
+          {
+            "k": 48,
+            "silhouette": 0.06129017472267151,
+            "calinski_harabasz": 6.153839170490857,
+            "davies_bouldin": 2.200828509675896,
+            "internal_score": 0.7486731895332036,
+            "selection_score": 0.9908033655682428
+          },
+          {
+            "k": 49,
+            "silhouette": 0.06030964106321335,
+            "calinski_harabasz": 6.095202850380972,
+            "davies_bouldin": 2.1837043161168372,
+            "internal_score": 0.7345731797189972,
+            "selection_score": 0.9641653896374519
+          },
+          {
+            "k": 50,
+            "silhouette": 0.05950796604156494,
+            "calinski_harabasz": 6.018789913188401,
+            "davies_bouldin": 2.190591623350793,
+            "internal_score": 0.7207387014381841,
+            "selection_score": 0.9423864331222954
+          }
+        ],
+        "candidate_purify": "none",
+        "candidate_keep_ratio": 1.0,
+        "candidate_purification": {
+          "mode": "none",
+          "keep_ratio": 1.0,
+          "before_count": 512,
+          "after_count": 512,
+          "removed_count": 0
+        },
+        "threshold_policy": "known_val_global"
+      }
+    },
+    {
+      "run_dir": "runs\\revised_ms_s3407_B_standard_kd_detect_oracle",
+      "seed": 3407,
+      "method": "B_standard_kd",
+      "cluster_k_mode": "oracle",
+      "cluster_k": 40,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 3407,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s3407_B_standard_kd_detect_oracle",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "limit_discovery": 0,
+        "discovery_pool_mode": "unknown",
+        "student_ckpt": ".\\runs\\revised_ms_s3407_B_standard_kd\\student.pt",
+        "novel_head_ckpt": "",
+        "novel_known_temperature": null,
+        "num_novel": 40,
+        "cluster_k": "oracle",
+        "cluster_method": "kmeans",
+        "cluster_feature": "projection_pca",
+        "cluster_selection": "silhouette",
+        "max_auto_clusters": 50,
+        "cluster_pca_dim": 32,
+        "cluster_normalize": false,
+        "cluster_no_whiten": false,
+        "cluster_n_init": 10,
+        "cluster_stability_repeats": 5,
+        "skip_clustering": false,
+        "threshold_percentile": 95.0,
+        "threshold_policy": "global",
+        "target_known_coverage": 0.95,
+        "threshold_min_class_samples": 5,
+        "candidate_purify": "none",
+        "candidate_keep_ratio": 1.0,
+        "mc_samples": 8,
+        "temperature_calibration": false,
+        "calibration_bins": 15,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false,
+        "auto_score_fast": false,
+        "odin_epsilon": 0.0,
+        "odin_temperature": 1000.0,
+        "react_percentile": 0.0,
+        "knn_ood": false,
+        "knn_k": 10,
+        "knn_feature": "features",
+        "knn_bank_size": 0,
+        "vim_ood": false,
+        "vim_rank": 64,
+        "discovery_pool_semantics": "oracle_filtered_novel_only (training class labels select the pool)"
+      },
+      "metrics": {
+        "auroc": 0.5523744583333333,
+        "aupr": 0.42520553980293324,
+        "fpr95": 0.9003333333333333,
+        "oscr": 0.296196875,
+        "known_ratio": 0.9488,
+        "known_class_correct": 2582,
+        "known_class_wrong": 3106,
+        "known_class_accuracy_after_accept": 0.4539381153305204,
+        "known_class_accuracy_all_known": 0.43033333333333335,
+        "threshold_type": "global",
+        "known_correct": 5688,
+        "known_rejected": 312,
+        "unknown_correct_reject": 200,
+        "unknown_false_accept": 3800,
+        "total": 10000,
+        "known_accept_rate": 0.948,
+        "unknown_reject_rate": 0.05,
+        "cluster_all_unknown_oracle_acc": 0.2555,
+        "cluster_all_unknown_oracle_nmi": 0.3299786651122804,
+        "cluster_all_unknown_oracle_ari": 0.12444562010256231,
+        "cluster_candidate_unknown_oracle_acc": 0.32,
+        "cluster_candidate_unknown_oracle_nmi": 0.5802587759040039,
+        "cluster_candidate_unknown_oracle_ari": 0.10630144662049408,
+        "cluster_acc": 0.26953125,
+        "cluster_nmi": 0.5555208139705914,
+        "cluster_ari": 0.09660811074333155,
+        "cluster_unknown_only_acc": 0.33,
+        "cluster_unknown_only_nmi": 0.5695869304456834,
+        "cluster_unknown_only_ari": 0.09904992894973294,
+        "cluster_candidate_count": 512,
+        "cluster_candidate_count_before_purification": 512,
+        "cluster_candidate_removed_count": 0,
+        "cluster_candidate_true_unknown_count_before_purification": 200,
+        "cluster_candidate_false_reject_count_before_purification": 312,
+        "cluster_candidate_purity_before_purification": 0.390625,
+        "cluster_candidate_unknown_recall": 1.0,
+        "cluster_true_unknown_count": 200,
+        "cluster_false_reject_count": 312,
+        "cluster_candidate_purity": 0.390625,
+        "cluster_true_k": 40,
+        "cluster_k_abs_error": 0,
+        "cluster_k": 40,
+        "cluster_method": "kmeans",
+        "cluster_feature": "projection_pca",
+        "cluster_selection": "oracle",
+        "cluster_pca_dim": 32,
+        "cluster_normalized": true,
+        "cluster_n_init": 10,
+        "cluster_stability_repeats": 5,
+        "max_auto_clusters": 50,
+        "cluster_diagnostics": [],
+        "candidate_purify": "none",
+        "candidate_keep_ratio": 1.0,
+        "candidate_purification": {
+          "mode": "none",
+          "keep_ratio": 1.0,
+          "before_count": 512,
+          "after_count": 512,
+          "removed_count": 0
+        },
+        "threshold_policy": "known_val_global"
+      }
+    },
+    {
+      "run_dir": "runs\\revised_ms_s42_B_standard_kd_detect_auto",
+      "seed": 42,
+      "method": "B_standard_kd",
+      "cluster_k_mode": "auto",
+      "cluster_k": 2,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 42,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s42_B_standard_kd_detect_auto",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "student_ckpt": ".\\runs\\revised_ms_s42_B_standard_kd\\student.pt",
+        "num_novel": 40,
+        "cluster_k": "auto",
+        "threshold_percentile": 95.0,
+        "mc_samples": 8,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false
+      },
+      "metrics": {
+        "auroc": 0.578075,
+        "fpr95": 0.8655,
+        "known_ratio": 0.9519,
+        "known_class_correct": 2519,
+        "known_class_wrong": 3222,
+        "known_class_accuracy_after_accept": 0.43877373279916393,
+        "known_class_accuracy_all_known": 0.41983333333333334,
+        "known_correct": 5741,
+        "known_rejected": 259,
+        "unknown_correct_reject": 222,
+        "unknown_false_accept": 3778,
+        "total": 10000,
+        "known_accept_rate": 0.9568333333333333,
+        "unknown_reject_rate": 0.0555,
+        "cluster_acc": 0.07276507276507277,
+        "cluster_nmi": 0.117944231120033,
+        "cluster_ari": 0.01215806326793868
+      }
+    },
+    {
+      "run_dir": "runs\\revised_ms_s42_B_standard_kd_detect_oracle",
+      "seed": 42,
+      "method": "B_standard_kd",
+      "cluster_k_mode": "oracle",
+      "cluster_k": 40,
+      "config": {
+        "command": "discover",
+        "dataset": "cifar100",
+        "data_root": ".\\data",
+        "split_path": ".\\splits_cifar100_60_40.json",
+        "num_known": 60,
+        "seed": 42,
+        "image_size": 64,
+        "batch_size": 64,
+        "num_workers": 0,
+        "backbone": "resnet18",
+        "teacher_backbone": null,
+        "student_backbone": "resnet18",
+        "pretrained": true,
+        "proj_dim": 128,
+        "dropout": 0.2,
+        "download": false,
+        "device": "auto",
+        "work_dir": ".\\runs\\revised_ms_s42_B_standard_kd_detect_oracle",
+        "limit_train": 0,
+        "limit_val": 0,
+        "limit_test": 0,
+        "student_ckpt": ".\\runs\\revised_ms_s42_B_standard_kd\\student.pt",
+        "num_novel": 40,
+        "cluster_k": "oracle",
+        "threshold_percentile": 95.0,
+        "mc_samples": 8,
+        "score_mode": "normalized_entropy_mahalanobis",
+        "open_val_ratio": 0.0,
+        "auto_calibrate_score": false
+      },
+      "metrics": {
+        "auroc": 0.578075,
+        "fpr95": 0.8655,
+        "known_ratio": 0.9519,
+        "known_class_correct": 2519,
+        "known_class_wrong": 3222,
+        "known_class_accuracy_after_accept": 0.43877373279916393,
+        "known_class_accuracy_all_known": 0.41983333333333334,
+        "known_correct": 5741,
+        "known_rejected": 259,
+        "unknown_correct_reject": 222,
+        "unknown_false_accept": 3778,
+        "total": 10000,
+        "known_accept_rate": 0.9568333333333333,
+        "unknown_reject_rate": 0.0555,
+        "cluster_acc": 0.20374220374220375,
+        "cluster_nmi": 0.5432059632583834,
+        "cluster_ari": 0.06340076819979512
+      }
+    }
+  ],
+  "summary": [
+    {
+      "method": "B_standard_kd",
+      "cluster_k_mode": "auto",
+      "seeds": [
+        42,
+        123,
+        3407
+      ],
+      "runs": [
+        "runs\\revised_ms_s123_B_standard_kd_detect_auto",
+        "runs\\revised_ms_s3407_B_standard_kd_detect_auto",
+        "runs\\revised_ms_s42_B_standard_kd_detect_auto"
+      ],
+      "metrics": {
+        "auroc": {
+          "mean": 0.5764281527777778,
+          "std": 0.023274010447708056,
+          "count": 3
+        },
+        "aupr": {
+          "mean": 0.42520553980293324,
+          "std": 0.0,
+          "count": 1
+        },
+        "fpr95": {
+          "mean": 0.8825555555555556,
+          "std": 0.017427893776399958,
+          "count": 3
+        },
+        "oscr": {
+          "mean": 0.296196875,
+          "std": 0.0,
+          "count": 1
+        },
+        "known_class_accuracy_all_known": {
+          "mean": 0.4261111111111111,
+          "std": 0.005543598243152318,
+          "count": 3
+        },
+        "known_accept_rate": {
+          "mean": 0.9525,
+          "std": 0.004419024527854297,
+          "count": 3
+        },
+        "unknown_reject_rate": {
+          "mean": 0.05608333333333334,
+          "std": 0.006394985014316556,
+          "count": 3
+        },
+        "cluster_acc": {
+          "mean": 0.13344140470673765,
+          "std": 0.11983963375091833,
+          "count": 3
+        },
+        "cluster_nmi": {
+          "mean": 0.25771404973907036,
+          "std": 0.2607154429688905,
+          "count": 3
+        },
+        "cluster_ari": {
+          "mean": 0.037458963840605916,
+          "std": 0.047097708654117075,
+          "count": 3
+        },
+        "cluster_k": {
+          "mean": 16.0,
+          "std": 24.24871130596428,
+          "count": 3
+        }
+      }
+    },
+    {
+      "method": "B_standard_kd",
+      "cluster_k_mode": "oracle",
+      "seeds": [
+        42,
+        123,
+        3407
+      ],
+      "runs": [
+        "runs\\revised_ms_s123_B_standard_kd_detect_oracle",
+        "runs\\revised_ms_s3407_B_standard_kd_detect_oracle",
+        "runs\\revised_ms_s42_B_standard_kd_detect_oracle"
+      ],
+      "metrics": {
+        "auroc": {
+          "mean": 0.5764281527777778,
+          "std": 0.023274010447708056,
+          "count": 3
+        },
+        "aupr": {
+          "mean": 0.42520553980293324,
+          "std": 0.0,
+          "count": 1
+        },
+        "fpr95": {
+          "mean": 0.8825555555555556,
+          "std": 0.017427893776399958,
+          "count": 3
+        },
+        "oscr": {
+          "mean": 0.296196875,
+          "std": 0.0,
+          "count": 1
+        },
+        "known_class_accuracy_all_known": {
+          "mean": 0.4261111111111111,
+          "std": 0.005543598243152318,
+          "count": 3
+        },
+        "known_accept_rate": {
+          "mean": 0.9525,
+          "std": 0.004419024527854297,
+          "count": 3
+        },
+        "unknown_reject_rate": {
+          "mean": 0.05608333333333334,
+          "std": 0.006394985014316556,
+          "count": 3
+        },
+        "cluster_acc": {
+          "mean": 0.2213092197832268,
+          "std": 0.04227111392504574,
+          "count": 3
+        },
+        "cluster_nmi": {
+          "mean": 0.5398663678470984,
+          "std": 0.017564000039417233,
+          "count": 3
+        },
+        "cluster_ari": {
+          "mean": 0.07016952004275595,
+          "std": 0.02378778720718554,
+          "count": 3
+        },
+        "cluster_k": {
+          "mean": 40.0,
+          "std": 0.0,
+          "count": 3
+        }
+      }
+    }
+  ]
+}
