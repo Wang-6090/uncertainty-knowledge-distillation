@@ -448,6 +448,7 @@ def initialize_novel_head_kmeans(
     seed: int,
     candidate_ratio: float = 0.25,
     candidates_only: bool = False,
+    feature_l2_normalize: bool = True,
 ):
     """Initialize novel prototypes from discovery features without labels.
 
@@ -462,7 +463,10 @@ def initialize_novel_head_kmeans(
     risks = []
     for first_view, _ in discovery_loader:
         outputs = student(first_view.to(device))
-        features.append(torch.nn.functional.normalize(outputs["features"], dim=-1).cpu().numpy())
+        batch_features = outputs["features"]
+        if feature_l2_normalize:
+            batch_features = torch.nn.functional.normalize(batch_features, dim=-1)
+        features.append(batch_features.cpu().numpy())
         if candidates_only:
             probs = outputs["logits"].softmax(dim=-1).clamp_min(1e-8)
             entropy = -(probs * probs.log()).sum(dim=-1)
@@ -490,7 +494,8 @@ def initialize_novel_head_kmeans(
     )
     clustering.fit(feature_array)
     centers = torch.as_tensor(clustering.cluster_centers_, dtype=torch.float32, device=device)
-    centers = torch.nn.functional.normalize(centers, dim=-1)
+    if feature_l2_normalize:
+        centers = torch.nn.functional.normalize(centers, dim=-1)
     novel_head.prototypes.copy_(centers)
     student.train()
     return {
@@ -690,6 +695,16 @@ def fit_teacher(args):
             best_acc = val_stats["known_acc"]
             best_state = copy.deepcopy(model.state_dict())
             best_epoch = epoch + 1
+            if args.save_epoch_checkpoints:
+                save_checkpoint(
+                    model,
+                    ensure_dir(args.work_dir) / "teacher.pt",
+                    extra={
+                        "known_classes": list(bundle.known_classes),
+                        "novel_classes": list(bundle.novel_classes),
+                        "epoch": best_epoch,
+                    },
+                )
     if best_state is not None:
         model.load_state_dict(best_state)
     run_dir = ensure_dir(args.work_dir)
@@ -915,6 +930,26 @@ def fit_student(args):
                 copy.deepcopy(novel_head.state_dict()) if novel_head is not None else None
             )
             best_epoch = epoch + 1
+            if args.save_epoch_checkpoints:
+                # Persist the currently selected checkpoint as training
+                # proceeds. This keeps the best model available even if a
+                # later diagnostics/checkpoint step is interrupted.
+                save_checkpoint(
+                    student,
+                    ensure_dir(args.work_dir) / "student.pt",
+                    extra={
+                        "known_classes": list(bundle.known_classes),
+                        "novel_classes": list(bundle.novel_classes),
+                        "epoch": best_epoch,
+                        "joint_novel_head": (
+                            novel_head.state_dict() if novel_head is not None else None
+                        ),
+                        "reciprocal_points": (
+                            reciprocal_points.detach().cpu()
+                            if reciprocal_points is not None else None
+                        ),
+                    },
+                )
     if best_state is not None:
         student.load_state_dict(best_state)
     if novel_head is not None and best_novel_head_state is not None:
