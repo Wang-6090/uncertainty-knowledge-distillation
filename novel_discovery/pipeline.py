@@ -638,6 +638,8 @@ def train_one_epoch_teacher(
     device,
     alpha_unc: float = 0.1,
     alpha_rejection_known_ce: float = 0.0,
+    alpha_rejection_supcon: float = 0.0,
+    alpha_rejection_center: float = 0.0,
     alpha_proto: float = 0.0,
     alpha_center: float = 0.0,
     alpha_radius: float = 0.0,
@@ -675,6 +677,8 @@ def train_one_epoch_teacher(
     ce_meter = AverageMeter()
     unc_meter = AverageMeter()
     rejection_ce_meter = AverageMeter()
+    rejection_supcon_meter = AverageMeter()
+    rejection_center_meter = AverageMeter()
     proto_meter = AverageMeter()
     center_meter = AverageMeter()
     radius_meter = AverageMeter()
@@ -697,6 +701,16 @@ def train_one_epoch_teacher(
         loss_rejection_ce = out["logits"].new_tensor(0.0)
         if alpha_rejection_known_ce > 0.0 and out.get("rejection_logits") is not None:
             loss_rejection_ce = classification_loss(out["rejection_logits"], labels)
+        loss_rejection_supcon = out["logits"].new_tensor(0.0)
+        if alpha_rejection_supcon > 0.0 and out.get("rejection_logits") is not None:
+            loss_rejection_supcon = supervised_contrastive_loss(
+                out["rejection_features"], labels
+            )
+        loss_rejection_center = out["logits"].new_tensor(0.0)
+        if alpha_rejection_center > 0.0 and out.get("rejection_logits") is not None:
+            loss_rejection_center = supervised_center_loss(
+                out["rejection_features"], labels
+            )
         loss_unc = uncertainty_alignment_loss(
             out["uncertainty"], out["logits"], labels, target_mode=uncertainty_target_mode
         )
@@ -747,6 +761,8 @@ def train_one_epoch_teacher(
             loss_ce
             + alpha_unc * loss_unc
             + alpha_rejection_known_ce * loss_rejection_ce
+            + alpha_rejection_supcon * loss_rejection_supcon
+            + alpha_rejection_center * loss_rejection_center
             + alpha_proto * loss_proto
             + alpha_center * loss_center
             + alpha_radius * loss_radius
@@ -766,6 +782,8 @@ def train_one_epoch_teacher(
         ce_meter.update(loss_ce.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
+        rejection_supcon_meter.update(loss_rejection_supcon.item(), images.size(0))
+        rejection_center_meter.update(loss_rejection_center.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
         center_meter.update(loss_center.item(), images.size(0))
         radius_meter.update(loss_radius.item(), images.size(0))
@@ -782,6 +800,8 @@ def train_one_epoch_teacher(
         "ce": ce_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,
+        "rejection_supcon": rejection_supcon_meter.avg,
+        "rejection_center": rejection_center_meter.avg,
         "proto": proto_meter.avg,
         "center": center_meter.avg,
         "radius": radius_meter.avg,
@@ -845,6 +865,10 @@ def train_one_epoch_student(
     device,
     alpha_unc: float = 0.1,
     alpha_rejection_known_ce: float = 0.0,
+    alpha_rejection_supcon: float = 0.0,
+    alpha_rejection_center: float = 0.0,
+    alpha_rejection_kd: float = 0.0,
+    alpha_rejection_feat_kd: float = 0.0,
     alpha_kd: float = 1.0,
     alpha_feat_kd: float = 0.0,
     alpha_supcon: float = 0.1,
@@ -1007,6 +1031,9 @@ def train_one_epoch_student(
     alpha_outlier_uncertainty: float = 0.0,
     alpha_outlier_feature_margin: float = 0.0,
     outlier_feature_margin: float = 0.2,
+    alpha_outlier_rejection_feature_margin: float = 0.0,
+    outlier_rejection_feature_margin: float = 0.2,
+    alpha_outlier_rejection_uniform: float = 0.0,
     freeze_bn_stats: bool = False,
 ):
     if kd_uncertainty_source not in {"head", "mc_epistemic", "mc_predictive_entropy"}:
@@ -1025,6 +1052,10 @@ def train_one_epoch_student(
     feat_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
     rejection_ce_meter = AverageMeter()
+    rejection_supcon_meter = AverageMeter()
+    rejection_center_meter = AverageMeter()
+    rejection_kd_meter = AverageMeter()
+    rejection_feat_kd_meter = AverageMeter()
     sc_meter = AverageMeter()
     raw_sc_meter = AverageMeter()
     proto_meter = AverageMeter()
@@ -1093,6 +1124,8 @@ def train_one_epoch_student(
     outlier_energy_meter = AverageMeter()
     outlier_uncertainty_meter = AverageMeter()
     outlier_feature_margin_meter = AverageMeter()
+    outlier_rejection_feature_margin_meter = AverageMeter()
+    outlier_rejection_uniform_meter = AverageMeter()
     discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     if joint_memory_bank is None:
         joint_memory_bank = {}
@@ -1118,6 +1151,41 @@ def train_one_epoch_student(
         loss_rejection_ce = s_out["logits"].new_tensor(0.0)
         if alpha_rejection_known_ce > 0.0 and s_out.get("rejection_logits") is not None:
             loss_rejection_ce = classification_loss(s_out["rejection_logits"], labels)
+        loss_rejection_supcon = s_out["logits"].new_tensor(0.0)
+        if alpha_rejection_supcon > 0.0 and s_out.get("rejection_logits") is not None:
+            loss_rejection_supcon = supervised_contrastive_loss(
+                s_out["rejection_features"], labels
+            )
+        loss_rejection_center = s_out["logits"].new_tensor(0.0)
+        if alpha_rejection_center > 0.0 and s_out.get("rejection_logits") is not None:
+            loss_rejection_center = supervised_center_loss(
+                s_out["rejection_features"], labels
+            )
+        loss_rejection_kd = s_out["logits"].new_tensor(0.0)
+        loss_rejection_feat_kd = s_out["logits"].new_tensor(0.0)
+        if s_out.get("rejection_logits") is not None and t_out.get("rejection_logits") is not None:
+            if alpha_rejection_kd > 0.0:
+                loss_rejection_kd = distillation_loss(
+                    s_out["rejection_logits"],
+                    t_out["rejection_logits"],
+                    teacher_uncertainty=teacher_kd_uncertainty_value,
+                    temperature=temperature,
+                    uncertainty_weighted=(kd_mode == "uncertainty"),
+                    uncertainty_weight_mode=uncertainty_weight_mode,
+                    uncertainty_weight_min=uncertainty_weight_min,
+                    uncertainty_weight_max=uncertainty_weight_max,
+                )
+            if alpha_rejection_feat_kd > 0.0:
+                loss_rejection_feat_kd = feature_distillation_loss(
+                    s_out["rejection_features"],
+                    t_out["rejection_features"],
+                    teacher_uncertainty=(
+                        teacher_kd_uncertainty_value if kd_mode == "uncertainty" else None
+                    ),
+                    uncertainty_weight_mode=uncertainty_weight_mode,
+                    uncertainty_weight_min=uncertainty_weight_min,
+                    uncertainty_weight_max=uncertainty_weight_max,
+                )
         loss_kd = distillation_loss(
             s_out["logits"],
             teacher_kd_logits,
@@ -1270,11 +1338,15 @@ def train_one_epoch_student(
         loss_outlier_energy = s_out["logits"].new_tensor(0.0)
         loss_outlier_uncertainty = s_out["logits"].new_tensor(0.0)
         loss_outlier_feature_margin = s_out["logits"].new_tensor(0.0)
+        loss_outlier_rejection_feature_margin = s_out["logits"].new_tensor(0.0)
+        loss_outlier_rejection_uniform = s_out["logits"].new_tensor(0.0)
         if outlier_iter is not None and (
             alpha_outlier_uniform > 0.0
             or alpha_outlier_energy > 0.0
             or alpha_outlier_uncertainty > 0.0
             or alpha_outlier_feature_margin > 0.0
+            or alpha_outlier_rejection_feature_margin > 0.0
+            or alpha_outlier_rejection_uniform > 0.0
         ):
             try:
                 outlier_images, _ = next(outlier_iter)
@@ -1299,6 +1371,26 @@ def train_one_epoch_student(
                     outlier_out["features"],
                     student.classifier.weight,
                     similarity_margin=outlier_feature_margin,
+                )
+            if alpha_outlier_rejection_feature_margin > 0.0:
+                if outlier_out.get("rejection_logits") is None:
+                    raise ValueError(
+                        "outlier rejection feature margin requires "
+                        "--rejection-feature-dim > 0"
+                    )
+                loss_outlier_rejection_feature_margin = unknown_feature_margin_loss(
+                    outlier_out["rejection_features"],
+                    student.rejection_classifier.weight,
+                    similarity_margin=outlier_rejection_feature_margin,
+                )
+            if alpha_outlier_rejection_uniform > 0.0:
+                if outlier_out.get("rejection_logits") is None:
+                    raise ValueError(
+                        "outlier rejection uniform loss requires "
+                        "--rejection-feature-dim > 0"
+                    )
+                loss_outlier_rejection_uniform = outlier_exposure_uniform_loss(
+                    outlier_out["rejection_logits"]
                 )
         if novel_head is not None and alpha_joint_discovery > 0.0:
             main_novel_logits = novel_head(s_out["features"])
@@ -1950,8 +2042,37 @@ def train_one_epoch_student(
                     )
                 first_rejection_values = first_out["rejection_features"]
                 second_rejection_values = second_out["rejection_features"]
-                first_rejection_weight = torch.ones(
-                    first_rejection_values.size(0), device=first_rejection_values.device
+                if discovery_pool_mode == "mixed":
+                    # A mixed pool is unlabeled.  Use the current branch
+                    # uncertainty as a detached soft candidate weight rather
+                    # than treating every discovery sample as unknown.
+                    first_rejection_weight = first_out["uncertainty"].detach()
+                    second_rejection_weight = second_out["uncertainty"].detach()
+                else:
+                    first_rejection_weight = torch.ones(
+                        first_rejection_values.size(0), device=first_rejection_values.device
+                    )
+                    second_rejection_weight = torch.ones(
+                        second_rejection_values.size(0), device=second_rejection_values.device
+                    )
+                if feature_candidate_masks is not None:
+                    first_rejection_values = first_rejection_values[feature_candidate_masks[0]]
+                    second_rejection_values = second_rejection_values[feature_candidate_masks[1]]
+                    first_rejection_weight = first_rejection_weight[feature_candidate_masks[0]]
+                    second_rejection_weight = second_rejection_weight[feature_candidate_masks[1]]
+                loss_discovery_rejection_feature_margin = 0.5 * (
+                    unknown_feature_margin_loss(
+                        first_rejection_values,
+                        student.rejection_classifier.weight,
+                        similarity_margin=discovery_rejection_feature_margin,
+                        sample_weight=first_rejection_weight,
+                    )
+                    + unknown_feature_margin_loss(
+                        second_rejection_values,
+                        student.rejection_classifier.weight,
+                        similarity_margin=discovery_rejection_feature_margin,
+                        sample_weight=second_rejection_weight,
+                    )
                 )
             if alpha_discovery_rejection_feature_separation > 0.0:
                 if s_out.get("rejection_logits") is None:
@@ -1960,8 +2081,16 @@ def train_one_epoch_student(
                     )
                 first_rejection_values = first_out["rejection_features"]
                 second_rejection_values = second_out["rejection_features"]
-                first_rejection_weight = first_out["uncertainty"].detach()
-                second_rejection_weight = second_out["uncertainty"].detach()
+                if discovery_pool_mode == "mixed":
+                    first_rejection_weight = first_out["uncertainty"].detach()
+                    second_rejection_weight = second_out["uncertainty"].detach()
+                else:
+                    first_rejection_weight = torch.ones(
+                        first_rejection_values.size(0), device=first_rejection_values.device
+                    )
+                    second_rejection_weight = torch.ones(
+                        second_rejection_values.size(0), device=second_rejection_values.device
+                    )
                 if feature_candidate_masks is not None:
                     first_rejection_values = first_rejection_values[feature_candidate_masks[0]]
                     second_rejection_values = second_rejection_values[feature_candidate_masks[1]]
@@ -1981,33 +2110,6 @@ def train_one_epoch_student(
                         second_rejection_values,
                         similarity_margin=discovery_rejection_feature_separation_margin,
                         temperature=discovery_rejection_feature_separation_temperature,
-                        sample_weight=second_rejection_weight,
-                    )
-                )
-                second_rejection_weight = torch.ones(
-                    second_rejection_values.size(0), device=second_rejection_values.device
-                )
-                if discovery_pool_mode == "mixed":
-                    # Mixed pools are unlabeled; use the branch uncertainty as
-                    # a soft candidate weight rather than assigning unknown labels.
-                    first_rejection_weight = first_out["uncertainty"].detach()
-                    second_rejection_weight = second_out["uncertainty"].detach()
-                if feature_candidate_masks is not None:
-                    first_rejection_values = first_rejection_values[feature_candidate_masks[0]]
-                    second_rejection_values = second_rejection_values[feature_candidate_masks[1]]
-                    first_rejection_weight = first_rejection_weight[feature_candidate_masks[0]]
-                    second_rejection_weight = second_rejection_weight[feature_candidate_masks[1]]
-                loss_discovery_rejection_feature_margin = 0.5 * (
-                    unknown_feature_margin_loss(
-                        first_rejection_values,
-                        student.rejection_classifier.weight,
-                        similarity_margin=discovery_rejection_feature_margin,
-                        sample_weight=first_rejection_weight,
-                    )
-                    + unknown_feature_margin_loss(
-                        second_rejection_values,
-                        student.rejection_classifier.weight,
-                        similarity_margin=discovery_rejection_feature_margin,
                         sample_weight=second_rejection_weight,
                     )
                 )
@@ -2388,8 +2490,13 @@ def train_one_epoch_student(
         loss = (
             loss_ce
             + alpha_unc * loss_unc
+            + alpha_rejection_known_ce * loss_rejection_ce
+            + alpha_rejection_supcon * loss_rejection_supcon
+            + alpha_rejection_center * loss_rejection_center
             + alpha_kd * loss_kd
             + alpha_feat_kd * loss_feat_kd
+            + alpha_rejection_kd * loss_rejection_kd
+            + alpha_rejection_feat_kd * loss_rejection_feat_kd
             + alpha_supcon * loss_supcon
             + alpha_raw_supcon * loss_raw_supcon
             + alpha_proto * loss_proto
@@ -2436,6 +2543,9 @@ def train_one_epoch_student(
             + alpha_outlier_energy * loss_outlier_energy
             + alpha_outlier_uncertainty * loss_outlier_uncertainty
             + alpha_outlier_feature_margin * loss_outlier_feature_margin
+            + alpha_outlier_rejection_feature_margin
+            * loss_outlier_rejection_feature_margin
+            + alpha_outlier_rejection_uniform * loss_outlier_rejection_uniform
         )
         optimizer.zero_grad()
         loss.backward()
@@ -2521,6 +2631,10 @@ def train_one_epoch_student(
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
+        rejection_supcon_meter.update(loss_rejection_supcon.item(), images.size(0))
+        rejection_center_meter.update(loss_rejection_center.item(), images.size(0))
+        rejection_kd_meter.update(loss_rejection_kd.item(), images.size(0))
+        rejection_feat_kd_meter.update(loss_rejection_feat_kd.item(), images.size(0))
         sc_meter.update(loss_supcon.item(), images.size(0))
         raw_sc_meter.update(loss_raw_supcon.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
@@ -2625,12 +2739,22 @@ def train_one_epoch_student(
         outlier_energy_meter.update(loss_outlier_energy.item(), images.size(0))
         outlier_uncertainty_meter.update(loss_outlier_uncertainty.item(), images.size(0))
         outlier_feature_margin_meter.update(loss_outlier_feature_margin.item(), images.size(0))
+        outlier_rejection_feature_margin_meter.update(
+            loss_outlier_rejection_feature_margin.item(), images.size(0)
+        )
+        outlier_rejection_uniform_meter.update(
+            loss_outlier_rejection_uniform.item(), images.size(0)
+        )
     return {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
         "feat_kd": feat_kd_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,
+        "rejection_supcon": rejection_supcon_meter.avg,
+        "rejection_center": rejection_center_meter.avg,
+        "rejection_kd": rejection_kd_meter.avg,
+        "rejection_feat_kd": rejection_feat_kd_meter.avg,
         "supcon": sc_meter.avg,
         "raw_supcon": raw_sc_meter.avg,
         "proto": proto_meter.avg,
@@ -2701,6 +2825,8 @@ def train_one_epoch_student(
         "outlier_energy": outlier_energy_meter.avg,
         "outlier_uncertainty": outlier_uncertainty_meter.avg,
         "outlier_feature_margin": outlier_feature_margin_meter.avg,
+        "outlier_rejection_feature_margin": outlier_rejection_feature_margin_meter.avg,
+        "outlier_rejection_uniform": outlier_rejection_uniform_meter.avg,
     }
 
 
@@ -2909,7 +3035,9 @@ def extract_outputs(
     all_head_uncertainty = []
     all_feature_norm = []
     all_features = []
+    all_prototype_similarity = []
     all_rejection_features = []
+    all_rejection_logits = []
     all_projections = []
     all_odin_msp = []
     all_odin_logits = []
@@ -2931,9 +3059,16 @@ def extract_outputs(
         all_aleatoric.append(mc["aleatoric"].cpu())
         all_head_uncertainty.append(mc["head_uncertainty"].cpu())
         all_features.append(out["features"].cpu())
+        normalized_features = F.normalize(out["features"].detach(), dim=-1)
+        normalized_prototypes = F.normalize(model.classifier.weight.detach(), dim=-1)
+        all_prototype_similarity.append(
+            (normalized_features @ normalized_prototypes.T).detach().cpu()
+        )
         all_rejection_features.append(
             out.get("rejection_features", out["features"]).cpu()
         )
+        if out.get("rejection_logits") is not None:
+            all_rejection_logits.append(out["rejection_logits"].cpu())
         all_feature_norm.append(out["features"].norm(dim=-1).cpu())
         all_projections.append(out["proj"].cpu())
         if react_clip_value is not None:
@@ -2966,6 +3101,7 @@ def extract_outputs(
         "head_uncertainty": torch.cat(all_head_uncertainty).numpy(),
         "feature_norm": torch.cat(all_feature_norm).numpy(),
         "features": torch.cat(all_features).numpy(),
+        "prototype_similarity": torch.cat(all_prototype_similarity).numpy(),
         "rejection_features": torch.cat(all_rejection_features).numpy(),
         "projections": torch.cat(all_projections).numpy(),
         "labels": torch.cat(all_labels).numpy(),
@@ -2975,6 +3111,8 @@ def extract_outputs(
     if all_odin_msp:
         outputs["odin_msp"] = torch.cat(all_odin_msp).numpy()
         outputs["odin_logits"] = torch.cat(all_odin_logits).numpy()
+    if all_rejection_logits:
+        outputs["rejection_logits"] = torch.cat(all_rejection_logits).numpy()
     if all_react_energy:
         outputs["react_energy"] = torch.cat(all_react_energy).numpy()
     return outputs
@@ -2992,11 +3130,29 @@ def build_rejector_features(
     if feature_mode == "rejection_embedding":
         rejection = np.asarray(outputs["rejection_features"], dtype=np.float32)
         return rejection / np.clip(np.linalg.norm(rejection, axis=1, keepdims=True), 1e-6, None)
+    rejection_augmented = feature_mode in {
+        "rejection_uncertainty_augmented",
+        "rejection_support_uncertainty_augmented",
+        "rejection_support_augmented",
+        "rejection_logit_augmented",
+        "rejection_support_logit_augmented",
+    }
+    rejection_logit_augmented = feature_mode in {
+        "rejection_logit_augmented",
+        "rejection_support_logit_augmented",
+    }
     if feature_mode not in {
         "augmented",
         "support_augmented",
         "uncertainty_augmented",
         "support_uncertainty_augmented",
+        "rejection_uncertainty_augmented",
+        "rejection_support_uncertainty_augmented",
+        "rejection_support_augmented",
+        "rejection_logit_augmented",
+        "rejection_support_logit_augmented",
+        "prototype_augmented",
+        "prototype_support_augmented",
     }:
         raise ValueError(f"Unsupported rejector feature mode: {feature_mode}")
     logits = np.asarray(outputs["logits"], dtype=np.float32)
@@ -3007,7 +3163,48 @@ def build_rejector_features(
     margin = (sorted_probs[:, -1] - sorted_probs[:, -2]).reshape(-1, 1)
     uncertainty = np.asarray(outputs["head_uncertainty"], dtype=np.float32).reshape(-1, 1)
     summary = np.concatenate([logits, entropy, max_prob, margin, uncertainty], axis=1)
-    if feature_mode in {"uncertainty_augmented", "support_uncertainty_augmented"}:
+    if rejection_logit_augmented:
+        if "rejection_logits" not in outputs:
+            raise ValueError(
+                "rejection_logit_augmented requires rejection_logits in extracted outputs"
+            )
+        rejection_logits = np.asarray(outputs["rejection_logits"], dtype=np.float32)
+        shifted_rejection_logits = rejection_logits - rejection_logits.max(
+            axis=1, keepdims=True
+        )
+        rejection_exp = np.exp(shifted_rejection_logits)
+        rejection_probs = rejection_exp / np.clip(
+            rejection_exp.sum(axis=1, keepdims=True), 1e-8, None
+        )
+        rejection_entropy = -np.sum(
+            rejection_probs * np.log(np.clip(rejection_probs, 1e-8, None)), axis=1, keepdims=True
+        )
+        rejection_max_prob = rejection_probs.max(axis=1, keepdims=True)
+        rejection_sorted_probs = np.sort(rejection_probs, axis=1)
+        rejection_margin = (
+            rejection_sorted_probs[:, -1] - rejection_sorted_probs[:, -2]
+        ).reshape(-1, 1)
+        summary = np.concatenate(
+            [summary, rejection_logits, rejection_entropy, rejection_max_prob, rejection_margin],
+            axis=1,
+        )
+    if feature_mode in {"prototype_augmented", "prototype_support_augmented"}:
+        if "prototype_similarity" not in outputs:
+            raise ValueError(
+                "prototype_augmented requires prototype_similarity in extracted outputs"
+            )
+        prototype_similarity = np.asarray(
+            outputs["prototype_similarity"], dtype=np.float32
+        )
+        if prototype_similarity.ndim != 2 or prototype_similarity.shape[0] != len(features):
+            raise ValueError("prototype_similarity must be a 2-D array aligned with features")
+        summary = np.concatenate([summary, prototype_similarity], axis=1)
+    if feature_mode in {
+        "uncertainty_augmented",
+        "support_uncertainty_augmented",
+        "rejection_uncertainty_augmented",
+        "rejection_support_uncertainty_augmented",
+    }:
         # MC-dropout signals are intentionally kept separate from the learned
         # uncertainty head.  The former estimates epistemic uncertainty while
         # the latter is an auxiliary aleatoric/confidence signal.  Using both
@@ -3022,12 +3219,27 @@ def build_rejector_features(
         summary = np.concatenate(
             [summary, epistemic, expected_entropy, aleatoric], axis=1
         )
-    if feature_mode in {"support_augmented", "support_uncertainty_augmented"}:
+    if feature_mode in {
+        "support_augmented",
+        "support_uncertainty_augmented",
+        "rejection_support_uncertainty_augmented",
+        "rejection_support_augmented",
+        "rejection_support_logit_augmented",
+        "prototype_support_augmented",
+    }:
         if "known_support_score" not in outputs:
             raise ValueError("support_augmented requires known_support_score")
         support_score = np.asarray(outputs["known_support_score"], dtype=np.float32).reshape(-1, 1)
         summary = np.concatenate([summary, support_score], axis=1)
-    return np.concatenate([features, summary], axis=1)
+    base_features = features
+    if rejection_augmented:
+        rejection = np.asarray(outputs["rejection_features"], dtype=np.float32)
+        if rejection.ndim != 2 or rejection.shape[0] != len(features):
+            raise ValueError("rejection_features must be a 2-D array aligned with features")
+        base_features = rejection / np.clip(
+            np.linalg.norm(rejection, axis=1, keepdims=True), 1e-6, None
+        )
+    return np.concatenate([base_features, summary], axis=1)
 
 
 def fit_feature_rejector(
@@ -3081,6 +3293,11 @@ def fit_feature_rejector(
         "support_augmented",
         "uncertainty_augmented",
         "support_uncertainty_augmented",
+        "rejection_uncertainty_augmented",
+        "rejection_support_uncertainty_augmented",
+        "rejection_support_augmented",
+        "rejection_logit_augmented",
+        "rejection_support_logit_augmented",
     }:
         rejector = make_pipeline(
             StandardScaler(),
@@ -3214,10 +3431,69 @@ def attach_known_support_score(
     outputs["known_support_score"] = normalized_distances.min(axis=1).astype(np.float64)
 
 
+def fit_known_conformal_support_rejector(
+    known_outputs: Dict[str, np.ndarray],
+    calibration_outputs: Dict[str, np.ndarray],
+    quantile: float = 0.95,
+):
+    """Fit a class-conditional empirical tail model on known validation data."""
+    support_model = fit_known_support_rejector(known_outputs, quantile=quantile)
+    calibration_features = np.asarray(calibration_outputs["features"], dtype=np.float32)
+    calibration_features = calibration_features / np.clip(
+        np.linalg.norm(calibration_features, axis=1, keepdims=True), 1e-6, None
+    )
+    centers = np.asarray(support_model["centers"], dtype=np.float32)
+    centers = centers / np.clip(np.linalg.norm(centers, axis=1, keepdims=True), 1e-6, None)
+    radii = np.asarray(support_model["radii"], dtype=np.float32)
+    distances = 1.0 - calibration_features @ centers.T
+    normalized_distances = distances / np.clip(radii[None, :], 1e-6, None)
+    nearest_class = normalized_distances.argmin(axis=1)
+    calibration_scores = normalized_distances[
+        np.arange(len(normalized_distances)), nearest_class
+    ]
+    pooled = np.sort(calibration_scores.astype(np.float64))
+    if len(pooled) == 0:
+        raise ValueError("conformal support calibration requires non-empty known validation data")
+    per_class = {}
+    for class_index in range(len(centers)):
+        values = calibration_scores[nearest_class == class_index]
+        if len(values):
+            per_class[class_index] = np.sort(values.astype(np.float64))
+    return {
+        **support_model,
+        "calibration_scores": per_class,
+        "pooled_calibration_scores": pooled,
+    }
+
+
+def attach_known_conformal_support_score(
+    outputs: Dict[str, np.ndarray], conformal_model: Dict[str, np.ndarray]
+) -> None:
+    """Attach an empirical class-conditional conformal unknown score."""
+    features = np.asarray(outputs["features"], dtype=np.float32)
+    features = features / np.clip(np.linalg.norm(features, axis=1, keepdims=True), 1e-6, None)
+    centers = np.asarray(conformal_model["centers"], dtype=np.float32)
+    centers = centers / np.clip(np.linalg.norm(centers, axis=1, keepdims=True), 1e-6, None)
+    radii = np.asarray(conformal_model["radii"], dtype=np.float32)
+    distances = 1.0 - features @ centers.T
+    normalized_distances = distances / np.clip(radii[None, :], 1e-6, None)
+    nearest_class = normalized_distances.argmin(axis=1)
+    nonconformity = normalized_distances[
+        np.arange(len(normalized_distances)), nearest_class
+    ]
+    pooled = np.asarray(conformal_model["pooled_calibration_scores"], dtype=np.float64)
+    per_class = conformal_model["calibration_scores"]
+    p_values = np.empty(len(nonconformity), dtype=np.float64)
+    for index, (class_index, score) in enumerate(zip(nearest_class, nonconformity)):
+        calibration = np.asarray(per_class.get(int(class_index), pooled), dtype=np.float64)
+        p_values[index] = (1.0 + np.count_nonzero(calibration >= float(score))) / (len(calibration) + 1.0)
+    outputs["known_conformal_score"] = (-np.log(np.clip(p_values, 1e-12, 1.0))).astype(np.float64)
+
+
 def fit_pu_feature_rejector(
     known_outputs: Dict[str, np.ndarray],
     unlabeled_outputs: Dict[str, np.ndarray],
-    max_samples: int = 5000,
+    max_samples: int | None = 5000,
     iterations: int = 4,
     seed: int = 42,
     feature_mode: str = "embedding",
@@ -3239,7 +3515,7 @@ def fit_pu_feature_rejector(
     rng = np.random.default_rng(int(seed))
 
     def sample_rows(values):
-        if len(values) <= max_samples:
+        if max_samples is None or len(values) <= max_samples:
             return values
         return values[rng.choice(len(values), size=max_samples, replace=False)]
 
@@ -3266,6 +3542,11 @@ def fit_pu_feature_rejector(
             "support_augmented",
             "uncertainty_augmented",
             "support_uncertainty_augmented",
+            "rejection_uncertainty_augmented",
+            "rejection_support_uncertainty_augmented",
+            "rejection_support_augmented",
+            "rejection_logit_augmented",
+            "rejection_support_logit_augmented",
         }:
             rejector = make_pipeline(
                 StandardScaler(),
@@ -3347,7 +3628,7 @@ def fit_nnpu_feature_rejector(
     known_outputs: Dict[str, np.ndarray],
     unlabeled_outputs: Dict[str, np.ndarray],
     known_prior: float = 0.2,
-    max_samples: int = 5000,
+    max_samples: int | None = 5000,
     iterations: int = 300,
     lr: float = 0.05,
     weight_decay: float = 1e-4,
@@ -3355,6 +3636,9 @@ def fit_nnpu_feature_rejector(
     feature_mode: str = "embedding",
     risk_mode: str = "legacy",
     model_type: str = "linear",
+    stratified_known: bool = False,
+    score_margin_weight: float = 0.0,
+    score_margin: float = 0.5,
 ):
     """Fit a mixed-pool rejector with a non-negative NU/PU-style risk.
 
@@ -3372,6 +3656,10 @@ def fit_nnpu_feature_rejector(
         raise ValueError("risk_mode must be 'legacy' or 'nu_corrected'")
     if model_type not in {"linear", "mlp"}:
         raise ValueError("model_type must be 'linear' or 'mlp'")
+    if float(score_margin_weight) < 0.0:
+        raise ValueError("score_margin_weight must be non-negative")
+    if float(score_margin) < 0.0:
+        raise ValueError("score_margin must be non-negative")
     known = build_rejector_features(known_outputs, feature_mode=feature_mode)
     unlabeled = build_rejector_features(unlabeled_outputs, feature_mode=feature_mode)
     if known.ndim != 2 or unlabeled.ndim != 2 or known.shape[1] != unlabeled.shape[1]:
@@ -3381,11 +3669,28 @@ def fit_nnpu_feature_rejector(
     rng = np.random.default_rng(int(seed))
 
     def sample_rows(values):
-        if len(values) <= max_samples:
+        if max_samples is None or len(values) <= max_samples:
             return values
         return values[rng.choice(len(values), size=max_samples, replace=False)]
 
-    known = sample_rows(known).astype(np.float32, copy=False)
+    if stratified_known and max_samples is not None and len(known) > max_samples:
+        labels = np.asarray(known_outputs.get("labels"), dtype=np.int64)
+        if labels.shape != (len(known),):
+            raise ValueError("stratified known rejector sampling requires aligned known labels")
+        classes = np.unique(labels)
+        base_count, remainder = divmod(int(max_samples), len(classes))
+        selected = []
+        for class_position, class_index in enumerate(classes):
+            class_rows = np.flatnonzero(labels == class_index)
+            count = base_count + (1 if class_position < remainder else 0)
+            count = min(count, len(class_rows))
+            selected.append(
+                rng.choice(class_rows, size=count, replace=False)
+            )
+        known = known[np.concatenate(selected)]
+    else:
+        known = sample_rows(known)
+    known = known.astype(np.float32, copy=False)
     unlabeled = sample_rows(unlabeled).astype(np.float32, copy=False)
     combined = np.concatenate([known, unlabeled], axis=0)
     mean = combined.mean(axis=0)
@@ -3442,6 +3747,11 @@ def fit_nnpu_feature_rejector(
         if risk_mode == "legacy":
             negative_risk = negative_risk / max(1.0 - prior, 1e-6)
         loss = prior * known_as_unknown + torch.relu(negative_risk)
+        if float(score_margin_weight) > 0.0:
+            mean_score_gap = unlabeled_logits.mean() - known_logits.mean()
+            loss = loss + float(score_margin_weight) * torch.relu(
+                float(score_margin) - mean_score_gap
+            )
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -4550,6 +4860,10 @@ def compute_open_score(
         if "known_support_score" not in outputs:
             raise ValueError("known_support requires a fitted support detector")
         score = np.asarray(outputs["known_support_score"], dtype=float)
+    elif score_mode == "known_conformal":
+        if "known_conformal_score" not in outputs:
+            raise ValueError("known_conformal requires a fitted conformal support detector")
+        score = np.asarray(outputs["known_conformal_score"], dtype=float)
     elif score_mode == "feature_rejector_fusion":
         if "feature_rejector_score" not in outputs:
             raise ValueError("feature_rejector_fusion requires a fitted rejector")
@@ -5504,6 +5818,9 @@ def run_discovery(
         ),
         "known_support_score": np.asarray(
             outputs.get("known_support_score", np.zeros_like(score)), dtype=float
+        ),
+        "known_conformal_score": np.asarray(
+            outputs.get("known_conformal_score", np.zeros_like(score)), dtype=float
         ),
         "proto_dist": proto_dist,
         "mahalanobis": mahalanobis,

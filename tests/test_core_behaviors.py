@@ -94,6 +94,8 @@ from novel_discovery.pipeline import (
     fit_virtual_outlier_rejector,
     fit_known_support_rejector,
     attach_known_support_score,
+    fit_known_conformal_support_rejector,
+    attach_known_conformal_support_score,
     fit_pu_feature_rejector,
     fit_nnpu_feature_rejector,
     attach_feature_rejector_score,
@@ -142,6 +144,148 @@ class CommandLineTest(unittest.TestCase):
             result, np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
         )
 
+    def test_rejection_outlier_uniform_option_is_exposed(self):
+        args = parse_args(
+            [
+                "train_student",
+                "--dataset",
+                "toy",
+                "--alpha-outlier-rejection-uniform",
+                "0.05",
+            ]
+        )
+        self.assertAlmostEqual(args.alpha_outlier_rejection_uniform, 0.05)
+
+    def test_model_seed_is_independent_from_data_split_seed(self):
+        defaults = parse_args(["train_student", "--seed", "42"])
+        seeded = parse_args(
+            ["train_student", "--seed", "42", "--model-seed", "43"]
+        )
+        self.assertEqual(defaults.seed, 42)
+        self.assertIsNone(defaults.model_seed)
+        self.assertEqual(seeded.seed, 42)
+        self.assertEqual(seeded.model_seed, 43)
+
+    def test_rejection_uncertainty_augmented_mode_keeps_rejection_base(self):
+        outputs = {
+            "features": np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+            "rejection_features": np.asarray(
+                [[3.0, 0.0], [0.0, 4.0]], dtype=np.float32
+            ),
+            "logits": np.zeros((2, 2), dtype=np.float32),
+            "probs": np.full((2, 2), 0.5, dtype=np.float32),
+            "entropy": np.zeros(2, dtype=np.float32),
+            "head_uncertainty": np.zeros(2, dtype=np.float32),
+            "epistemic": np.zeros(2, dtype=np.float32),
+            "expected_entropy": np.zeros(2, dtype=np.float32),
+            "aleatoric": np.zeros(2, dtype=np.float32),
+        }
+        result = build_rejector_features(
+            outputs, feature_mode="rejection_uncertainty_augmented"
+        )
+        self.assertEqual(result.shape, (2, 2 + 2 + 4 + 3))
+        np.testing.assert_allclose(result[:, :2], np.eye(2, dtype=np.float32))
+
+    def test_rejection_logit_augmented_mode_uses_rejection_logits(self):
+        outputs = {
+            "features": np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+            "rejection_features": np.asarray(
+                [[3.0, 0.0], [0.0, 4.0]], dtype=np.float32
+            ),
+            "logits": np.zeros((2, 2), dtype=np.float32),
+            "probs": np.full((2, 2), 0.5, dtype=np.float32),
+            "entropy": np.zeros(2, dtype=np.float32),
+            "head_uncertainty": np.zeros(2, dtype=np.float32),
+            "rejection_logits": np.asarray(
+                [[2.0, 0.0], [0.0, 2.0]], dtype=np.float32
+            ),
+        }
+        result = build_rejector_features(
+            outputs, feature_mode="rejection_logit_augmented"
+        )
+        # rejection base (2) + classifier summary (2+1+1+1+1) +
+        # rejection logits and their entropy/max-probability/margin (2+3).
+        self.assertEqual(result.shape, (2, 2 + 6 + 5))
+        np.testing.assert_allclose(result[:, :2], np.eye(2, dtype=np.float32))
+        np.testing.assert_allclose(result[:, 2 + 6 : 2 + 6 + 2], outputs["rejection_logits"])
+        self.assertAlmostEqual(float(result[0, -1]), float(result[1, -1]), places=6)
+
+    def test_rejection_support_logit_mode_requires_support_score(self):
+        outputs = {
+            "features": np.zeros((1, 2), dtype=np.float32),
+            "rejection_features": np.ones((1, 2), dtype=np.float32),
+            "logits": np.zeros((1, 2), dtype=np.float32),
+            "probs": np.full((1, 2), 0.5, dtype=np.float32),
+            "entropy": np.zeros(1, dtype=np.float32),
+            "head_uncertainty": np.zeros(1, dtype=np.float32),
+            "rejection_logits": np.zeros((1, 2), dtype=np.float32),
+        }
+        with self.assertRaisesRegex(ValueError, "known_support_score"):
+            build_rejector_features(
+                outputs, feature_mode="rejection_support_logit_augmented"
+            )
+
+    def test_rejection_support_modes_share_the_same_base_and_support_feature(self):
+        outputs = {
+            "features": np.asarray([[1.0, 0.0]], dtype=np.float32),
+            "rejection_features": np.asarray([[0.0, 2.0]], dtype=np.float32),
+            "logits": np.asarray([[1.0, 0.0]], dtype=np.float32),
+            "probs": np.asarray([[0.75, 0.25]], dtype=np.float32),
+            "entropy": np.asarray([0.5], dtype=np.float32),
+            "head_uncertainty": np.asarray([0.1], dtype=np.float32),
+            "rejection_logits": np.asarray([[2.0, 0.0]], dtype=np.float32),
+            "known_support_score": np.asarray([0.3], dtype=np.float32),
+        }
+        base = build_rejector_features(
+            outputs, feature_mode="rejection_support_augmented"
+        )
+        with_logits = build_rejector_features(
+            outputs, feature_mode="rejection_support_logit_augmented"
+        )
+        np.testing.assert_allclose(base[:, :8], with_logits[:, :8])
+        self.assertEqual(base.shape[1], 2 + 2 + 4 + 1)
+        self.assertEqual(with_logits.shape[1], base.shape[1] + 2 + 3)
+        self.assertAlmostEqual(float(base[0, -1]), 0.3)
+        self.assertAlmostEqual(float(with_logits[0, -1]), 0.3)
+
+    def test_rejection_logit_mode_requires_extracted_logits(self):
+        outputs = {
+            "features": np.zeros((1, 2), dtype=np.float32),
+            "rejection_features": np.ones((1, 2), dtype=np.float32),
+            "logits": np.zeros((1, 2), dtype=np.float32),
+            "probs": np.full((1, 2), 0.5, dtype=np.float32),
+            "entropy": np.zeros(1, dtype=np.float32),
+            "head_uncertainty": np.zeros(1, dtype=np.float32),
+        }
+        with self.assertRaisesRegex(ValueError, "rejection_logits"):
+            build_rejector_features(outputs, feature_mode="rejection_logit_augmented")
+
+    def test_parser_accepts_rejection_logit_modes(self):
+        for mode in (
+            "rejection_support_augmented",
+            "rejection_logit_augmented",
+            "rejection_support_logit_augmented",
+        ):
+            args = parse_args(
+                ["discover", "--dataset", "toy", "--rejector-feature-mode", mode]
+            )
+            self.assertEqual(args.rejector_feature_mode, mode)
+
+    def test_prototype_augmented_rejector_features_append_classwise_similarity(self):
+        outputs = {
+            "features": np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+            "logits": np.zeros((2, 2), dtype=np.float32),
+            "probs": np.full((2, 2), 0.5, dtype=np.float32),
+            "entropy": np.zeros(2, dtype=np.float32),
+            "head_uncertainty": np.zeros(2, dtype=np.float32),
+            "prototype_similarity": np.asarray(
+                [[1.0, 0.0], [0.0, 1.0]], dtype=np.float32
+            ),
+        }
+        result = build_rejector_features(outputs, feature_mode="prototype_augmented")
+        self.assertEqual(result.shape, (2, 2 + 2 + 4 + 2))
+        np.testing.assert_allclose(result[:, -2:], outputs["prototype_similarity"])
+
     def test_checkpoint_rejects_mismatched_class_split(self):
         with tempfile.TemporaryDirectory() as root:
             model = build_model(2, backbone="resnet18", pretrained=False)
@@ -182,6 +326,21 @@ class CommandLineTest(unittest.TestCase):
             ]
         )
         self.assertEqual(args.discovery_selection_model, "teacher")
+
+    def test_teacher_can_supply_frozen_feature_margin_weights(self):
+        args = parse_args(
+            [
+                "train_student",
+                "--dataset",
+                "toy",
+                "--discovery-selection-model",
+                "teacher",
+                "--discovery-feature-margin-weight-source",
+                "ema_product",
+            ]
+        )
+        self.assertEqual(args.discovery_selection_model, "teacher")
+        self.assertEqual(args.discovery_feature_margin_weight_source, "ema_product")
 
     def test_joint_prototype_refresh_is_opt_in(self):
         args = parse_args(["train_student", "--dataset", "toy"])
@@ -392,6 +551,53 @@ class CommandLineTest(unittest.TestCase):
         self.assertTrue(np.isfinite(score).all())
         self.assertGreater(score[0], score[1])
 
+    def test_nnpu_score_margin_regularizer_is_optional_and_finite(self):
+        known = {"features": np.asarray([[1.0, 0.0], [0.9, 0.1], [1.0, 0.1]])}
+        unlabeled = {
+            "features": np.asarray(
+                [[-1.0, 0.0], [-0.9, -0.1], [0.8, 0.2], [0.7, 0.3]]
+            )
+        }
+        rejector = fit_nnpu_feature_rejector(
+            known,
+            unlabeled,
+            known_prior=0.5,
+            iterations=20,
+            seed=0,
+            risk_mode="nu_corrected",
+            score_margin_weight=0.1,
+            score_margin=0.2,
+        )
+        scores = rejector.decision_function(np.asarray([[1.0, 0.0], [-1.0, 0.0]]))
+        self.assertTrue(np.isfinite(scores).all())
+
+    def test_nnpu_feature_rejector_supports_stratified_known_sampling(self):
+        known = {
+            "features": np.asarray(
+                [[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]] * 3,
+                dtype=np.float32,
+            ),
+            "labels": np.asarray([0, 0, 1, 1] * 3),
+        }
+        unlabeled = {
+            "features": np.asarray(
+                [[-1.0, 0.0], [-0.9, -0.1], [0.0, -1.0], [0.1, -0.9]],
+                dtype=np.float32,
+            )
+        }
+        rejector = fit_nnpu_feature_rejector(
+            known,
+            unlabeled,
+            known_prior=0.5,
+            max_samples=4,
+            iterations=20,
+            seed=0,
+            risk_mode="nu_corrected",
+            stratified_known=True,
+        )
+        scores = rejector.decision_function(np.asarray([[1.0, 0.0], [-1.0, 0.0]], dtype=np.float32))
+        self.assertTrue(np.isfinite(scores).all())
+
     def test_nnpu_feature_rejector_rejects_unknown_risk_mode(self):
         known = {"features": np.asarray([[1.0, 0.0], [0.9, 0.1]])}
         unlabeled = {"features": np.asarray([[-1.0, 0.0], [-0.9, -0.1]])}
@@ -440,6 +646,25 @@ class CommandLineTest(unittest.TestCase):
         outputs = {"features": np.asarray([[1.0, 0.0], [-1.0, 0.0]])}
         attach_known_support_score(outputs, support)
         self.assertGreater(outputs["known_support_score"][1], outputs["known_support_score"][0])
+
+    def test_known_conformal_support_scores_far_features_higher(self):
+        known = {
+            "features": np.asarray(
+                [[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]], dtype=np.float32
+            ),
+            "labels": np.asarray([0, 0, 1, 1]),
+        }
+        calibration = {
+            "features": np.asarray(
+                [[0.98, 0.02], [0.88, 0.12], [0.02, 0.98], [0.12, 0.88]],
+                dtype=np.float32,
+            )
+        }
+        model = fit_known_conformal_support_rejector(known, calibration, quantile=0.95)
+        outputs = {"features": np.asarray([[1.0, 0.0], [-1.0, 0.0]], dtype=np.float32)}
+        attach_known_conformal_support_score(outputs, model)
+        self.assertTrue(np.isfinite(outputs["known_conformal_score"]).all())
+        self.assertGreater(outputs["known_conformal_score"][1], outputs["known_conformal_score"][0])
 
     def test_class_split_validation_rejects_overlap_and_wrong_count(self):
         with self.assertRaises(ValueError):
@@ -1425,6 +1650,140 @@ class DiscoveryTrainingDispatchTest(unittest.TestCase):
         )
 
         self.assertGreater(stats["discovery_uncertainty_separation"], 0.0)
+
+    def test_rejection_feature_margin_is_active_without_separation_loss(self):
+        class TinyRejectionModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.classifier = torch.nn.Linear(3, 2)
+                self.rejection_projector = torch.nn.Linear(3, 3)
+                self.rejection_classifier = torch.nn.Linear(3, 2)
+                self.rejection_uncertainty_head = torch.nn.Linear(3, 1)
+                self.projector = torch.nn.Linear(3, 4)
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                features = images.mean(dim=(2, 3))
+                rejection_features = self.rejection_projector(features)
+                return {
+                    "logits": self.classifier(features),
+                    "features": features,
+                    "rejection_features": rejection_features,
+                    "rejection_logits": self.rejection_classifier(rejection_features),
+                    "proj": torch.nn.functional.normalize(self.projector(features), dim=-1),
+                    "uncertainty": torch.sigmoid(
+                        self.rejection_uncertainty_head(rejection_features)
+                    ).squeeze(-1),
+                }
+
+            def rejection_forward(self, features):
+                rejection_features = self.rejection_projector(features)
+                return (
+                    rejection_features,
+                    self.rejection_classifier(rejection_features),
+                    torch.sigmoid(
+                        self.rejection_uncertainty_head(rejection_features)
+                    ).squeeze(-1),
+                )
+
+        torch.manual_seed(29)
+        student = TinyRejectionModel()
+        teacher = TinyRejectionModel()
+        optimizer = torch.optim.SGD(student.parameters(), lr=0.01)
+        known_images = torch.rand(3, 3, 8, 8)
+        labels = torch.tensor([0, 1, 0])
+        known_loader = [
+            (known_images, labels, labels, torch.ones(3, dtype=torch.bool), torch.arange(3))
+        ]
+        mixed_loader = [(torch.rand(3, 3, 8, 8), torch.rand(3, 3, 8, 8))]
+
+        stats = train_one_epoch_student(
+            student,
+            teacher,
+            known_loader,
+            optimizer,
+            torch.device("cpu"),
+            discovery_loader=mixed_loader,
+            discovery_pool_mode="mixed",
+            alpha_discovery_rejection_feature_margin=0.1,
+            discovery_rejection_feature_margin=0.0,
+            alpha_discovery_rejection_feature_separation=0.0,
+            alpha_discovery=0.0,
+            alpha_discovery_unknown=0.0,
+            alpha_discovery_energy=0.0,
+            alpha_discovery_uniform=0.0,
+            alpha_discovery_feature_margin=0.0,
+            alpha_discovery_feature_separation=0.0,
+            alpha_discovery_boundary=0.0,
+            alpha_discovery_knn_boundary=0.0,
+            alpha_discovery_uncertainty_separation=0.0,
+            alpha_discovery_uncertainty_pu=0.0,
+            alpha_discovery_selective_unknown=0.0,
+            alpha_discovery_selective_energy=0.0,
+            alpha_reciprocal=0.0,
+            alpha_joint_discovery=0.0,
+        )
+
+        self.assertGreater(stats["discovery_rejection_feature_margin"], 0.0)
+
+    def test_rejection_branch_distillation_is_active(self):
+        class TinyRejectionModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = torch.nn.Linear(3, 3)
+                self.classifier = torch.nn.Linear(3, 2)
+                self.rejection_projector = torch.nn.Linear(3, 3)
+                self.rejection_classifier = torch.nn.Linear(3, 2)
+                self.rejection_uncertainty_head = torch.nn.Linear(3, 1)
+                self.projector = torch.nn.Linear(3, 4)
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                features = self.encoder(images.mean(dim=(2, 3)))
+                rejection_features = self.rejection_projector(features)
+                return {
+                    "logits": self.classifier(features),
+                    "features": features,
+                    "rejection_features": rejection_features,
+                    "rejection_logits": self.rejection_classifier(rejection_features),
+                    "proj": torch.nn.functional.normalize(self.projector(features), dim=-1),
+                    "uncertainty": torch.sigmoid(
+                        self.rejection_uncertainty_head(rejection_features)
+                    ).squeeze(-1),
+                }
+
+            def rejection_forward(self, features):
+                rejection_features = self.rejection_projector(features)
+                return (
+                    rejection_features,
+                    self.rejection_classifier(rejection_features),
+                    torch.sigmoid(
+                        self.rejection_uncertainty_head(rejection_features)
+                    ).squeeze(-1),
+                )
+
+        torch.manual_seed(31)
+        student = TinyRejectionModel()
+        teacher = TinyRejectionModel()
+        optimizer = torch.optim.SGD(student.parameters(), lr=0.01)
+        images = torch.rand(4, 3, 8, 8)
+        labels = torch.tensor([0, 1, 0, 1])
+        loader = [(images, labels, labels, torch.ones(4, dtype=torch.bool), torch.arange(4))]
+        stats = train_one_epoch_student(
+            student,
+            teacher,
+            loader,
+            optimizer,
+            torch.device("cpu"),
+            alpha_rejection_kd=0.5,
+            alpha_rejection_feat_kd=0.5,
+            alpha_kd=0.0,
+            alpha_feat_kd=0.0,
+            alpha_supcon=0.0,
+        )
+        self.assertGreater(stats["rejection_kd"], 0.0)
+        self.assertGreater(stats["rejection_feat_kd"], 0.0)
+        self.assertEqual(stats["discovery_rejection_feature_separation"], 0.0)
 
     def test_mixed_pool_pu_objective_consumes_unlabeled_batches(self):
         class TinyModel(torch.nn.Module):

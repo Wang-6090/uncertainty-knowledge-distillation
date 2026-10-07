@@ -51,7 +51,10 @@
 
 ### 当前下一步
 
-优先在独立类别划分和独立校准集上复核 `nnPU + uncertainty-margin` 训练与 support/fusion rejector；同时继续记录 feature overlap、OSCR、known acceptance、unknown rejection、candidate purity、NMI 和 ARI。没有完成这一复核前，不继续堆叠新的 mixed-pool loss，也不根据测试集标签调阈值。
+独立 rejection head 上的 uniform OE 已完成完整数据三随机种子配对复核。seed=42 有改善，seed=43 基本持平/部分指标下降，seed=44 的 AUROC、FPR95、OSCR 和 known accuracy 变差；因此它是效果混合的 opt-in 消融，不是已验证有效的主方法。完整结果见
+`analysis/rejection_uniform_oe_full_data_s42_20261007.md`。
+
+下一步优先修正评估协议：当前同一 validation split 同时用于 checkpoint 选择和阈值校准。应固定训练/模型选择规则，划分独立 calibration 子集后，重新评估现有候选，而不是继续扩大 OE 权重搜索或调整全局阈值。之后再针对语义相近未知类，检查特征距离与分数分布在不同训练 seed 上是否共同改善；所有比较继续报告 AUROC、FPR95、OSCR、known accuracy/acceptance、unknown rejection 和 feature-overlap，聚类指标单独报告，不能根据测试集标签调参。
 
 ## 已实现功能
 
@@ -3241,3 +3244,588 @@ cosine margin=0.2、min-class kNN、MC=4 和 95% known-validation coverage 条�
 因此该方法降级为关闭状态的负向消融，不替换原 uncertainty-weighted margin，
 也不继续调它的先验或系数。完整记录见
 `analysis/pu_feature_margin_recheck_20261007.md`。
+
+## 2026-10-07: semantic-isolated transfer pilot
+
+To check whether the recent positive signal depended on the semantic-hard
+class split, a matched pilot was run on the independent
+`cifar100_60_40_semantic_isolated.json` split. The shared teacher, student
+architecture, optimizer, pool size, mixed-pool known fraction (`0.2`), and
+95% known-validation coverage calibration were fixed. The treatment alone
+enabled mixed-pool `nu_corrected` nnPU uncertainty learning and the original
+uncertainty-weighted feature-margin; the baseline disabled both terms. Both
+training meters were checked to be nonzero in the treatment.
+
+With the basic normalized-entropy plus min-class-kNN detector, the baseline
+and treatment obtained AUROC/FPR95/unknown rejection of
+`0.5928/0.8785/6.02%` and `0.6178/0.8386/10.53%`. A post-hoc support-only
+linear nnPU rejector on frozen features gave `0.7004/0.7770/14.04%` for the
+baseline checkpoint and `0.7469/0.7105/23.31%` for the treatment checkpoint.
+This is a useful isolated-split positive signal, but the treatment's known
+acceptance was `92.51%`, so the gain has a rejection trade-off and is not a
+complete solution.
+
+The feature audit remained mixed: nearest-known-sample distance AUROC changed
+from `0.5816` to `0.6287` and centroid distance from `0.5796` to `0.6040`,
+but classifier-prototype histogram overlap increased from `0.7813` to
+`0.7908`. Thus local support geometry improved while global overlap remains.
+On the treatment checkpoint, support-only rejector features were better than
+support plus MC uncertainty (`0.7469` vs `0.7334` AUROC), and the 0.75 score
+fusion was worse (`0.7089`); do not stack fusion or extra uncertainty features
+without a new matched hypothesis.
+
+The leading candidate is therefore the pair `nnPU + uncertainty-margin`
+training plus a support-only nnPU rejector, pending multi-seed validation on
+the isolated split. The exact reproducible pilot is in
+`scripts/run_semantic_isolated_pilot.ps1`; full details and limitations are in
+`analysis/semantic_isolated_pilot_s42_20261007.md`.
+
+## 2026-10-07: isolated seed-43 replication and calibration check
+
+The same short isolated pilot was rerun with only the training seed changed
+to 43. With the support-only nnPU rejector, baseline versus treatment was
+AUROC/FPR95/known acceptance/unknown rejection
+`0.6939/0.7634/93.79%/17.57%` versus
+`0.7048/0.7383/94.13%/13.86%`. Ranking still improved, but the fixed
+95%-coverage work point did not. This is seed-sensitive operating behavior,
+not evidence that the treatment is useless.
+
+The feature audit was more consistent: classifier-prototype AUROC/overlap
+changed `0.5156/0.8368 -> 0.5702/0.8180`, centroid distance changed
+`0.4665/0.8538 -> 0.5944/0.7894`, and nearest-known-sample distance changed
+`0.4984/0.8759 -> 0.6170/0.7515`. The training treatment therefore appears to
+improve local geometry, while score calibration and class overlap still make
+the final operating point unstable.
+
+An isolated class-conditional 95%-coverage threshold diagnostic kept AUROC at
+`0.7048`, raised unknown rejection to `22.03%`, but reduced known acceptance to
+`88.93%`; it is not a valid improvement. The next priority is validation-only
+rejector calibration with enough known validation data, followed by additional
+independent seeds. Do not promote classwise thresholds or tune test labels.
+
+## 2026-10-07: isolated three-seed conclusion
+
+The isolated pilot was completed for seeds 42, 43, and 44 with identical
+protocols. The mean support-only nnPU results were:
+
+| Student | AUROC | FPR95 | Known acceptance | Unknown rejection |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 0.7008 | 0.7799 | 94.16% | 17.17% |
+| treatment | **0.7311** | **0.7186** | 94.38% | 17.50% |
+
+The treatment reliably improves ranking, and all three feature audits show
+improved local support geometry, but the mean unknown rejection gain is only
+0.33 percentage points. Therefore the method has a real but incomplete signal:
+it reduces some feature overlap without producing a stable fixed-coverage
+operating-point improvement. The seed-43 class-conditional threshold test was
+also rejected because it raised unknown rejection to `22.03%` only by reducing
+known acceptance to `88.93%`.
+
+Do not add more global losses or continue threshold sweeps at this stage. The
+next controlled experiment is a full-data semantic-isolated paired run with
+the same treatment and support-only rejector. Its purpose is to determine
+whether the small-pilot instability comes from only 300 validation samples and
+limited rejector training data. Full details are in
+`analysis/semantic_isolated_pilot_s42_20261007.md`, and the exact reproducible
+script is `scripts/run_semantic_isolated_pilot.ps1` (use `-Seed 42`, `43`, or
+`44`).
+
+## 2026-10-07: full-data isolated audit and rejector support sampling
+
+The full-data seed-42 paired run used the same semantic-isolated split,
+matched mixed pool, teacher, five epochs, and 95% known-coverage calibration.
+With the existing support-augmented `nu_corrected` nnPU rejector, baseline
+versus treatment was:
+
+| Student | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.7541 | 0.6722 | 0.3293 | 95.22% | 18.90% |
+| treatment | **0.7642** | **0.6485** | **0.3796** | 94.90% | 19.08% |
+
+The full-data feature audit confirms a genuine representation effect:
+classifier-prototype AUROC/overlap changed `0.6577/0.7552 -> 0.6792/0.7352`,
+empirical-centroid distance changed `0.6253/0.8097 -> 0.6573/0.7591`, and
+nearest-known-sample distance changed `0.6704/0.7440 -> 0.6954/0.6959`.
+However, that geometry improvement still transfers only weakly to the fixed
+coverage unknown-rejection rate. The core overlap problem remains open.
+
+Two rejector-support controls were added. `--rejector-max-samples` controls
+the known and mixed-pool fitting budget, and `--rejector-stratified-known`
+selects the known side approximately equally across the 60 known classes.
+On the same full-data checkpoints, stratified 5000-sample support improved
+both arms relative to random 5000 sampling:
+
+| Student | Support sampling | AUROC | FPR95 | OSCR | Unknown rejection |
+| --- | --- | ---: | ---: | ---: | ---: |
+| baseline | random 5000 | 0.7541 | 0.6722 | 0.3293 | 18.90% |
+| baseline | stratified 5000 | **0.7677** | **0.6547** | **0.3364** | **19.70%** |
+| treatment | random 5000 | 0.7642 | 0.6485 | 0.3796 | 19.08% |
+| treatment | stratified 5000 | **0.7705** | **0.6070** | 0.3804 | **19.83%** |
+
+This is a useful low-cost stability improvement, but not a solution: rejection
+remains about 20%, and the single-seed result must be replicated before making
+stratified support the default. Increasing the limit to 20000 was not stable:
+it improved treatment to `20.05%` unknown rejection but reduced baseline to
+`16.95%`. Keep the larger limit as an ablation, not a default.
+
+A class-conditional empirical conformal support score was also implemented as
+an optional negative control. On the pilot it obtained AUROC `0.5632` for
+baseline and `0.5295` for treatment, well below the nnPU rejector. It should
+not replace the current rejector or motivate more calibration tuning. Full
+protocols and all support-sampling results are in
+`analysis/semantic_isolated_full_support_sampling_20261007.md`.
+
+The immediate next check is a second isolated seed using stratified support
+sampling, with the same full-data paired protocol. If the ranking/FPR95 gain
+replicates but unknown rejection remains near 20%, the next research change
+should target the rejector objective or a more explicit class-boundary
+representation loss, not another global threshold or score transform.
+
+## 2026-10-07: full-data seed-43 replication
+
+The seed-43 replication used exactly the same full-data semantic-isolated
+protocol as seed 42: CIFAR-100 semantic-isolated 60/40 split, five epochs,
+the same teacher and student architectures, matched mixed discovery pool of
+5400 samples with known prior 0.2, support-augmented `nu_corrected` nnPU, and
+known-validation calibration at 95% known coverage. The only changed factor
+was the random seed.
+
+| Student | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.7707 | 0.6055 | 0.3814 | 94.87% | 19.53% |
+| treatment | **0.7836** | **0.5972** | **0.3977** | 94.80% | **21.35%** |
+
+Relative to the same-seed baseline, treatment improves AUROC by `+0.0130`,
+FPR95 by `-0.0083`, OSCR by `+0.0163`, and unknown rejection by `+1.83` percentage
+points. Together with seed 42, stratified support sampling improves both
+baseline and treatment relative to random support sampling, so it is a
+promising rejector-stability option. It should still remain opt-in until a
+third full-data seed is checked.
+
+This result does not solve the core problem. Unknown rejection is still only
+about 20%, and the treatment's gain is partly a better score ranking rather
+than a clean separation of known and unknown features. The training histories
+also show that the discovery-specific uncertainty losses are active, while
+the joint novel-head losses remain zero in this support-only audit; therefore
+this experiment validates the detector/training treatment pair, not the full
+end-to-end novel-class discovery claim.
+
+The exact seed-43 reports are stored under
+`runs/semantic_isolated_full_s43_baseline_rejector_support/` and
+`runs/semantic_isolated_full_s43_treatment_rejector_support/`. The detailed
+comparison is in `analysis/semantic_isolated_full_s43_support_sampling_20261007.md`.
+
+## 2026-10-07: full-data seed-44 support-sampling replication
+
+The third independent seed used the same semantic-isolated CIFAR-100 60/40
+split, five-epoch teacher/student protocol, matched mixed discovery pool,
+support-augmented `nu_corrected` nnPU rejector, class-stratified known support
+sampling, and validation-only calibration at 95% known coverage.
+
+| Seed 44 | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.7738 | 0.6397 | 0.3575 | 95.83% | 16.70% |
+| treatment | **0.7901** | **0.6118** | **0.4196** | 95.25% | **21.83%** |
+
+The treatment changes are AUROC `+0.0163`, FPR95 `-0.0278`, OSCR `+0.0621`,
+known acceptance `-0.58pp`, and unknown rejection `+5.13pp`. Across seeds
+42/43/44, the mean changes are AUROC `+0.0131`, FPR95 `-0.0199`, OSCR
+`+0.0429`, known acceptance `-0.32pp`, and unknown rejection `+2.38pp`.
+
+This confirms that class-stratified support sampling is a useful stability
+improvement for the decoupled rejector. It does not solve the main problem:
+unknown rejection is still only `16.7%–21.8%`, so the known and unknown
+representations remain substantially overlapped. We will therefore stop
+tuning support size and global thresholds, and check the separate possibility
+that the five-epoch student has not learned a sufficiently discriminative
+representation. The next paired experiment changes only the training budget
+and uses an explicit run tag; all detector and calibration settings remain
+fixed.
+
+The exact reports are under
+`runs/semantic_isolated_full_s44_baseline_rejector_support/` and
+`runs/semantic_isolated_full_s44_treatment_rejector_support/`. Details are in
+`analysis/semantic_isolated_full_s44_support_sampling_20261007.md`.
+
+## 2026-10-07: training-budget audit, 5 versus 10 epochs
+
+The three-seed support audit showed a stable ranking improvement but unknown
+rejection remained low. Before adding another loss, we checked whether the
+five-epoch protocol itself was under-training the student. This paired seed-42
+audit changed only the teacher/student training budget from 5 to 10 epochs;
+the semantic-isolated split, mixed pool, uncertainty-margin treatment,
+stratified 5000-sample support, `nu_corrected` nnPU rejector, detector, and
+validation-only 95% known-coverage calibration were fixed.
+
+| Budget / arm | AUROC | FPR95 | OSCR | Known accuracy | Known acceptance | Unknown rejection |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 5 ep baseline | 0.7541 | 0.6722 | 0.3293 | 39.07% | 95.22% | 18.90% |
+| 5 ep treatment | 0.7642 | 0.6485 | 0.3796 | 45.18% | 94.90% | 19.08% |
+| 10 ep baseline | 0.7866 | 0.6027 | 0.3795 | 43.63% | 95.35% | 21.85% |
+| 10 ep treatment | **0.8008** | **0.5518** | **0.4629** | **52.45%** | 94.18% | **23.65%** |
+
+Ten epochs improves the baseline and treatment. Relative to five epochs, the
+treatment gains AUROC `+0.0365`, reduces FPR95 by `0.0967`, improves OSCR by
+`0.0834`, and raises unknown rejection by `4.57pp`. At the matched ten-epoch
+budget, treatment still beats baseline by AUROC `+0.0142`, FPR95 `-0.0508`,
+OSCR `+0.0834`, and unknown rejection `+1.80pp`.
+
+This identifies under-training as a real confounding factor and makes 10
+epochs the more credible budget for the next ablations. It does not solve the
+core overlap: the ten-epoch treatment still accepts `76.35%` of unknown test
+samples at the fixed operating point. We should therefore stop treating
+training longer as the complete solution and next test one explicit
+class-boundary representation objective at this fixed budget. The five-epoch
+results remain useful historical comparisons but should not be compared to
+ten-epoch results as if they were matched experiments.
+
+Full details are in
+`analysis/semantic_isolated_epoch_budget_s42_20261007.md`; exact artifacts are
+under `runs/semantic_isolated_full_e10_s42_*`.
+
+## 2026-10-07: known center-margin pilot
+
+Because the core issue is class-boundary overlap, we tested a supervised
+center-margin objective that uses known labels only. It compares each known
+sample with its own batch class center and the nearest wrong class center; it
+does not assign unknown pseudo-labels to the mixed pool. The three arms used
+the same semantic-isolated seed-42 pilot protocol, mixed pool, stratified
+support rejector, and validation-only calibration.
+
+| Arm | AUROC | FPR95 | OSCR | Known accuracy | Known acceptance | Unknown rejection |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.6691 | 0.8286 | 0.1571 | 20.13% | 97.17% | 7.27% |
+| uncertainty treatment | **0.7206** | **0.6889** | **0.2153** | **26.62%** | 92.01% | **19.05%** |
+| center-margin-only | 0.6983 | 0.8170 | 0.1673 | 20.63% | 95.34% | 12.03% |
+
+Center-margin-only improves AUROC by `+0.0292` and unknown rejection by
+`+4.76pp` over baseline in this short pilot, but its FPR95/OSCR improvement
+is small and it is clearly weaker than the uncertainty treatment. The ten-
+epoch confirmation subsequently scored below baseline on AUROC, FPR95, OSCR,
+and unknown rejection. Center-margin is therefore retained only as a
+negative boundary ablation; it is not a main component.
+
+Details are in `analysis/center_margin_pilot_s42_20261007.md`; the script now
+supports the isolated arm through `-KnownCenterMarginTreatment`.
+## 2026-10-07: ten-epoch boundary and rejector audit
+
+The three-epoch center-margin pilot was confirmed at ten epochs under the
+same semantic-isolated split, matched mixed pool, stratified support, linear
+`nu_corrected` rejector, and validation-only 95% known-coverage calibration.
+The center-margin-only arm scored AUROC/FPR95/OSCR/unknown rejection
+`0.7751/0.6375/0.3716/21.25%`, versus baseline
+`0.7866/0.6027/0.3795/21.85%` and uncertainty treatment
+`0.8008/0.5518/0.4629/23.65%`. The earlier short-budget positive signal did
+not survive, so center-margin is now a negative ablation rather than a main
+direction.
+
+Two post-hoc rejector representations were then tested on the same ten-epoch
+checkpoints. Appending per-known-class prototype similarities produced
+baseline `0.7832/0.6130/0.3771/20.00%` and treatment
+`0.8000/0.5490/0.4633/22.33%`; it does not improve the fixed operating point.
+Replacing the linear nnPU rejector with the existing MLP version collapsed for
+both arms to AUROC about `0.516`, FPR95 about `0.916`, and `0%` unknown
+rejection. These are negative controls, not evidence that the underlying
+student is worse.
+
+The code now supports opt-in `prototype_augmented` and
+`prototype_support_augmented` rejector features. During implementation,
+compile/test checks caught and fixed detached-tensor and support-initialization
+integration bugs. Verification after the fixes: `178 passed, 2 warnings`.
+
+The main protocol remains ten-epoch uncertainty treatment with class-stratified
+support and a linear `nu_corrected` rejector. The core problem is still real:
+unknown rejection is only about 20%--24% at the fixed known-coverage point.
+Further post-hoc feature stacking and MLP rejectors are paused. The next
+controlled direction should change the training target for a dedicated
+rejection representation or reformulate the PU risk with explicit score
+regularization; it should not be another threshold sweep.
+
+Full records:
+
+- `analysis/center_margin_e10_s42_20261007.md`
+- `analysis/rejector_representation_audit_s42_20261007.md`
+
+## 2026-10-07: nnPU score-margin audit
+
+To test whether the rejector was reaching a weakly separated score solution,
+an opt-in regularizer was added. It penalizes
+`relu(margin - mean(unlabeled_score) + mean(known_score))`; the default weight
+is zero. With the fixed setting `weight=0.05`, `margin=0.5`, baseline changed
+from `0.7866/0.6027/0.3795/21.85%` to
+`0.7816/0.6165/0.3780/21.03%` for AUROC/FPR95/OSCR/unknown rejection. The
+treatment changed from `0.8008/0.5518/0.4629/23.65%` to
+`0.7988/0.5553/0.4634/23.00%`. Known acceptance was essentially unchanged,
+but the main unknown-rejection and ranking metrics did not improve.
+
+The scalar score-gap regularizer is therefore retained only as an ablation and
+is not enabled by default. The next method must target the representation or
+the class-conditional PU assumption; another global score constraint is not a
+credible solution to the overlap problem. Details are in
+`analysis/nnpu_score_margin_audit_s42_20261007.md`.
+
+## 2026-10-07: rejection-feature margin wiring recheck
+
+代码审计发现，`alpha_discovery_rejection_feature_margin` 原本只准备了
+rejection 特征，真正的损失计算却错误地嵌套在
+`alpha_discovery_rejection_feature_separation` 分支内。因此过去只开启
+rejection margin 的实验不能作为有效结论。现在两个损失已经独立接线，并
+新增回归测试确认：关闭 separation 时，单独开启 margin 会产生非零损失。
+
+修复后的严格 pilot 固定使用 semantic-hard CIFAR-100 60/40、seed=42、
+预训练 ResNet-34/18、1200/300/1000 训练/验证/测试样本、400 样本 mixed
+pool（known prior=0.2）、2 epoch、rejection embedding 维度 128、同一教师
+模型、同一 `nu_corrected` 线性 nnPU rejector、95% known-coverage 校准，
+只改变 rejection margin 的目标余弦相似度：
+
+| 实验 | margin 目标 | AUROC | FPR95 | OSCR | known acceptance | unknown rejection |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 控制组 | 关闭 | 0.5893 | 0.8923 | 0.1388 | 96.07% | 4.34% |
+| 修复后 margin | 0.2 | 0.5610 | 0.9590 | 0.1286 | 93.33% | 7.71% |
+| 修复后 margin | 0.0 | 0.5208 | 0.9521 | 0.1062 | 97.61% | 6.27% |
+
+结论是：修复后的损失确实被执行，但它提高的拒绝率伴随着已知样本误拒和
+排序指标下降，不能解决已知/未知表征重叠。因此保留这次代码修复，不把
+rejection-feature margin 加入主流程，也不继续围绕它调阈值或调 margin。
+过去相关 margin 结果统一降级为“接线未完全核实的历史探索”，以后引用时
+应以本次修复后的配对结果为准。详细记录见
+`analysis/rejection_margin_wiring_recheck_s42_20261007.md`。
+
+本轮验证：`179 passed, 2 warnings`，compileall 和 `git diff --check`
+均通过。下一步应回到 mixed-pool 的 PU 假设、候选污染和类条件 known prior
+审计，寻找真正改变表征学习目标的方法，而不是继续增加全局拒识约束。
+
+## 2026-10-07：prototype similarity rejector recheck
+
+The recently added classifier-prototype cosine similarities were tested as an
+additional input to the current support-only nnPU rejector. The comparison used
+the same semantic-isolated split, seed, student checkpoint, 5,400-sample mixed
+pool, stratified known support, `nu_corrected` risk, and validation-only 95%
+known-coverage calibration. Only the rejector feature input changed.
+
+| Rejector input | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `support_augmented` | 0.80078 | 0.55183 | 0.46295 | 94.18% | 23.65% |
+| `prototype_support_augmented` | 0.80002 | 0.54900 | 0.46332 | 94.57% | 22.33% |
+
+The prototype features did not improve the main ranking or rejection result;
+the small FPR95/OSCR changes are not sufficient evidence of better separation.
+This direction is retained only as an optional diagnostic, and is not promoted
+to the main pipeline. The detailed record is
+`analysis/prototype_support_rejector_recheck_s42_20261007.md`.
+
+## 2026-10-07: candidate-gated feature-separation recheck
+
+This paired test enabled a candidate-gated feature-separation loss on the
+mixed discovery pool. The purpose was to test whether pushing selected
+candidate features away from the known representation would reduce the
+known/unknown overlap. Both arms used the same semantic-isolated CIFAR-100
+split, seed 42, pretrained teacher, full data, three epochs, mixed pool,
+support-augmented linear `nu_corrected` rejector, and validation-only 95%
+known-coverage calibration. The treatment only added
+`alpha_discovery_feature_separation=0.05`, candidate gating, margin `0`, and
+temperature `0.1`. The training log confirmed that the separation loss was
+non-zero only in the treatment.
+
+| Student arm | AUROC | AUPR | FPR95 | OSCR | Known acceptance | Unknown rejection |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0.7665 | 0.6434 | 0.6630 | 0.3693 | 94.92% | 18.55% |
+| candidate separation | 0.7617 | 0.6431 | 0.6497 | 0.3660 | 95.15% | 19.08% |
+
+The treatment improved FPR95 by `0.0133` and unknown rejection by only
+`0.53pp`, but reduced AUROC, AUPR, and OSCR. This is an insufficient/negative
+result, not evidence that feature separation solved the core overlap. The
+candidate-gated loss remains an opt-in ablation and is not added to the main
+recipe. The detailed record is
+`analysis/semantic_isolated_candidate_separation_recheck_s42_20261007.md`.
+
+The next change should target the source of the representation signal rather
+than add another noisy mixed-pool margin: use cleaner known-support geometry,
+explicitly separate the rejector representation from the classification
+embedding, or reformulate the PU objective with a validated class-conditional
+assumption. Any new method must be compared against the fixed current
+reference and judged jointly by AUROC, FPR95, OSCR, known acceptance, unknown
+rejection, and feature-overlap diagnostics.
+
+### Independent rejection branch plus uncertainty-PU recheck
+
+On 2026-10-07 we completed a strict paired test of the independent rejection
+branch with and without mixed-pool uncertainty nnPU training. Both arms used
+the semantic-isolated CIFAR-100 60/40 split, seed 42, full data, the same
+pretrained teacher, three student epochs, a matched 5,400-image mixed pool,
+known prior `0.2`, a linear `nu_corrected` rejector on `rejection_embedding`,
+MC=4, and validation-only 95% known-coverage calibration. The treatment only
+enabled `alpha_discovery_uncertainty_pu=0.1` with the `nu_corrected` risk.
+
+| Metric | Independent branch | Branch + uncertainty-PU |
+| --- | ---: | ---: |
+| AUROC | 0.7627 | 0.7178 |
+| AUPR | 0.6280 | 0.5803 |
+| FPR95 | 0.6327 | 0.7045 |
+| OSCR | 0.3485 | 0.3141 |
+| Known acceptance | 94.48% | 93.83% |
+| Unknown rejection | 18.63% | 15.33% |
+
+The PU loss was active in the treatment, but every main detection metric
+became worse. This is a negative result: mixed-pool uncertainty is currently
+too noisy to supervise the rejection embedding, so this loss remains opt-in
+and is not promoted to the main recipe. The complete record is
+`analysis/semantic_isolated_rejection_branch_nnpu_recheck_s42_20261007.md`.
+
+The next check reuses the same checkpoints and compares the rejection embedding
+with the existing uncertainty-augmented rejector feature set. That experiment
+tests whether the remaining issue is the learned representation or simply
+failure to use the available uncertainty signals; it changes no student
+weights or evaluation protocol.
+
+### Rejection and uncertainty feature-mode recheck
+
+The next controlled comparison added two opt-in rejector modes:
+`rejection_uncertainty_augmented` uses the independent rejection embedding
+plus classifier and uncertainty summaries, while
+`rejection_support_uncertainty_augmented` additionally appends the known-class
+support score. The student checkpoints, mixed pool, known prior, nnPU risk,
+MC=4 extraction, and validation-only 95% known-coverage calibration were all
+fixed; only the rejector feature mode changed.
+
+| Checkpoint | Feature mode | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| independent branch | `rejection_embedding` | 0.7627 | 0.6327 | 0.3485 | 94.48% | 18.63% |
+| independent branch | `rejection_uncertainty_augmented` | 0.7658 | 0.6150 | 0.3563 | 94.73% | 17.78% |
+| independent branch | `rejection_support_uncertainty_augmented` | 0.7654 | 0.6168 | 0.3582 | 94.28% | 19.25% |
+| branch + uncertainty-PU | `rejection_embedding` | 0.7178 | 0.7045 | 0.3141 | 93.83% | 15.33% |
+| branch + uncertainty-PU | `rejection_uncertainty_augmented` | 0.7607 | 0.6442 | 0.3405 | 93.92% | 21.48% |
+| branch + uncertainty-PU | `rejection_support_uncertainty_augmented` | 0.7636 | 0.6315 | 0.3441 | 93.73% | 21.95% |
+
+The hybrid modes are a useful opt-in post-hoc detector ablation, but no mode
+dominates all metrics and unknown rejection remains below 22%. They do not
+prove that the learned feature space is separated. The feature-stacking
+exploration is therefore closed for now; further work should target cleaner
+training supervision or protocol validity rather than adding more correlated
+post-hoc features. Full details are in
+`analysis/rejection_feature_hybrid_recheck_s42_20261007.md`.
+
+### 2026-10-07：冻结教师候选权重与 CIFAR stem 复核
+
+本轮继续围绕“已知/未知表征重叠、未知拒绝率低”做严格单变量检查。
+
+首先修复了一个实验入口问题：`--discovery-feature-margin-weight-source`
+使用 `ema_*` 时，参数校验原来只允许 `--discovery-selection-model ema`，
+导致冻结 teacher 不能作为选择模型。现在同时允许 `ema` 和 `teacher`，并新增回归测试。
+修复后测试为 `182 passed`。
+
+在 CIFAR-100 semantic-isolated 60/40、seed=42、3 epochs、1200/300/1000
+训练/验证/测试限制、matched mixed pool=5400、known prior=0.2 的完全配对协议中，
+冻结 teacher 的 `uncertainty × MSP-novelty` 权重得到 AUROC `0.7255`、FPR95
+`0.7155`、OSCR `0.2240`、unknown rejection `16.29%`；teacher 的 MSP-novelty
+单信号得到 AUROC `0.7331`、FPR95 `0.7055`、OSCR `0.2411`、unknown rejection
+`13.78%`，均未超过原 student-weighted treatment（AUROC `0.7469`、OSCR
+`0.2372`、unknown rejection `23.31%`）。因此“改用冻结 teacher 产生候选权重”暂不作为主方法。
+
+随后测试了 CIFAR 风格 ResNet stem（首层 `3x3/stride=1`、取消首个 max-pool）。
+其 AUROC `0.7199`、FPR95 `0.7488`、unknown rejection `18.55%` 比默认 stem pilot
+baseline 的 `0.7004`、`0.7770`、`14.04%` 有所改善，但 all-known accuracy 从
+`19.30%` 降到 `14.64%`，OSCR 从 `0.1543` 降到 `0.1151`。这说明它可能改变了
+排序，却没有可靠提高已知分类与开放识别的综合质量，继续保留为结构消融，不设为默认。
+
+本轮结论与完整条件记录见
+`analysis/teacher_selection_and_cifar_stem_recheck_s42_20261007.md`。下一步应停止继续
+堆叠 teacher selector、后处理分数或 stem 变体，转向固定检测器下的联合表征目标：同时提高
+已知类闭集表示质量，并让 mixed pool 的 novel prototype 学习使用稳定的 teacher/EMA 目标和
+周期性刷新；所有新方案先做单变量 pilot，再决定是否进行完整多 seed 实验。
+## 2026-10-07: rejection-branch uniform OE recheck
+
+本轮继续围绕“已知/未知表征重叠、unknown rejection 偏低”进行严格配对实验。上一轮的 rejection feature margin OE 能改善 seed=42 的排序，但固定工作点拒绝率没有提高，因此新增了 `--alpha-outlier-rejection-uniform`：对外部 CIFAR-10 OOD 样本的独立 `rejection_logits` 施加 uniform-logit OE，使其不集中到任何已知类别；原有 rejection feature margin 保持不变。该开关默认值为 `0`，不会改变历史流程。
+
+实验协议固定为 semantic-isolated CIFAR-100 60/40、预训练 ResNet-34/18、1200/300/1000 train/val/test、2 个 student epoch、rejection embedding=128、5400 样本 mixed pool、known prior=0.2、`nu_corrected` rejector、`support_augmented` 特征和 validation-only 95% known-coverage 校准。
+
+| Seed | 对照 | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 42 | rejection margin OE | 0.7030 | 0.7720 | 0.1090 | 94.51% | 11.53% |
+| 42 | margin OE + rejection uniform OE | 0.7144 | 0.7255 | 0.1203 | 95.34% | 16.29% |
+| 43 | rejection margin OE | 0.6619 | 0.8188 | 0.1090 | 94.97% | 7.92% |
+| 43 | margin OE + rejection uniform OE | 0.6742 | 0.8356 | 0.0969 | 95.97% | 12.62% |
+| 44 | rejection margin OE | 0.6916 | 0.8073 | 0.1505 | 89.97% | 24.73% |
+| 44 | margin OE + rejection uniform OE | 0.7375 | 0.6768 | 0.1743 | 93.95% | 16.67% |
+
+两 个 seed 上 AUROC 和 unknown rejection 都提升，unknown rejection 约提升 4.7 个百分点，known acceptance 也提高约 1 个百分点；但 FPR95 与 OSCR 一好一坏，说明这是目前较有希望的候选组合，仍不能宣称解决核心问题，也暂不改为默认配置。下一步先做 `uniform-only` 消融，确认收益来自 uniform 项本身还是与 feature margin 的交互；若继续有效，再用第三个 seed 或更大训练预算复核。详细记录见 `analysis/rejection_oe_uniform_recheck_s42_s43_20261007.md`。首次 seed=42 漏传 `--alpha-rejection-known-ce 1.0` 的 smoke run 已判为无效，不纳入结果。
+
+补充的 seed=42 `uniform-only` 消融（关闭 feature margin，只保留 uniform OE）为 AUROC `0.7180`、FPR95 `0.7438`、OSCR `0.1285`、known acceptance `96.67%`、unknown rejection `11.03%`；相同无 OE 基线为 `0.6474/0.8220/0.0800/94.01%/10.53%`。这说明 uniform OE 单独主要改善排序，几乎没有提高工作点拒绝率；目前更有价值的是 uniform OE 与 rejection feature margin 的组合，但需要第三个 seed 复核后才能考虑进入主实验配方。
+
+补充的 seed=44 结果显示，当前 validation-calibrated unknown rejection 从 `24.73%` 降到 `16.67%`，因此不能只看验证阈值工作点；但在仅用于事后诊断的 exact-95% test-known coverage 下，三组 seed 的 margin-only -> 组合未知拒绝率分别为 `9.02% -> 16.54%`、`8.42% -> 15.35%`、`12.10% -> 15.05%`。该诊断使用测试标签，不能用于模型选择，但说明组合在匹配覆盖率的排序比较上三组均有改善。当前结论是“有希望的候选，仍不设为默认”，下一步应使用更大训练预算和独立 open-validation 校准复核。
+
+## 2026-10-07: rejection geometry and fixed-score audit
+
+本轮继续围绕“已知/未知表征重叠、unknown rejection 偏低”做严格小规模验证。
+新增两个默认关闭的独立 rejection embedding 训练开关：
+
+- `--alpha-rejection-supcon`：只使用已知标签，在 rejection embedding 上施加监督对比损失；
+- `--alpha-rejection-center`：只使用已知标签，在 rejection embedding 上施加 batch center compactness 损失。
+
+这两个损失都没有把 mixed discovery pool 的伪标签当作真值，因此用于检查“已知类几何质量不足”是否是主要原因。两种方法均完成 seed=42/43 的 paired pilot。SupCon 在 seed=42 的 AUROC 从 `0.6474` 提高到 `0.7317`，但 seed=43 从 `0.7287` 降到 `0.7086`；center loss 在 seed=42 从 `0.6474` 提高到 `0.6757`，但 seed=43 从 `0.7287` 降到 `0.6894`。因此两者都没有跨 seed 稳定改善，暂时只保留为消融，不改变默认配置。
+
+同一十 epoch treatment checkpoint 的固定评分器审计也已完成：diagonal Mahalanobis 是四个评分器中最好的，AUROC `0.6924`、FPR95 `0.7820`、unknown rejection `9.77%`；classwise Mahalanobis AUROC `0.5997`，normalized classwise 版本 AUROC `0.6745`。评分器替换不能把 unknown rejection 从低水平提升起来，说明当前主要瓶颈仍在表征学习，而不是阈值或 classwise 标准化。
+
+完整数据和结论见 `analysis/rejection_geometry_and_score_audit_s42_s43_20261007.md`。下一步应停止继续堆叠 score/threshold 或仅靠 known-only compactness，转向能在表示学习阶段提供可靠未知结构的方案：稳定的 mixed-pool target/refresh、或协议明确的外部 OOD 监督，并继续报告 feature-overlap、AUROC、FPR95、OSCR、known acceptance 和 unknown rejection。
+
+## 2026-10-07: rejection-logit detector ablation
+
+本轮先补齐了两个 opt-in rejector feature mode：`rejection_logit_augmented` 和 `rejection_support_logit_augmented`。它们把独立 rejection head 的 logits、softmax entropy、最大概率和 top-1/top-2 概率差纳入 detector；支持版另外加入 known-support score。由于训练时 rejection head 已接受外部 CIFAR-10 OOD 的 uniform-logit OE，原本 detector 没有直接使用这一路 logits。
+
+代码验证通过：`python -m compileall -q train.py novel_discovery`，`python -m pytest -q` 为 `188 passed`，`git diff --check` 通过。新增 `rejection_support_augmented` 作为严格匹配的 post-hoc 对照：它与 `rejection_support_logit_augmented` 使用相同的 rejection embedding、主分类统计和 known-support score，唯一差异是是否追加 rejection logits 及其统计量。
+
+实验目的：检查 rejection logits 是否包含超出 rejection embedding、主分类统计与 support score 的可泛化未知信息。变量仅为 rejector feature mode，不重新训练 student。固定项为 CIFAR-100 semantic-isolated 60/40、每 seed 原有 student checkpoint、1200/300/1000 train/val/test、5400 mixed pool（known prior 0.2）、linear `nu_corrected` nnPU、MC=4 和 validation-only 95% known-coverage calibration；聚类关闭。seed=42/43 checkpoint 使用 feature-margin OE，seed=44 使用 feature-margin + uniform OE，因此结论是每个既定 checkpoint 内的配对检测器消融，不把 seed 间差异归因于单一训练方法。
+
+| Seed | Rejector features | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 42 | rejection embedding + support | 0.7312 | 0.7571 | 0.1121 | 96.51% | 14.29% |
+| 42 | same + rejection logits | 0.7332 | 0.7621 | 0.1114 | 95.34% | 15.54% |
+| 43 | rejection embedding + support | 0.7101 | 0.7651 | 0.1193 | 95.30% | 10.89% |
+| 43 | same + rejection logits | 0.7047 | 0.7869 | 0.1186 | 96.48% | 9.16% |
+| 44 | rejection embedding + support | 0.7150 | 0.7484 | 0.1737 | 95.70% | 11.83% |
+| 44 | same + rejection logits | 0.7132 | 0.7691 | 0.1729 | 94.43% | 14.25% |
+
+结论：增加 rejection logits 没有跨 seed 稳定改善。seed=42/44 的 unknown rejection 有所提高，但伴随 known acceptance、FPR95 或 OSCR 的退化；seed=43 的主要指标整体变差。该后处理方向不提升为默认方法，也不支持“只要把 logits 喂给 detector 就能解决重叠”的判断。较早把新模式与旧 `support_augmented` 直接比较的 exploratory runs 同时改变了底层 embedding，属于混杂比较，不用于证明 logits 的独立贡献。
+
+因此当前更重要的问题不是继续堆叠 rejection score，而是验证 rejection head 学到的 logits 对未知类别是否有稳定语义信息，以及训练监督是否足以让 semantic-near unknown 离开已知区域。下一步优先在固定训练 checkpoint 上分析 rejection logits/embedding 的 known-vs-unknown 分布、按语义相近类别分层的误接收率与相关性；若 logits 与 rejection embedding 高度冗余或只在少数 seed 有效，就停止该支路的特征堆叠，回到训练阶段设计有真实未知结构且不污染验证/测试的监督或 mixed-pool 目标。完整实验记录见 `analysis/rejection_logits_detector_ablation_20261007.md`。
+
+## 2026-10-07: full-data rejection uniform-OE recheck
+
+为判断之前的短训练/限量数据是否低估 rejection uniform-OE，先在
+semantic-isolated CIFAR-100 60/40、完整数据、ResNet-34/18、5 epochs 上完成 seed=42
+配对实验，再固定数据划分 seed=42，将 student 训练随机种子扩展到 43、44。三组共用
+同一教师；每个 seed 内结构化比较训练配置确认，唯一算法参数差异是
+`alpha_outlier_rejection_uniform: 0 -> 0.05`，rejection feature-margin OE 保持为
+`0.05`。新增项在外部 CIFAR-10 样本的 rejection logits 上最小化到均匀类别分布的
+交叉熵，属于 Outlier Exposure 思路在独立拒绝头上的应用。
+
+检测端使用完全相同的完整数据协议、5400 mixed pool（known prior=0.2）、linear
+`nu_corrected` nnPU、`rejection_support_augmented`、MC=4、validation-only 95%
+known-coverage 校准，并关闭聚类；仅替换学生 checkpoint。
+
+| Model seed | Arm | Known accuracy | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 42 | margin only | 0.3965 | 0.7485 | 0.6780 | 0.3392 | 95.00% | 17.15% |
+| 42 | margin + uniform OE | 0.4433 | 0.7623 | 0.6323 | 0.3790 | 94.42% | 20.10% |
+| 43 | margin only | 0.3905 | 0.7703 | 0.6158 | 0.3402 | 94.92% | 19.50% |
+| 43 | margin + uniform OE | 0.4303 | 0.7698 | 0.6010 | 0.3742 | 94.58% | 19.13% |
+| 44 | margin only | 0.4855 | 0.7808 | 0.5968 | 0.4216 | 94.38% | 19.93% |
+| 44 | margin + uniform OE | 0.4307 | 0.7743 | 0.6277 | 0.3720 | 94.72% | 20.33% |
+
+三 seed 配对差值（treatment 减 control）的均值为：AUROC `+0.0023`、FPR95
+`-0.0099`、OSCR `+0.0081`、known accuracy `+0.0106`、known acceptance `-0.19` 个
+百分点、unknown rejection `+0.99` 个百分点。seed=42 上未知误接收由 3314/4000 降到
+3196/4000；按 40 个未知原始类别做的事后描述中，27 类接受率下降、2 类不变、11 类
+上升。这一逐类分析只针对 seed=42，用于解释错误，不用于调参。
+
+总体结论从 seed=42 的“有希望信号”更新为“三 seed 效果混合且不稳定”：seed=43 的
+unknown rejection 下降，seed=44 的 AUROC、FPR95、OSCR 和 known accuracy 变差；三 seed
+平均 AUROC 仅增加 `0.0023`、unknown rejection 仅增加 `0.99` 个百分点，不能认为方法
+稳定有效或核心问题已解决。unknown rejection 仍约 19%--20%。因此 uniform OE 继续保持
+opt-in 消融，不升为默认训练配置。完整结果见
+`analysis/rejection_uniform_oe_full_data_s42_20261007.md`。
+
+校准阈值未使用测试标签，但同一验证集既用于挑选最佳 checkpoint，也用于阈值校准，
+两者并不独立。下一步先划出独立 calibration 子集、固定模型选择规则，再检查不同 seed
+下 known/unknown 特征与分数分布是否一致变化；只有训练期诊断出现稳定趋势，才值得预先
+设定 OE 权重做下一轮对照。不要根据测试结果选择权重或继续做阈值调整。

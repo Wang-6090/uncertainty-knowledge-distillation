@@ -48,6 +48,8 @@ from novel_discovery.pipeline import (
     fit_virtual_outlier_rejector,
     fit_known_support_rejector,
     attach_known_support_score,
+    fit_known_conformal_support_rejector,
+    attach_known_conformal_support_score,
     fit_pu_feature_rejector,
     fit_nnpu_feature_rejector,
     attach_feature_rejector_score,
@@ -75,6 +77,15 @@ def parse_args(argv=None):
         p.add_argument("--split-path", default="./splits.json")
         p.add_argument("--num-known", type=int, default=60)
         p.add_argument("--seed", type=int, default=42)
+        p.add_argument(
+            "--model-seed",
+            type=int,
+            default=None,
+            help=(
+                "Override the training RNG seed while keeping --seed fixed "
+                "for class/data splitting. Defaults to --seed."
+            ),
+        )
         p.add_argument("--image-size", type=int, default=224)
         p.add_argument("--batch-size", type=int, default=64)
         p.add_argument("--num-workers", type=int, default=4)
@@ -169,6 +180,20 @@ def parse_args(argv=None):
         )
         p.add_argument("--rejector-pu-iterations", type=int, default=4)
         p.add_argument(
+            "--rejector-max-samples",
+            type=int,
+            default=5000,
+            help=(
+                "Maximum known and mixed-pool samples used to fit a feature rejector. "
+                "Use 0 to keep all available samples."
+            ),
+        )
+        p.add_argument(
+            "--rejector-stratified-known",
+            action="store_true",
+            help="Sample the known rejector support approximately equally across known classes.",
+        )
+        p.add_argument(
             "--rejector-known-prior",
             type=float,
             default=0.2,
@@ -191,6 +216,21 @@ def parse_args(argv=None):
             help="Function family for the mixed-pool nnPU rejector; linear preserves the current baseline.",
         )
         p.add_argument(
+            "--rejector-score-margin-weight",
+            type=float,
+            default=0.0,
+            help=(
+                "Optional mean-score separation regularizer for nnPU rejectors; "
+                "default 0 preserves the historical risk."
+            ),
+        )
+        p.add_argument(
+            "--rejector-score-margin",
+            type=float,
+            default=0.5,
+            help="Target score gap used by --rejector-score-margin-weight.",
+        )
+        p.add_argument(
             "--rejector-feature-mode",
             choices=[
                 "embedding",
@@ -199,11 +239,18 @@ def parse_args(argv=None):
                 "support_augmented",
                 "uncertainty_augmented",
                 "support_uncertainty_augmented",
+                "rejection_uncertainty_augmented",
+                "rejection_support_uncertainty_augmented",
+                "rejection_support_augmented",
+                "rejection_logit_augmented",
+                "rejection_support_logit_augmented",
+                "prototype_augmented",
+                "prototype_support_augmented",
             ],
             default="embedding",
             help=(
-                "Use frozen embeddings alone, append classifier summaries, or also "
-                "append MC-dropout epistemic/entropy signals."
+                "Use frozen embeddings alone, append classifier summaries, prototype "
+                "similarities, or MC-dropout epistemic/entropy signals."
             ),
         )
         p.add_argument(
@@ -278,6 +325,24 @@ def parse_args(argv=None):
         type=float,
         default=0.0,
         help="Known-class CE weight for the optional rejection branch.",
+    )
+    p.add_argument(
+        "--alpha-rejection-supcon",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-label supervised contrastive weight on the independent "
+            "rejection embedding; disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--alpha-rejection-center",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-label center compactness weight on the independent "
+            "rejection embedding; disabled by default."
+        ),
     )
     p.add_argument("--alpha-proto", type=float, default=0.0)
     p.add_argument(
@@ -375,8 +440,38 @@ def parse_args(argv=None):
         default=0.0,
         help="Known-class CE weight for the optional rejection branch.",
     )
+    p.add_argument(
+        "--alpha-rejection-supcon",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-label supervised contrastive weight on the independent "
+            "rejection embedding; disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--alpha-rejection-center",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-label center compactness weight on the independent "
+            "rejection embedding; disabled by default."
+        ),
+    )
     p.add_argument("--alpha-kd", type=float, default=1.0)
     p.add_argument("--alpha-feat-kd", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-rejection-kd",
+        type=float,
+        default=0.0,
+        help="KD weight for optional rejection-branch logits.",
+    )
+    p.add_argument(
+        "--alpha-rejection-feat-kd",
+        type=float,
+        default=0.0,
+        help="Cosine feature-KD weight for the optional rejection branch.",
+    )
     p.add_argument("--kd-mode", choices=["standard", "uncertainty"], default="uncertainty")
     p.add_argument("--alpha-supcon", type=float, default=0.1)
     p.add_argument(
@@ -1183,6 +1278,25 @@ def parse_args(argv=None):
         help="Push auxiliary outlier features away from the nearest known classifier prototype.",
     )
     p.add_argument("--outlier-feature-margin", type=float, default=0.2)
+    p.add_argument(
+        "--alpha-outlier-rejection-feature-margin",
+        type=float,
+        default=0.0,
+        help=(
+            "Push auxiliary outlier rejection embeddings away from the nearest "
+            "known rejection prototype; requires --rejection-feature-dim > 0."
+        ),
+    )
+    p.add_argument("--outlier-rejection-feature-margin", type=float, default=0.2)
+    p.add_argument(
+        "--alpha-outlier-rejection-uniform",
+        type=float,
+        default=0.0,
+        help=(
+            "Match auxiliary outlier rejection logits to a uniform known-class "
+            "distribution; requires --rejection-feature-dim > 0."
+        ),
+    )
     p.add_argument("--discovery-batch-size", type=int, default=0)
     p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
     p.add_argument("--discovery-temperature", type=float, default=0.2)
@@ -1325,6 +1439,7 @@ def parse_args(argv=None):
             "feature_rejector_fusion",
             "virtual_rejector",
             "known_support",
+            "known_conformal",
             "margin_uncertainty",
             "entropy_only",
             "proto_only",
@@ -1765,7 +1880,7 @@ def _calibrate_discovery_threshold(
 
 
 def fit_teacher(args):
-    set_seed(args.seed)
+    set_seed(args.seed if args.model_seed is None else args.model_seed)
     bundle = build_data_bundle(
         args.dataset,
         args.data_root,
@@ -1819,6 +1934,8 @@ def fit_teacher(args):
             device,
             alpha_unc=args.alpha_unc,
             alpha_rejection_known_ce=args.alpha_rejection_known_ce,
+            alpha_rejection_supcon=args.alpha_rejection_supcon,
+            alpha_rejection_center=args.alpha_rejection_center,
             alpha_proto=args.alpha_proto,
             alpha_center=args.alpha_center,
             alpha_radius=args.alpha_radius,
@@ -1908,10 +2025,10 @@ def fit_student(args):
     if not 0.0 <= args.joint_novel_weight_floor < 1.0:
         raise ValueError("--joint-novel-weight-floor must be in [0, 1)")
     if args.discovery_feature_margin_weight_source.startswith("ema_"):
-        if args.discovery_selection_model != "ema":
+        if args.discovery_selection_model not in {"ema", "teacher"}:
             raise ValueError(
                 "EMA feature-margin weight sources require "
-                "--discovery-selection-model ema"
+                "--discovery-selection-model ema or teacher"
             )
     if args.joint_mixed_known_consistency or args.alpha_joint_known_consistency > 0.0:
         if (
@@ -1957,7 +2074,7 @@ def fit_student(args):
         raise ValueError(
             "reciprocal-point discovery loss requires --discovery-pool with a pure unknown pool"
         )
-    set_seed(args.seed)
+    set_seed(args.seed if args.model_seed is None else args.model_seed)
     bundle = build_data_bundle(
         args.dataset,
         args.data_root,
@@ -1990,6 +2107,8 @@ def fit_student(args):
         or args.alpha_outlier_energy > 0.0
         or args.alpha_outlier_uncertainty > 0.0
         or args.alpha_outlier_feature_margin > 0.0
+        or args.alpha_outlier_rejection_feature_margin > 0.0
+        or args.alpha_outlier_rejection_uniform > 0.0
     )
     if uses_outlier_exposure:
         if not args.outlier_dataset or not args.outlier_data_root:
@@ -2101,6 +2220,11 @@ def fit_student(args):
         )
     teacher_backbone = args.teacher_backbone or args.backbone
     student_backbone = args.student_backbone or args.backbone
+    teacher_rejection_feature_dim = (
+        args.rejection_feature_dim
+        if args.alpha_rejection_kd > 0.0 or args.alpha_rejection_feat_kd > 0.0
+        else 0
+    )
     teacher = build_model(
         len(bundle.known_classes),
         backbone=teacher_backbone,
@@ -2108,7 +2232,7 @@ def fit_student(args):
         dropout=args.dropout,
         pretrained=args.pretrained,
         cifar_stem=args.cifar_stem,
-        rejection_feature_dim=args.rejection_feature_dim,
+        rejection_feature_dim=teacher_rejection_feature_dim,
     ).to(device)
     student = build_model(
         len(bundle.known_classes),
@@ -2355,6 +2479,10 @@ def fit_student(args):
             device,
             alpha_unc=args.alpha_unc,
             alpha_rejection_known_ce=args.alpha_rejection_known_ce,
+            alpha_rejection_supcon=args.alpha_rejection_supcon,
+            alpha_rejection_center=args.alpha_rejection_center,
+            alpha_rejection_kd=args.alpha_rejection_kd,
+            alpha_rejection_feat_kd=args.alpha_rejection_feat_kd,
             alpha_kd=args.alpha_kd,
             alpha_feat_kd=args.alpha_feat_kd,
             alpha_supcon=args.alpha_supcon,
@@ -2539,6 +2667,9 @@ def fit_student(args):
             alpha_outlier_uncertainty=args.alpha_outlier_uncertainty,
             alpha_outlier_feature_margin=args.alpha_outlier_feature_margin,
             outlier_feature_margin=args.outlier_feature_margin,
+            alpha_outlier_rejection_feature_margin=args.alpha_outlier_rejection_feature_margin,
+            outlier_rejection_feature_margin=args.outlier_rejection_feature_margin,
+            alpha_outlier_rejection_uniform=args.alpha_outlier_rejection_uniform,
             freeze_bn_stats=args.freeze_bn_stats,
         )
         stats["discovery_selective_weight"] = selective_weight
@@ -2901,7 +3032,11 @@ def discover(args):
                 rejector_known_loader,
                 device,
                 mc_samples=(args.rejector_mc_samples if args.rejector_feature_mode in {
-                    "uncertainty_augmented", "support_uncertainty_augmented"
+                    "uncertainty_augmented", "support_uncertainty_augmented",
+                    "rejection_uncertainty_augmented",
+                    "rejection_support_uncertainty_augmented",
+                    "rejection_logit_augmented",
+                    "rejection_support_logit_augmented",
                 } else 1),
             )
         support_model_for_rejector = None
@@ -2923,12 +3058,20 @@ def discover(args):
                 rejector_unknown_loader,
                 device,
                 mc_samples=(args.rejector_mc_samples if args.rejector_feature_mode in {
-                    "uncertainty_augmented", "support_uncertainty_augmented"
+                    "uncertainty_augmented", "support_uncertainty_augmented",
+                    "rejection_uncertainty_augmented",
+                    "rejection_support_uncertainty_augmented",
+                    "rejection_logit_augmented",
+                    "rejection_support_logit_augmented",
                 } else 1),
             )
             if args.score_mode == "feature_rejector_fusion" or args.rejector_feature_mode in {
                 "support_augmented",
                 "support_uncertainty_augmented",
+                "rejection_support_uncertainty_augmented",
+                "rejection_support_augmented",
+                "rejection_support_logit_augmented",
+                "prototype_support_augmented",
             }:
                 support_model_for_rejector = fit_known_support_rejector(
                     rejector_known_outputs, quantile=args.support_quantile
@@ -2960,6 +3103,7 @@ def discover(args):
                 feature_rejector = fit_pu_feature_rejector(
                     rejector_known_outputs,
                     rejector_unknown_outputs,
+                    max_samples=(None if args.rejector_max_samples <= 0 else args.rejector_max_samples),
                     iterations=args.rejector_pu_iterations,
                     feature_mode=args.rejector_feature_mode,
                     seed=args.seed,
@@ -2969,11 +3113,15 @@ def discover(args):
                     rejector_known_outputs,
                     rejector_unknown_outputs,
                     known_prior=args.rejector_known_prior,
+                    max_samples=(None if args.rejector_max_samples <= 0 else args.rejector_max_samples),
                     iterations=max(50, args.rejector_pu_iterations * 75),
                     feature_mode=args.rejector_feature_mode,
+                    stratified_known=args.rejector_stratified_known,
                     risk_mode=args.rejector_nnpu_risk,
                     model_type=args.rejector_nnpu_model,
                     seed=args.seed,
+                    score_margin_weight=args.rejector_score_margin_weight,
+                    score_margin=args.rejector_score_margin,
                 )
             else:
                 feature_rejector = fit_feature_rejector(
@@ -3006,6 +3154,22 @@ def discover(args):
             "known support detector: fitted on "
             f"{len(support_outputs['features'])} known features, "
             f"{len(support_model['classes'])} classes, q={args.support_quantile:.3f}"
+        )
+    if args.score_mode == "known_conformal":
+        support_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        support_outputs = extract_outputs(model, support_loader, device, mc_samples=1)
+        conformal_model = fit_known_conformal_support_rejector(
+            support_outputs,
+            outputs_val,
+            quantile=args.support_quantile,
+        )
+        for extracted in (outputs_test, outputs_val, outputs_open_val):
+            if extracted is not None:
+                attach_known_conformal_support_score(extracted, conformal_model)
+        print(
+            "known conformal support detector: fitted on "
+            f"{len(support_outputs['features'])} train features and "
+            f"{len(outputs_val['features'])} known validation features"
         )
     if knn_bank is not None:
         attach_knn_distances(outputs_test, knn_bank, k=args.knn_k, feature_key=args.knn_feature)
@@ -3439,6 +3603,9 @@ def discover(args):
         ).tolist(),
         "known_support_score": detail.get(
             "known_support_score", np.zeros_like(scores_test)
+        ).tolist(),
+        "known_conformal_score": detail.get(
+            "known_conformal_score", np.zeros_like(scores_test)
         ).tolist(),
         "proto_dist": detail["proto_dist"].tolist(),
         "mahalanobis": detail["mahalanobis"].tolist(),
