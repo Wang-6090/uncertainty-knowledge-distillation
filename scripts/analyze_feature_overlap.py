@@ -216,10 +216,12 @@ def parse_args(argv=None):
     parser.add_argument("--image-size", type=int, default=64)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--limit-train", type=int, default=1200)
-    parser.add_argument("--limit-val", type=int, default=300)
-    parser.add_argument("--limit-test", type=int, default=1000)
-    parser.add_argument("--limit-discovery", type=int, default=1200)
+    # Full-data is the safe default for a post-hoc diagnostic. Use explicit
+    # positive limits when running a smoke test.
+    parser.add_argument("--limit-train", type=int, default=0)
+    parser.add_argument("--limit-val", type=int, default=0)
+    parser.add_argument("--limit-test", type=int, default=0)
+    parser.add_argument("--limit-discovery", type=int, default=0)
     parser.add_argument("--backbone", default="resnet18")
     parser.add_argument("--proj-dim", type=int, default=128)
     parser.add_argument("--dropout", type=float, default=0.2)

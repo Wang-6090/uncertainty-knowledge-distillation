@@ -1,0 +1,778 @@
+{
+  "protocol": {
+    "note": "Post-hoc test-label diagnostic. Test labels determine only the reported operating points; they are not used for fitting or selection.",
+    "score_direction": "lower scores are accepted as known",
+    "coverages": [
+      0.9,
+      0.95,
+      0.97
+    ]
+  },
+  "runs": {
+    "baseline42": {
+      "path": "runs\\matched_mixed_nnpu_margin_s42_e10_detect",
+      "score_mode": "normalized_entropy_min_class_knn",
+      "reported_metrics": {
+        "auroc": 0.7250074166666667,
+        "aupr": 0.6017433645409318,
+        "fpr95": 0.7233333333333334,
+        "oscr": 0.48016945833333335,
+        "known_accept_rate": 0.9503333333333334,
+        "unknown_reject_rate": 0.16325,
+        "known_class_accuracy_all_known": 0.5681666666666667
+      },
+      "metric_consistency": {
+        "recomputed_known_class_accuracy_all_known": 0.5755,
+        "recomputed_accepted_correct_fraction_of_all_known": 0.5681666666666667,
+        "historical_report_field_warning": "Older reports may have stored accepted-correct/all-known under known_class_accuracy_all_known; rerun discover after the metric fix."
+      },
+      "ranking": {
+        "auroc": 0.7250074166666667,
+        "aupr": 0.6017433645409318,
+        "fpr95": 0.7233333333333334,
+        "known_score": {
+          "count": 6000,
+          "mean": 0.0038611299251887095,
+          "std": 1.8977390296006902,
+          "q10": -2.46060983427406,
+          "q25": -1.6148313240938468,
+          "median": -0.10520903592400517,
+          "q75": 1.5276282119470432,
+          "q90": 2.683826178973041
+        },
+        "unknown_score": {
+          "count": 4000,
+          "mean": 1.529303422263248,
+          "std": 1.6387496457526582,
+          "q10": -0.8756280846148569,
+          "q25": 0.39574014874782787,
+          "median": 1.7982499629189346,
+          "q75": 2.775234342867016,
+          "q90": 3.489548659417055
+        },
+        "histogram_overlap_0_to_1": 0.6649166666666666
+      },
+      "operating_points": [
+        {
+          "target_known_coverage": 0.9,
+          "diagnostic_threshold_from_test_known": 2.683826178973041,
+          "known_accept_rate": 0.9,
+          "unknown_reject_rate": 0.27575,
+          "known_rejected": 600,
+          "unknown_false_accept": 2897,
+          "known_class_correct_all_known": 3453,
+          "known_class_accuracy_all_known": 0.5755,
+          "accepted_correct_fraction_of_all_known": 0.557,
+          "known_class_accuracy_after_accept": 0.6188888888888889,
+          "oscr": 0.48016945833333335
+        },
+        {
+          "target_known_coverage": 0.95,
+          "diagnostic_threshold_from_test_known": 3.1575343179508484,
+          "known_accept_rate": 0.95,
+          "unknown_reject_rate": 0.16375,
+          "known_rejected": 300,
+          "unknown_false_accept": 3345,
+          "known_class_correct_all_known": 3453,
+          "known_class_accuracy_all_known": 0.5755,
+          "accepted_correct_fraction_of_all_known": 0.5681666666666667,
+          "known_class_accuracy_after_accept": 0.5980701754385965,
+          "oscr": 0.48016945833333335
+        },
+        {
+          "target_known_coverage": 0.97,
+          "diagnostic_threshold_from_test_known": 3.4649914376725968,
+          "known_accept_rate": 0.97,
+          "unknown_reject_rate": 0.10375,
+          "known_rejected": 180,
+          "unknown_false_accept": 3585,
+          "known_class_correct_all_known": 3453,
+          "known_class_accuracy_all_known": 0.5755,
+          "accepted_correct_fraction_of_all_known": 0.5723333333333334,
+          "known_class_accuracy_after_accept": 0.5900343642611684,
+          "oscr": 0.48016945833333335
+        }
+      ]
+    },
+    "rejector42": {
+      "path": "runs\\matched_mixed_nnpu_margin_s42_e10_rejector",
+      "score_mode": "feature_rejector",
+      "reported_metrics": {
+        "auroc": 0.75287525,
+        "aupr": 0.6474964635921312,
+        "fpr95": 0.6853333333333333,
+        "oscr": 0.4796259583333333,
+        "known_accept_rate": 0.9485,
+        "unknown_reject_rate": 0.19725,
+        "known_class_accuracy_all_known": 0.56
+      },
+      "metric_consistency": {
+        "recomputed_known_class_accuracy_all_known": 0.5755,
+        "recomputed_accepted_correct_fraction_of_all_known": 0.5608333333333333,
+        "historical_report_field_warning": "Older reports may have stored accepted-correct/all-known under known_class_accuracy_all_known; rerun discover after the metric fix."
+      },
+      "ranking": {
+        "auroc": 0.75287525,
+        "aupr": 0.6474964635921312,
+        "fpr95": 0.6853333333333333,
+        "known_score": {
+          "count": 6000,
+          "mean": -0.27026762460917236,
+          "std": 4.156256424216568,
+          "q10": -5.4566969871521,
+          "q25": -2.5551413893699646,
+          "median": 0.17310869693756104,
+          "q75": 2.5446313619613647,
+          "q90": 4.452374172210694
+        },
+        "unknown_score": {
+          "count": 4000,
+          "mean": 3.2159602137990295,
+          "std": 3.035155519540268,
+          "q10": -0.5670076966285704,
+          "q25": 1.2639734745025635,
+          "median": 3.25317919254303,
+          "q75": 5.115613698959351,
+          "q90": 6.986974811553954
+        },
+        "histogram_overlap_0_to_1": 0.6241666666666668
+      },
+      "operating_points": [
+        {
+          "target_known_coverage": 0.9,
+          "diagnostic_threshold_from_test_known": 4.452374172210694,
+          "known_accept_rate": 0.9,
+          "unknown_reject_rate": 0.3335,
+          "known_rejected": 600,
+          "unknown_false_accept": 2666,
+          "known_class_correct_all_known": 3453,
+          "known_class_accuracy_all_known": 0.5755,
+          "accepted_correct_fraction_of_all_known": 0.5456666666666666,
+          "known_class_accuracy_after_accept": 0.6062962962962963,
+          "oscr": 0.4796259583333333
+        },
+        {
+          "target_known_coverage": 0.95,
+          "diagnostic_threshold_from_test_known": 5.659351873397828,
+          "known_accept_rate": 0.95,
+          "unknown_reject_rate": 0.1935,
+          "known_rejected": 300,
+          "unknown_false_accept": 3226,
+          "known_class_correct_all_known": 3453,
+          "known_class_accuracy_all_known": 0.5755,
+          "accepted_correct_fraction_of_all_known": 0.5608333333333333,
+          "known_class_accuracy_after_accept": 0.5903508771929824,
+          "oscr": 0.4796259583333333
+        },
+        {
+          "target_known_coverage": 0.97,
+          "diagnostic_threshold_from_test_known": 6.357358169555664,
+          "known_accept_rate": 0.97,
+          "unknown_reject_rate": 0.13725,
+          "known_rejected": 180,
+          "unknown_false_accept": 3451,
+          "known_class_correct_all_known": 3453,
+          "known_class_accuracy_all_known": 0.5755,
+          "accepted_correct_fraction_of_all_known": 0.5675,
+          "known_class_accuracy_after_accept": 0.5850515463917526,
+          "oscr": 0.4796259583333333
+        }
+      ]
+    },
+    "fusion42": {
+      "path": "runs\\matched_mixed_nnpu_margin_s42_e10_fusion075",
+      "score_mode": "feature_rejector_fusion",
+      "reported_metrics": {
+        "auroc": 0.7610295416666666,
+        "aupr": 0.6552294898316195,
+        "fpr95": 0.6748333333333333,
+        "oscr": 0.4917597083333333,
+        "known_accept_rate": 0.9483333333333334,
+        "unknown_reject_rate": 0.2275,
+        "known_class_accuracy_all_known": 0.5653333333333334
+      },
+      "metric_consistency": {
+        "recomputed_known_class_accuracy_all_known": 0.5755,
+        "recomputed_accepted_correct_fraction_of_all_known": 0.5661666666666667,
+        "historical_report_field_warning": "Older reports may have stored accepted-correct/all-known under known_class_accuracy_all_known; rerun discover after the metric fix."
+      },
+      "ranking": {
+        "auroc": 0.7610295416666666,
+        "aupr": 0.6552294898316195,
+        "fpr95": 0.6748333333333333,
+        "known_score": {
+          "count": 6000,
+          "mean": 0.0027811346439383156,
+          "std": 1.102722825973929,
+          "q10": -1.3932011326578972,
+          "q25": -0.7485259841794424,
+          "median": 0.03724034933063277,
+          "q75": 0.8031638008004365,
+          "q90": 1.3910000725172014
+        },
+        "unknown_score": {
+          "count": 4000,
+          "mean": 1.0120814810597825,
+          "std": 0.8676091732728348,
+          "q10": -0.1388901466694714,
+          "q25": 0.4452436553752412,
+          "median": 1.0410098672549915,
+          "q75": 1.6100202684711982,
+          "q90": 2.0446513039297693
+        },
+        "histogram_overlap_0_to_1": 0.60825
+      },
+      "operating_points": [
+        {
+          "target_known_coverage": 0.9,
+          "diagnostic_threshold_from_test_known": 1.3910000725172014,
+          "known_accept_rate": 0.9,
+          "unknown_reject_rate": 0.33775,
+          "known_rejected": 600,
+          "unknown_false_accept": 2649,
+          "known_class_correct_all_known": 3453,
+          "known_class_accuracy_all_known": 0.5755,
+          "accepted_correct_fraction_of_all_known": 0.552,
+          "known_class_accuracy_after_accept": 0.6133333333333333,
+          "oscr": 0.4917597083333333
+        },
+        {
+          "target_known_coverage": 0.95,
+          "diagnostic_threshold_from_test_known": 1.7060998106724061,
+          "known_accept_rate": 0.95,
+          "unknown_reject_rate": 0.219,
+          "known_rejected": 300,
+          "unknown_false_accept": 3124,
+          "known_class_correct_all_known": 3453,
+          "known_class_accuracy_all_known": 0.5755,
+          "accepted_correct_fraction_of_all_known": 0.5661666666666667,
+          "known_class_accuracy_after_accept": 0.5959649122807018,
+          "oscr": 0.4917597083333333
+        },
+        {
+          "target_known_coverage": 0.97,
+          "diagnostic_threshold_from_test_known": 1.875048728221987,
+          "known_accept_rate": 0.97,
+          "unknown_reject_rate": 0.15225,
+          "known_rejected": 180,
+          "unknown_false_accept": 3391,
+          "known_class_correct_all_known": 3453,
+          "known_class_accuracy_all_known": 0.5755,
+          "accepted_correct_fraction_of_all_known": 0.5706666666666667,
+          "known_class_accuracy_after_accept": 0.5883161512027492,
+          "oscr": 0.4917597083333333
+        }
+      ]
+    },
+    "baseline2026": {
+      "path": "runs\\matched_mixed_nnpu_margin_s2026_e10_detect",
+      "score_mode": "normalized_entropy_min_class_knn",
+      "reported_metrics": {
+        "auroc": 0.72049125,
+        "aupr": 0.5927420473978169,
+        "fpr95": 0.717,
+        "oscr": 0.4764420416666667,
+        "known_accept_rate": 0.957,
+        "unknown_reject_rate": 0.1315,
+        "known_class_accuracy_all_known": 0.5625
+      },
+      "metric_consistency": {
+        "recomputed_known_class_accuracy_all_known": 0.5688333333333333,
+        "recomputed_accepted_correct_fraction_of_all_known": 0.5618333333333333,
+        "historical_report_field_warning": "Older reports may have stored accepted-correct/all-known under known_class_accuracy_all_known; rerun discover after the metric fix."
+      },
+      "ranking": {
+        "auroc": 0.72049125,
+        "aupr": 0.5927420473978169,
+        "fpr95": 0.717,
+        "known_score": {
+          "count": 6000,
+          "mean": -0.0677621231928327,
+          "std": 1.8838395922728086,
+          "q10": -2.508504348272544,
+          "q25": -1.6631606920649045,
+          "median": -0.17907137822765332,
+          "q75": 1.4485848967123145,
+          "q90": 2.5967588140771665
+        },
+        "unknown_score": {
+          "count": 4000,
+          "mean": 1.4070277844425392,
+          "std": 1.589787619440534,
+          "q10": -0.8450679580078913,
+          "q25": 0.28192736154903264,
+          "median": 1.5880708303956932,
+          "q75": 2.648561037932825,
+          "q90": 3.343924467448778
+        },
+        "histogram_overlap_0_to_1": 0.6735833333333334
+      },
+      "operating_points": [
+        {
+          "target_known_coverage": 0.9,
+          "diagnostic_threshold_from_test_known": 2.5967588140771665,
+          "known_accept_rate": 0.9,
+          "unknown_reject_rate": 0.261,
+          "known_rejected": 600,
+          "unknown_false_accept": 2956,
+          "known_class_correct_all_known": 3413,
+          "known_class_accuracy_all_known": 0.5688333333333333,
+          "accepted_correct_fraction_of_all_known": 0.55,
+          "known_class_accuracy_after_accept": 0.6111111111111112,
+          "oscr": 0.4764420416666667
+        },
+        {
+          "target_known_coverage": 0.95,
+          "diagnostic_threshold_from_test_known": 3.09526717089511,
+          "known_accept_rate": 0.95,
+          "unknown_reject_rate": 0.14625,
+          "known_rejected": 300,
+          "unknown_false_accept": 3415,
+          "known_class_correct_all_known": 3413,
+          "known_class_accuracy_all_known": 0.5688333333333333,
+          "accepted_correct_fraction_of_all_known": 0.5618333333333333,
+          "known_class_accuracy_after_accept": 0.5914035087719298,
+          "oscr": 0.4764420416666667
+        },
+        {
+          "target_known_coverage": 0.97,
+          "diagnostic_threshold_from_test_known": 3.3396655026625184,
+          "known_accept_rate": 0.97,
+          "unknown_reject_rate": 0.10075,
+          "known_rejected": 180,
+          "unknown_false_accept": 3597,
+          "known_class_correct_all_known": 3413,
+          "known_class_accuracy_all_known": 0.5688333333333333,
+          "accepted_correct_fraction_of_all_known": 0.565,
+          "known_class_accuracy_after_accept": 0.5824742268041238,
+          "oscr": 0.4764420416666667
+        }
+      ]
+    },
+    "rejector2026": {
+      "path": "runs\\matched_mixed_nnpu_margin_s2026_e10_rejector",
+      "score_mode": "feature_rejector",
+      "reported_metrics": {
+        "auroc": 0.7595688750000001,
+        "aupr": 0.66353670774348,
+        "fpr95": 0.6855,
+        "oscr": 0.47752137499999997,
+        "known_accept_rate": 0.9461666666666667,
+        "unknown_reject_rate": 0.2265,
+        "known_class_accuracy_all_known": 0.5545
+      },
+      "metric_consistency": {
+        "recomputed_known_class_accuracy_all_known": 0.5688333333333333,
+        "recomputed_accepted_correct_fraction_of_all_known": 0.5561666666666667,
+        "historical_report_field_warning": "Older reports may have stored accepted-correct/all-known under known_class_accuracy_all_known; rerun discover after the metric fix."
+      },
+      "ranking": {
+        "auroc": 0.7595688750000001,
+        "aupr": 0.66353670774348,
+        "fpr95": 0.6855,
+        "known_score": {
+          "count": 6000,
+          "mean": -0.5656035731062293,
+          "std": 4.096900933075705,
+          "q10": -5.498405933380127,
+          "q25": -2.687640070915222,
+          "median": -0.19780495762825012,
+          "q75": 2.1977193355560303,
+          "q90": 4.125509357452393
+        },
+        "unknown_score": {
+          "count": 4000,
+          "mean": 2.9955934029743077,
+          "std": 3.098602561685021,
+          "q10": -0.6485414505004883,
+          "q25": 1.02772718667984,
+          "median": 2.9288322925567627,
+          "q75": 4.928859710693359,
+          "q90": 6.781216621398926
+        },
+        "histogram_overlap_0_to_1": 0.6225833333333334
+      },
+      "operating_points": [
+        {
+          "target_known_coverage": 0.9,
+          "diagnostic_threshold_from_test_known": 4.125509357452393,
+          "known_accept_rate": 0.9,
+          "unknown_reject_rate": 0.3475,
+          "known_rejected": 600,
+          "unknown_false_accept": 2610,
+          "known_class_correct_all_known": 3413,
+          "known_class_accuracy_all_known": 0.5688333333333333,
+          "accepted_correct_fraction_of_all_known": 0.5423333333333333,
+          "known_class_accuracy_after_accept": 0.6025925925925926,
+          "oscr": 0.47752137499999997
+        },
+        {
+          "target_known_coverage": 0.95,
+          "diagnostic_threshold_from_test_known": 5.23116934299469,
+          "known_accept_rate": 0.95,
+          "unknown_reject_rate": 0.219,
+          "known_rejected": 300,
+          "unknown_false_accept": 3124,
+          "known_class_correct_all_known": 3413,
+          "known_class_accuracy_all_known": 0.5688333333333333,
+          "accepted_correct_fraction_of_all_known": 0.5561666666666667,
+          "known_class_accuracy_after_accept": 0.5854385964912281,
+          "oscr": 0.47752137499999997
+        },
+        {
+          "target_known_coverage": 0.97,
+          "diagnostic_threshold_from_test_known": 5.830812830924987,
+          "known_accept_rate": 0.97,
+          "unknown_reject_rate": 0.16075,
+          "known_rejected": 180,
+          "unknown_false_accept": 3357,
+          "known_class_correct_all_known": 3413,
+          "known_class_accuracy_all_known": 0.5688333333333333,
+          "accepted_correct_fraction_of_all_known": 0.5613333333333334,
+          "known_class_accuracy_after_accept": 0.5786941580756014,
+          "oscr": 0.47752137499999997
+        }
+      ]
+    },
+    "fusion2026": {
+      "path": "runs\\matched_mixed_nnpu_margin_s2026_e10_fusion075",
+      "score_mode": "feature_rejector_fusion",
+      "reported_metrics": {
+        "auroc": 0.7648919583333333,
+        "aupr": 0.6653275277614727,
+        "fpr95": 0.6318333333333334,
+        "oscr": 0.49230358333333335,
+        "known_accept_rate": 0.9553333333333334,
+        "unknown_reject_rate": 0.20925,
+        "known_class_accuracy_all_known": 0.5611666666666667
+      },
+      "metric_consistency": {
+        "recomputed_known_class_accuracy_all_known": 0.5688333333333333,
+        "recomputed_accepted_correct_fraction_of_all_known": 0.5596666666666666,
+        "historical_report_field_warning": "Older reports may have stored accepted-correct/all-known under known_class_accuracy_all_known; rerun discover after the metric fix."
+      },
+      "ranking": {
+        "auroc": 0.7648919583333333,
+        "aupr": 0.6653275277614727,
+        "fpr95": 0.6318333333333334,
+        "known_score": {
+          "count": 6000,
+          "mean": -0.053881326078918115,
+          "std": 1.1275560485132647,
+          "q10": -1.4787721152495301,
+          "q25": -0.7889649094333102,
+          "median": 0.0057946443077444565,
+          "q75": 0.796822594672753,
+          "q90": 1.3431555151203658
+        },
+        "unknown_score": {
+          "count": 4000,
+          "mean": 0.9844522673551562,
+          "std": 0.8522092555551074,
+          "q10": -0.1252585815395375,
+          "q25": 0.4286588076884019,
+          "median": 1.0193681511509187,
+          "q75": 1.5657779403295602,
+          "q90": 2.0244414923630476
+        },
+        "histogram_overlap_0_to_1": 0.60925
+      },
+      "operating_points": [
+        {
+          "target_known_coverage": 0.9,
+          "diagnostic_threshold_from_test_known": 1.3431555151203658,
+          "known_accept_rate": 0.9,
+          "unknown_reject_rate": 0.348,
+          "known_rejected": 600,
+          "unknown_false_accept": 2608,
+          "known_class_correct_all_known": 3413,
+          "known_class_accuracy_all_known": 0.5688333333333333,
+          "accepted_correct_fraction_of_all_known": 0.5481666666666667,
+          "known_class_accuracy_after_accept": 0.6090740740740741,
+          "oscr": 0.49230358333333335
+        },
+        {
+          "target_known_coverage": 0.95,
+          "diagnostic_threshold_from_test_known": 1.617893022169244,
+          "known_accept_rate": 0.95,
+          "unknown_reject_rate": 0.22475,
+          "known_rejected": 300,
+          "unknown_false_accept": 3101,
+          "known_class_correct_all_known": 3413,
+          "known_class_accuracy_all_known": 0.5688333333333333,
+          "accepted_correct_fraction_of_all_known": 0.5596666666666666,
+          "known_class_accuracy_after_accept": 0.5891228070175438,
+          "oscr": 0.49230358333333335
+        },
+        {
+          "target_known_coverage": 0.97,
+          "diagnostic_threshold_from_test_known": 1.7968448449135843,
+          "known_accept_rate": 0.97,
+          "unknown_reject_rate": 0.16,
+          "known_rejected": 180,
+          "unknown_false_accept": 3360,
+          "known_class_correct_all_known": 3413,
+          "known_class_accuracy_all_known": 0.5688333333333333,
+          "accepted_correct_fraction_of_all_known": 0.5638333333333333,
+          "known_class_accuracy_after_accept": 0.5812714776632303,
+          "oscr": 0.49230358333333335
+        }
+      ]
+    },
+    "baseline3407": {
+      "path": "runs\\matched_mixed_nnpu_margin_s3407_e10_detect",
+      "score_mode": "normalized_entropy_min_class_knn",
+      "reported_metrics": {
+        "auroc": 0.7104540416666667,
+        "aupr": 0.5801429410302923,
+        "fpr95": 0.7295,
+        "oscr": 0.4593302083333333,
+        "known_accept_rate": 0.9556666666666667,
+        "unknown_reject_rate": 0.12675,
+        "known_class_accuracy_all_known": 0.5441666666666667
+      },
+      "metric_consistency": {
+        "recomputed_known_class_accuracy_all_known": 0.5506666666666666,
+        "recomputed_accepted_correct_fraction_of_all_known": 0.5423333333333333,
+        "historical_report_field_warning": "Older reports may have stored accepted-correct/all-known under known_class_accuracy_all_known; rerun discover after the metric fix."
+      },
+      "ranking": {
+        "auroc": 0.7104540416666667,
+        "aupr": 0.5801429410302923,
+        "fpr95": 0.7295,
+        "known_score": {
+          "count": 6000,
+          "mean": 0.010858363802120677,
+          "std": 1.8699458162303655,
+          "q10": -2.406649390360052,
+          "q25": -1.5674001918559364,
+          "median": -0.1512747334142709,
+          "q75": 1.4353752975930971,
+          "q90": 2.644640655614348
+        },
+        "unknown_score": {
+          "count": 4000,
+          "mean": 1.4126808278814507,
+          "std": 1.6689647522465523,
+          "q10": -0.9093879594303391,
+          "q25": 0.17750489800906577,
+          "median": 1.5040434135928697,
+          "q75": 2.6869999134844536,
+          "q90": 3.560926527757115
+        },
+        "histogram_overlap_0_to_1": 0.6934166666666667
+      },
+      "operating_points": [
+        {
+          "target_known_coverage": 0.9,
+          "diagnostic_threshold_from_test_known": 2.644640655614348,
+          "known_accept_rate": 0.9,
+          "unknown_reject_rate": 0.25725,
+          "known_rejected": 600,
+          "unknown_false_accept": 2971,
+          "known_class_correct_all_known": 3304,
+          "known_class_accuracy_all_known": 0.5506666666666666,
+          "accepted_correct_fraction_of_all_known": 0.5296666666666666,
+          "known_class_accuracy_after_accept": 0.5885185185185186,
+          "oscr": 0.4593302083333333
+        },
+        {
+          "target_known_coverage": 0.95,
+          "diagnostic_threshold_from_test_known": 3.262333757669612,
+          "known_accept_rate": 0.95,
+          "unknown_reject_rate": 0.14025,
+          "known_rejected": 300,
+          "unknown_false_accept": 3439,
+          "known_class_correct_all_known": 3304,
+          "known_class_accuracy_all_known": 0.5506666666666666,
+          "accepted_correct_fraction_of_all_known": 0.5423333333333333,
+          "known_class_accuracy_after_accept": 0.5708771929824561,
+          "oscr": 0.4593302083333333
+        },
+        {
+          "target_known_coverage": 0.97,
+          "diagnostic_threshold_from_test_known": 3.5753690890717116,
+          "known_accept_rate": 0.97,
+          "unknown_reject_rate": 0.099,
+          "known_rejected": 180,
+          "unknown_false_accept": 3604,
+          "known_class_correct_all_known": 3304,
+          "known_class_accuracy_all_known": 0.5506666666666666,
+          "accepted_correct_fraction_of_all_known": 0.5458333333333333,
+          "known_class_accuracy_after_accept": 0.5627147766323024,
+          "oscr": 0.4593302083333333
+        }
+      ]
+    },
+    "rejector3407": {
+      "path": "runs\\matched_mixed_nnpu_margin_s3407_e10_rejector",
+      "score_mode": "feature_rejector",
+      "reported_metrics": {
+        "auroc": 0.7467336666666666,
+        "aupr": 0.6327970245481835,
+        "fpr95": 0.6683333333333333,
+        "oscr": 0.46067804166666665,
+        "known_accept_rate": 0.9475,
+        "unknown_reject_rate": 0.19175,
+        "known_class_accuracy_all_known": 0.5378333333333334
+      },
+      "metric_consistency": {
+        "recomputed_known_class_accuracy_all_known": 0.5506666666666666,
+        "recomputed_accepted_correct_fraction_of_all_known": 0.5388333333333334,
+        "historical_report_field_warning": "Older reports may have stored accepted-correct/all-known under known_class_accuracy_all_known; rerun discover after the metric fix."
+      },
+      "ranking": {
+        "auroc": 0.7467336666666666,
+        "aupr": 0.6327970245481835,
+        "fpr95": 0.6683333333333333,
+        "known_score": {
+          "count": 6000,
+          "mean": -0.5999742038001616,
+          "std": 4.046432079011818,
+          "q10": -6.0083780765533445,
+          "q25": -3.035215735435486,
+          "median": -0.09372247382998466,
+          "q75": 2.2158652544021606,
+          "q90": 4.086336374282838
+        },
+        "unknown_score": {
+          "count": 4000,
+          "mean": 2.7570718098459763,
+          "std": 2.927854894312122,
+          "q10": -0.7510090649127955,
+          "q25": 0.8847832977771759,
+          "median": 2.7702358961105347,
+          "q75": 4.6435933113098145,
+          "q90": 6.406680727005004
+        },
+        "histogram_overlap_0_to_1": 0.6419999999999999
+      },
+      "operating_points": [
+        {
+          "target_known_coverage": 0.9,
+          "diagnostic_threshold_from_test_known": 4.086336374282838,
+          "known_accept_rate": 0.9,
+          "unknown_reject_rate": 0.32025,
+          "known_rejected": 600,
+          "unknown_false_accept": 2719,
+          "known_class_correct_all_known": 3304,
+          "known_class_accuracy_all_known": 0.5506666666666666,
+          "accepted_correct_fraction_of_all_known": 0.5261666666666667,
+          "known_class_accuracy_after_accept": 0.5846296296296296,
+          "oscr": 0.46067804166666665
+        },
+        {
+          "target_known_coverage": 0.95,
+          "diagnostic_threshold_from_test_known": 5.235062074661259,
+          "known_accept_rate": 0.95,
+          "unknown_reject_rate": 0.18475,
+          "known_rejected": 300,
+          "unknown_false_accept": 3261,
+          "known_class_correct_all_known": 3304,
+          "known_class_accuracy_all_known": 0.5506666666666666,
+          "accepted_correct_fraction_of_all_known": 0.5388333333333334,
+          "known_class_accuracy_after_accept": 0.5671929824561404,
+          "oscr": 0.46067804166666665
+        },
+        {
+          "target_known_coverage": 0.97,
+          "diagnostic_threshold_from_test_known": 5.87752076625824,
+          "known_accept_rate": 0.97,
+          "unknown_reject_rate": 0.1315,
+          "known_rejected": 180,
+          "unknown_false_accept": 3474,
+          "known_class_correct_all_known": 3304,
+          "known_class_accuracy_all_known": 0.5506666666666666,
+          "accepted_correct_fraction_of_all_known": 0.5425,
+          "known_class_accuracy_after_accept": 0.5592783505154639,
+          "oscr": 0.46067804166666665
+        }
+      ]
+    },
+    "fusion3407": {
+      "path": "runs\\matched_mixed_nnpu_margin_s3407_e10_fusion075",
+      "score_mode": "feature_rejector_fusion",
+      "reported_metrics": {
+        "auroc": 0.7525739583333333,
+        "aupr": 0.6374491781041085,
+        "fpr95": 0.6638333333333334,
+        "oscr": 0.4748589583333333,
+        "known_accept_rate": 0.9528333333333333,
+        "unknown_reject_rate": 0.1745,
+        "known_class_accuracy_all_known": 0.543
+      },
+      "metric_consistency": {
+        "recomputed_known_class_accuracy_all_known": 0.5506666666666666,
+        "recomputed_accepted_correct_fraction_of_all_known": 0.5425,
+        "historical_report_field_warning": "Older reports may have stored accepted-correct/all-known under known_class_accuracy_all_known; rerun discover after the metric fix."
+      },
+      "ranking": {
+        "auroc": 0.7525739583333333,
+        "aupr": 0.6374491781041085,
+        "fpr95": 0.6638333333333334,
+        "known_score": {
+          "count": 6000,
+          "mean": -0.002471028391385669,
+          "std": 1.1259990979103942,
+          "q10": -1.5323196410684976,
+          "q25": -0.7688685136733255,
+          "median": 0.08288991224507797,
+          "q75": 0.8414796606113087,
+          "q90": 1.4104821104668452
+        },
+        "unknown_score": {
+          "count": 4000,
+          "mean": 0.9715648604070958,
+          "std": 0.8155387081781322,
+          "q10": -0.10991028758211384,
+          "q25": 0.460500664970018,
+          "median": 1.0383154758509092,
+          "q75": 1.5143842715590385,
+          "q90": 1.9744811917450955
+        },
+        "histogram_overlap_0_to_1": 0.6325833333333333
+      },
+      "operating_points": [
+        {
+          "target_known_coverage": 0.9,
+          "diagnostic_threshold_from_test_known": 1.4104821104668452,
+          "known_accept_rate": 0.9,
+          "unknown_reject_rate": 0.3035,
+          "known_rejected": 600,
+          "unknown_false_accept": 2786,
+          "known_class_correct_all_known": 3304,
+          "known_class_accuracy_all_known": 0.5506666666666666,
+          "accepted_correct_fraction_of_all_known": 0.5338333333333334,
+          "known_class_accuracy_after_accept": 0.5931481481481482,
+          "oscr": 0.4748589583333333
+        },
+        {
+          "target_known_coverage": 0.95,
+          "diagnostic_threshold_from_test_known": 1.6921017898640924,
+          "known_accept_rate": 0.95,
+          "unknown_reject_rate": 0.182,
+          "known_rejected": 300,
+          "unknown_false_accept": 3272,
+          "known_class_correct_all_known": 3304,
+          "known_class_accuracy_all_known": 0.5506666666666666,
+          "accepted_correct_fraction_of_all_known": 0.5425,
+          "known_class_accuracy_after_accept": 0.5710526315789474,
+          "oscr": 0.4748589583333333
+        },
+        {
+          "target_known_coverage": 0.97,
+          "diagnostic_threshold_from_test_known": 1.8465045121016581,
+          "known_accept_rate": 0.97,
+          "unknown_reject_rate": 0.135,
+          "known_rejected": 180,
+          "unknown_false_accept": 3460,
+          "known_class_correct_all_known": 3304,
+          "known_class_accuracy_all_known": 0.5506666666666666,
+          "accepted_correct_fraction_of_all_known": 0.5448333333333333,
+          "known_class_accuracy_after_accept": 0.5616838487972509,
+          "oscr": 0.4748589583333333
+        }
+      ]
+    }
+  }
+}

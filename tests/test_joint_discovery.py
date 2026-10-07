@@ -13,6 +13,7 @@ from novel_discovery.joint_discovery import (
     NovelPrototypeHead,
     balanced_assignment_loss,
     balanced_assignments,
+    global_balanced_assignments,
     combine_known_novel_logits,
     joint_discovery_loss,
     memory_neighbor_consistency_loss,
@@ -45,6 +46,40 @@ class JointDiscoveryTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(assignments.sum(dim=1), torch.ones(8), atol=1e-4))
         self.assertTrue(torch.isfinite(assignments).all())
+
+    def test_global_assignments_return_current_rows_only(self):
+        current = torch.tensor([[4.0, 0.0, -1.0], [0.0, 3.0, -1.0]])
+        memory = torch.randn(12, 3)
+        assignments = global_balanced_assignments(
+            current, memory_logits=memory, iterations=5
+        )
+        self.assertEqual(tuple(assignments.shape), tuple(current.shape))
+        self.assertTrue(torch.isfinite(assignments).all())
+        self.assertTrue(torch.allclose(assignments.sum(dim=-1), torch.ones(2), atol=1e-5))
+
+    def test_global_assignments_validate_memory_dimension(self):
+        with self.assertRaises(ValueError):
+            global_balanced_assignments(torch.randn(3, 4), torch.randn(5, 3))
+
+    def test_global_assignment_joint_loss_is_finite(self):
+        first_features = torch.randn(6, 5, requires_grad=True)
+        second_features = torch.randn(6, 5, requires_grad=True)
+        first_logits = torch.randn(6, 4, requires_grad=True)
+        second_logits = torch.randn(6, 4, requires_grad=True)
+        losses = joint_discovery_loss(
+            first_features,
+            second_features,
+            first_logits,
+            second_logits,
+            confidence_threshold=0.0,
+            global_assignment=True,
+            global_memory_logits=torch.randn(20, 4),
+        )
+        self.assertTrue(torch.isfinite(losses["total"]))
+        self.assertTrue(torch.isfinite(losses["global_assignment_entropy"]))
+        self.assertGreaterEqual(float(losses["global_assignment_active_classes"]), 1.0)
+        losses["total"].backward()
+        self.assertIsNotNone(first_logits.grad)
 
     def test_zero_weight_samples_do_not_change_active_sinkhorn_targets(self):
         active_logits = torch.tensor([[4.0, 0.0, -1.0], [0.0, 3.0, -1.0]])
@@ -93,6 +128,10 @@ class JointDiscoveryTest(unittest.TestCase):
             neighbor_k=3,
         )
         self.assertTrue(torch.isfinite(losses["total"]))
+        self.assertTrue(torch.isfinite(losses["assignment_entropy"]))
+        self.assertTrue(torch.isfinite(losses["assignment_max_probability"]))
+        self.assertGreaterEqual(float(losses["assignment_active_classes"]), 1.0)
+        self.assertLessEqual(float(losses["assignment_active_classes"]), 4.0)
         losses["total"].backward()
         self.assertIsNotNone(first_logits.grad)
         self.assertIsNotNone(second_logits.grad)
@@ -224,6 +263,17 @@ class JointDiscoveryTest(unittest.TestCase):
         first = torch.randn(8, 4, requires_grad=True)
         second = torch.randn(8, 4, requires_grad=True)
         loss = prototype_pseudo_label_loss(first, second, confidence_threshold=0.0)
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        self.assertIsNotNone(first.grad)
+        self.assertIsNotNone(second.grad)
+
+    def test_soft_prototype_pseudo_loss_is_finite_and_differentiable(self):
+        first = torch.randn(8, 4, requires_grad=True)
+        second = torch.randn(8, 4, requires_grad=True)
+        loss = prototype_pseudo_label_loss(
+            first, second, confidence_threshold=0.0, target_mode="soft"
+        )
         self.assertTrue(torch.isfinite(loss))
         loss.backward()
         self.assertIsNotNone(first.grad)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Dict
 
 import numpy as np
@@ -25,12 +26,14 @@ from tqdm import tqdm
 
 from .losses import (
     classification_loss,
+    discovery_consistency_loss,
     discovery_unknown_loss,
     discovery_view_loss,
     distillation_loss,
     energy_margin_loss,
     angular_margin_loss,
     feature_distillation_loss,
+    hard_proxy_margin_loss,
     pseudo_unknown_loss,
     proxy_contrastive_loss,
     proxy_anchor_loss,
@@ -38,10 +41,14 @@ from .losses import (
     known_pseudo_label_consistency_loss,
     prototype_alignment_loss,
     prototype_repulsion_loss,
+    supervised_center_loss,
+    supervised_radius_loss,
+    supervised_center_margin_loss,
     supervised_contrastive_loss,
     uncertainty_alignment_loss,
     weighted_energy_margin_loss,
     unknown_feature_margin_loss,
+    pu_unknown_feature_margin_loss,
     unknown_feature_separation_loss,
     unknown_feature_boundary_loss,
     knn_support_boundary_loss,
@@ -69,6 +76,23 @@ from .metrics import (
 )
 from .utils import AverageMeter
 from .models import freeze_batchnorm_stats
+
+
+def power_novelty_weights(weights: torch.Tensor, power: float = 1.0) -> torch.Tensor:
+    """Sharpen bounded soft-novelty weights without changing their ordering."""
+    power = float(power)
+    if not math.isfinite(power) or power <= 0.0:
+        raise ValueError("novelty weight power must be finite and greater than zero")
+    return weights.clamp(0.0, 1.0).pow(power)
+
+
+def cross_view_min_uncertainty(
+    first: torch.Tensor, second: torch.Tensor
+) -> torch.Tensor:
+    """Keep only uncertainty supported by both augmentations of a sample."""
+    if first.shape != second.shape:
+        raise ValueError("cross-view uncertainty tensors must have matching shapes")
+    return torch.minimum(first.clamp(0.0, 1.0), second.clamp(0.0, 1.0))
 
 
 def build_loader(dataset, batch_size: int, shuffle: bool, num_workers: int = 4):
@@ -141,7 +165,10 @@ def pseudo_forward_from_features(model, features: torch.Tensor, stochastic: bool
         training=stochastic,
     )
     logits = model.classifier(features)
-    uncertainty = torch.sigmoid(model.uncertainty_head(features)).squeeze(-1)
+    if hasattr(model, "rejection_forward"):
+        _, _, uncertainty = model.rejection_forward(features)
+    else:
+        uncertainty = torch.sigmoid(model.uncertainty_head(features)).squeeze(-1)
     return logits, uncertainty
 
 
@@ -610,7 +637,13 @@ def train_one_epoch_teacher(
     optimizer,
     device,
     alpha_unc: float = 0.1,
+    alpha_rejection_known_ce: float = 0.0,
     alpha_proto: float = 0.0,
+    alpha_center: float = 0.0,
+    alpha_radius: float = 0.0,
+    radius: float = 0.2,
+    alpha_center_margin: float = 0.0,
+    center_margin: float = 0.1,
     alpha_proto_repulsion: float = 0.0,
     proto_repulsion_margin: float = 0.0,
     alpha_proxy: float = 0.0,
@@ -629,6 +662,8 @@ def train_one_epoch_teacher(
     alpha_proxy_anchor: float = 0.0,
     proxy_anchor_alpha: float = 32.0,
     proxy_anchor_margin: float = 0.1,
+    alpha_hard_proxy_margin: float = 0.0,
+    hard_proxy_margin: float = 0.2,
     reciprocal_points=None,
     alpha_reciprocal: float = 0.0,
     reciprocal_margin: float = 0.2,
@@ -639,7 +674,11 @@ def train_one_epoch_teacher(
         freeze_batchnorm_stats(model)
     ce_meter = AverageMeter()
     unc_meter = AverageMeter()
+    rejection_ce_meter = AverageMeter()
     proto_meter = AverageMeter()
+    center_meter = AverageMeter()
+    radius_meter = AverageMeter()
+    center_margin_meter = AverageMeter()
     proto_repulsion_meter = AverageMeter()
     proxy_meter = AverageMeter()
     pseudo_meter = AverageMeter()
@@ -647,6 +686,7 @@ def train_one_epoch_teacher(
     angular_meter = AverageMeter()
     angular_active_meter = AverageMeter()
     proxy_anchor_meter = AverageMeter()
+    hard_proxy_margin_meter = AverageMeter()
     reciprocal_meter = AverageMeter()
     for batch in tqdm(loader, desc="teacher-train", leave=False):
         images, labels, raw_labels, is_known, _ = batch
@@ -654,10 +694,18 @@ def train_one_epoch_teacher(
         labels = labels.to(device)
         out = model(images)
         loss_ce = classification_loss(out["logits"], labels)
+        loss_rejection_ce = out["logits"].new_tensor(0.0)
+        if alpha_rejection_known_ce > 0.0 and out.get("rejection_logits") is not None:
+            loss_rejection_ce = classification_loss(out["rejection_logits"], labels)
         loss_unc = uncertainty_alignment_loss(
             out["uncertainty"], out["logits"], labels, target_mode=uncertainty_target_mode
         )
         loss_proto = prototype_alignment_loss(out["features"], labels, model.classifier.weight)
+        loss_center = supervised_center_loss(out["features"], labels)
+        loss_radius = supervised_radius_loss(out["features"], labels, radius=radius)
+        loss_center_margin = supervised_center_margin_loss(
+            out["features"], labels, margin=center_margin
+        )
         loss_proto_repulsion = prototype_repulsion_loss(
             model.classifier.weight, similarity_margin=proto_repulsion_margin
         )
@@ -690,17 +738,26 @@ def train_one_epoch_teacher(
             out["features"], labels, model.classifier.weight,
             alpha=proxy_anchor_alpha, margin=proxy_anchor_margin,
         )
+        loss_hard_proxy_margin = hard_proxy_margin_loss(
+            out["features"], labels, model.classifier.weight,
+            margin=hard_proxy_margin,
+        )
         loss_reciprocal = out["logits"].new_tensor(0.0)
         loss = (
             loss_ce
             + alpha_unc * loss_unc
+            + alpha_rejection_known_ce * loss_rejection_ce
             + alpha_proto * loss_proto
+            + alpha_center * loss_center
+            + alpha_radius * loss_radius
+            + alpha_center_margin * loss_center_margin
             + alpha_proto_repulsion * loss_proto_repulsion
             + alpha_proxy * loss_proxy
             + alpha_pseudo * loss_pseudo
             + alpha_energy * loss_energy
             + alpha_angular * loss_angular
             + alpha_proxy_anchor * loss_proxy_anchor
+            + alpha_hard_proxy_margin * loss_hard_proxy_margin
             + alpha_reciprocal * loss_reciprocal
         )
         optimizer.zero_grad()
@@ -708,18 +765,27 @@ def train_one_epoch_teacher(
         optimizer.step()
         ce_meter.update(loss_ce.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
+        rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
+        center_meter.update(loss_center.item(), images.size(0))
+        radius_meter.update(loss_radius.item(), images.size(0))
+        center_margin_meter.update(loss_center_margin.item(), images.size(0))
         proto_repulsion_meter.update(loss_proto_repulsion.item(), images.size(0))
         proxy_meter.update(loss_proxy.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
         energy_meter.update(loss_energy.item(), images.size(0))
         angular_meter.update(loss_angular.item(), images.size(0))
         proxy_anchor_meter.update(loss_proxy_anchor.item(), images.size(0))
+        hard_proxy_margin_meter.update(loss_hard_proxy_margin.item(), images.size(0))
         reciprocal_meter.update(loss_reciprocal.item(), images.size(0))
     return {
         "ce": ce_meter.avg,
         "unc": unc_meter.avg,
+        "rejection_ce": rejection_ce_meter.avg,
         "proto": proto_meter.avg,
+        "center": center_meter.avg,
+        "radius": radius_meter.avg,
+        "center_margin": center_margin_meter.avg,
         "proto_repulsion": proto_repulsion_meter.avg,
         "proxy": proxy_meter.avg,
         "pseudo": pseudo_meter.avg,
@@ -727,6 +793,7 @@ def train_one_epoch_teacher(
         "angular": angular_meter.avg,
         "angular_active_ratio": angular_active_meter.avg,
         "proxy_anchor": proxy_anchor_meter.avg,
+        "hard_proxy_margin": hard_proxy_margin_meter.avg,
         "reciprocal": reciprocal_meter.avg,
     }
 
@@ -777,11 +844,17 @@ def train_one_epoch_student(
     optimizer,
     device,
     alpha_unc: float = 0.1,
+    alpha_rejection_known_ce: float = 0.0,
     alpha_kd: float = 1.0,
     alpha_feat_kd: float = 0.0,
     alpha_supcon: float = 0.1,
     alpha_raw_supcon: float = 0.0,
     alpha_proto: float = 0.0,
+    alpha_center: float = 0.0,
+    alpha_radius: float = 0.0,
+    radius: float = 0.2,
+    alpha_center_margin: float = 0.0,
+    center_margin: float = 0.1,
     alpha_proto_repulsion: float = 0.0,
     proto_repulsion_margin: float = 0.0,
     alpha_proxy: float = 0.0,
@@ -808,8 +881,20 @@ def train_one_epoch_student(
     alpha_discovery_unknown: float = 0.0,
     alpha_discovery_energy: float = 0.0,
     alpha_discovery_uniform: float = 0.0,
+    alpha_discovery_feature_consistency: float = 0.0,
+    alpha_discovery_projection_consistency: float = 0.0,
     alpha_discovery_feature_margin: float = 0.0,
     discovery_feature_margin: float = 0.2,
+    alpha_discovery_rejection_feature_margin: float = 0.0,
+    discovery_rejection_feature_margin: float = 0.2,
+    alpha_discovery_rejection_feature_separation: float = 0.0,
+    discovery_rejection_feature_separation_margin: float = 0.0,
+    discovery_rejection_feature_separation_temperature: float = 0.1,
+    alpha_discovery_uncertainty_feature_margin: float = 0.0,
+    discovery_uncertainty_feature_margin: float = 0.2,
+    discovery_feature_margin_weight_source: str = "uncertainty",
+    discovery_feature_margin_weight_power: float = 1.0,
+    discovery_uncertainty_feature_margin_mode: str = "soft_weighted",
     alpha_discovery_objectosphere: float = 0.0,
     objectosphere_known_radius: float = 10.0,
     objectosphere_unknown_weight: float = 1.0,
@@ -833,6 +918,7 @@ def train_one_epoch_student(
     discovery_uncertainty_margin: float = 0.1,
     alpha_discovery_uncertainty_pu: float = 0.0,
     discovery_uncertainty_known_prior: float = 0.2,
+    discovery_uncertainty_pu_risk: str = "legacy",
     alpha_discovery_selective_unknown: float = 0.0,
     alpha_discovery_selective_energy: float = 0.0,
     alpha_angular: float = 0.0,
@@ -842,6 +928,8 @@ def train_one_epoch_student(
     alpha_proxy_anchor: float = 0.0,
     proxy_anchor_alpha: float = 32.0,
     proxy_anchor_margin: float = 0.1,
+    alpha_hard_proxy_margin: float = 0.0,
+    hard_proxy_margin: float = 0.2,
     reciprocal_points=None,
     alpha_reciprocal: float = 0.0,
     reciprocal_margin: float = 0.2,
@@ -892,6 +980,13 @@ def train_one_epoch_student(
     joint_memory_temperature: float = 0.2,
     joint_memory_warmup_size: int = 256,
     joint_memory_bank: dict | None = None,
+    joint_global_assignment: bool = False,
+    joint_global_assignment_memory_weight: float = 1.0,
+    joint_global_assignment_iterations: int = 3,
+    joint_pseudo_target_mode: str = "hard",
+    joint_pseudo_target_model=None,
+    joint_pseudo_target_novel_head=None,
+    joint_pseudo_target_decay: float = 0.99,
     alpha_joint_novel_margin: float = 0.0,
     joint_novel_margin: float = 0.2,
     joint_candidate_gating: bool = False,
@@ -929,9 +1024,13 @@ def train_one_epoch_student(
     kd_meter = AverageMeter()
     feat_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
+    rejection_ce_meter = AverageMeter()
     sc_meter = AverageMeter()
     raw_sc_meter = AverageMeter()
     proto_meter = AverageMeter()
+    center_meter = AverageMeter()
+    radius_meter = AverageMeter()
+    center_margin_meter = AverageMeter()
     proto_repulsion_meter = AverageMeter()
     proxy_meter = AverageMeter()
     pseudo_meter = AverageMeter()
@@ -942,6 +1041,12 @@ def train_one_epoch_student(
     discovery_energy_meter = AverageMeter()
     discovery_uniform_meter = AverageMeter()
     discovery_feature_margin_meter = AverageMeter()
+    discovery_rejection_feature_margin_meter = AverageMeter()
+    discovery_rejection_feature_separation_meter = AverageMeter()
+    discovery_feature_consistency_meter = AverageMeter()
+    discovery_projection_consistency_meter = AverageMeter()
+    discovery_uncertainty_feature_margin_meter = AverageMeter()
+    discovery_uncertainty_feature_margin_weight_meter = AverageMeter()
     discovery_objectosphere_meter = AverageMeter()
     discovery_feature_separation_meter = AverageMeter()
     discovery_boundary_meter = AverageMeter()
@@ -953,6 +1058,7 @@ def train_one_epoch_student(
     angular_meter = AverageMeter()
     angular_active_meter = AverageMeter()
     proxy_anchor_meter = AverageMeter()
+    hard_proxy_margin_meter = AverageMeter()
     reciprocal_meter = AverageMeter()
     discovery_selected_meter = AverageMeter()
     discovery_raw_selected_meter = AverageMeter()
@@ -967,6 +1073,12 @@ def train_one_epoch_student(
     joint_neighbor_meter = AverageMeter()
     joint_memory_neighbor_meter = AverageMeter()
     joint_pseudo_meter = AverageMeter()
+    joint_assignment_entropy_meter = AverageMeter()
+    joint_assignment_max_probability_meter = AverageMeter()
+    joint_assignment_active_classes_meter = AverageMeter()
+    joint_global_assignment_entropy_meter = AverageMeter()
+    joint_global_assignment_max_probability_meter = AverageMeter()
+    joint_global_assignment_active_classes_meter = AverageMeter()
     joint_gate_meter = AverageMeter()
     joint_proto_repulsion_meter = AverageMeter()
     joint_known_ce_meter = AverageMeter()
@@ -1003,6 +1115,9 @@ def train_one_epoch_student(
         loss_unc = uncertainty_alignment_loss(
             s_out["uncertainty"], s_out["logits"], labels, target_mode=uncertainty_target_mode
         )
+        loss_rejection_ce = s_out["logits"].new_tensor(0.0)
+        if alpha_rejection_known_ce > 0.0 and s_out.get("rejection_logits") is not None:
+            loss_rejection_ce = classification_loss(s_out["rejection_logits"], labels)
         loss_kd = distillation_loss(
             s_out["logits"],
             teacher_kd_logits,
@@ -1027,6 +1142,11 @@ def train_one_epoch_student(
         loss_supcon = supervised_contrastive_loss(s_out["proj"], labels)
         loss_raw_supcon = supervised_contrastive_loss(s_out["features"], labels)
         loss_proto = prototype_alignment_loss(s_out["features"], labels, student.classifier.weight)
+        loss_center = supervised_center_loss(s_out["features"], labels)
+        loss_radius = supervised_radius_loss(s_out["features"], labels, radius=radius)
+        loss_center_margin = supervised_center_margin_loss(
+            s_out["features"], labels, margin=center_margin
+        )
         loss_proto_repulsion = prototype_repulsion_loss(
             student.classifier.weight, similarity_margin=proto_repulsion_margin
         )
@@ -1094,12 +1214,21 @@ def train_one_epoch_student(
             s_out["features"], labels, student.classifier.weight,
             alpha=proxy_anchor_alpha, margin=proxy_anchor_margin,
         )
+        loss_hard_proxy_margin = hard_proxy_margin_loss(
+            s_out["features"], labels, student.classifier.weight,
+            margin=hard_proxy_margin,
+        )
         loss_reciprocal = s_out["logits"].new_tensor(0.0)
         loss_discovery = s_out["logits"].new_tensor(0.0)
         loss_discovery_unknown = s_out["logits"].new_tensor(0.0)
         loss_discovery_energy = s_out["logits"].new_tensor(0.0)
         loss_discovery_uniform = s_out["logits"].new_tensor(0.0)
         loss_discovery_feature_margin = s_out["logits"].new_tensor(0.0)
+        loss_discovery_rejection_feature_margin = s_out["logits"].new_tensor(0.0)
+        loss_discovery_rejection_feature_separation = s_out["logits"].new_tensor(0.0)
+        loss_discovery_feature_consistency = s_out["logits"].new_tensor(0.0)
+        loss_discovery_projection_consistency = s_out["logits"].new_tensor(0.0)
+        loss_discovery_uncertainty_feature_margin = s_out["logits"].new_tensor(0.0)
         loss_discovery_objectosphere = s_out["logits"].new_tensor(0.0)
         loss_discovery_feature_separation = s_out["logits"].new_tensor(0.0)
         loss_discovery_boundary = s_out["logits"].new_tensor(0.0)
@@ -1115,6 +1244,12 @@ def train_one_epoch_student(
         joint_neighbor = s_out["logits"].new_tensor(0.0)
         joint_memory_neighbor = s_out["logits"].new_tensor(0.0)
         joint_pseudo = s_out["logits"].new_tensor(0.0)
+        joint_assignment_entropy = s_out["logits"].new_tensor(0.0)
+        joint_assignment_max_probability = s_out["logits"].new_tensor(0.0)
+        joint_assignment_active_classes = s_out["logits"].new_tensor(0.0)
+        joint_global_assignment_entropy = s_out["logits"].new_tensor(0.0)
+        joint_global_assignment_max_probability = s_out["logits"].new_tensor(0.0)
+        joint_global_assignment_active_classes = s_out["logits"].new_tensor(0.0)
         joint_gate = s_out["logits"].new_tensor(0.0)
         joint_proto_repulsion = s_out["logits"].new_tensor(0.0)
         loss_joint_known_ce = s_out["logits"].new_tensor(0.0)
@@ -1129,6 +1264,8 @@ def train_one_epoch_student(
         first_selection_out = None
         second_selection_out = None
         main_novel_logits = None
+        first_target_joint_logits = None
+        second_target_joint_logits = None
         loss_outlier_uniform = s_out["logits"].new_tensor(0.0)
         loss_outlier_energy = s_out["logits"].new_tensor(0.0)
         loss_outlier_uncertainty = s_out["logits"].new_tensor(0.0)
@@ -1183,12 +1320,18 @@ def train_one_epoch_student(
         discovery_weight_mean = 0.0
         feature_candidate_ratio = 0.0
         feature_candidate_weight_mean = 0.0
+        discovery_uncertainty_feature_margin_weight_mean = 0.0
         if discovery_iter is not None and (
             alpha_discovery > 0.0
             or alpha_discovery_unknown > 0.0
             or alpha_discovery_energy > 0.0
             or alpha_discovery_uniform > 0.0
+            or alpha_discovery_feature_consistency > 0.0
+            or alpha_discovery_projection_consistency > 0.0
             or alpha_discovery_feature_margin > 0.0
+            or alpha_discovery_rejection_feature_margin > 0.0
+            or alpha_discovery_rejection_feature_separation > 0.0
+            or alpha_discovery_uncertainty_feature_margin > 0.0
             or alpha_discovery_objectosphere > 0.0
             or alpha_discovery_feature_separation > 0.0
             or alpha_discovery_boundary > 0.0
@@ -1210,6 +1353,27 @@ def train_one_epoch_student(
             second_view = second_view.to(device)
             first_out = student(first_view)
             second_out = student(second_view)
+            if alpha_discovery_feature_consistency > 0.0:
+                # Keep the backbone representation stable across augmentations
+                # without assigning pseudo labels to the mixed pool. This is
+                # intentionally separate from projection-space NT-Xent and
+                # from the unknown-vs-known margin.
+                loss_discovery_feature_consistency = discovery_consistency_loss(
+                    first_out["features"], second_out["features"]
+                )
+            if alpha_discovery_projection_consistency > 0.0:
+                # Keep discovery geometry in the projection head while
+                # blocking this auxiliary objective from changing the shared
+                # backbone used by known/unknown rejection.
+                first_discovery_projection = F.normalize(
+                    student.projector(first_out["features"].detach()), dim=-1
+                )
+                second_discovery_projection = F.normalize(
+                    student.projector(second_out["features"].detach()), dim=-1
+                )
+                loss_discovery_projection_consistency = discovery_consistency_loss(
+                    first_discovery_projection, second_discovery_projection
+                )
             if reciprocal_points is not None and alpha_reciprocal > 0.0:
                 loss_reciprocal = 0.5 * (
                     reciprocal_point_loss(
@@ -1335,6 +1499,42 @@ def train_one_epoch_student(
             if novel_head is not None and alpha_joint_discovery > 0.0:
                 first_novel_logits = novel_head(first_out["features"])
                 second_novel_logits = novel_head(second_out["features"])
+                if (
+                    joint_pseudo_target_model is not None
+                    and joint_pseudo_target_novel_head is not None
+                ):
+                    with torch.no_grad():
+                        first_target_out = joint_pseudo_target_model(first_view)
+                        second_target_out = joint_pseudo_target_model(second_view)
+                        first_target_novel = joint_pseudo_target_novel_head(
+                            first_target_out["features"]
+                        )
+                        second_target_novel = joint_pseudo_target_novel_head(
+                            second_target_out["features"]
+                        )
+                        use_unified_target = (
+                            joint_space == "unified"
+                            and not joint_mixed_residual
+                            and not joint_novel_mass
+                        )
+                        first_target_joint_logits = (
+                            combine_known_novel_logits(
+                                first_target_out["logits"],
+                                first_target_novel,
+                                known_temperature=joint_known_temperature,
+                            )
+                            if use_unified_target
+                            else first_target_novel
+                        )
+                        second_target_joint_logits = (
+                            combine_known_novel_logits(
+                                second_target_out["logits"],
+                                second_target_novel,
+                                known_temperature=joint_known_temperature,
+                            )
+                            if use_unified_target
+                            else second_target_novel
+                        )
                 first_weight_out = first_out
                 second_weight_out = second_out
                 first_weight_novel_logits = first_novel_logits
@@ -1534,6 +1734,26 @@ def train_one_epoch_student(
                     alpha_memory_neighbor=alpha_joint_memory_neighbor,
                     memory_neighbor_k=joint_memory_k,
                     memory_temperature=joint_memory_temperature,
+                    global_assignment=joint_global_assignment,
+                    global_memory_logits=(
+                        joint_memory_logits
+                        if joint_memory_logits is not None
+                        and joint_memory_logits.size(0) >= max(int(joint_memory_warmup_size), 1)
+                        else None
+                    ),
+                    global_memory_weight=joint_global_assignment_memory_weight,
+                    global_assignment_iterations=joint_global_assignment_iterations,
+                    pseudo_target_mode=joint_pseudo_target_mode,
+                    first_target_logits=(
+                        first_target_joint_logits[joint_mask]
+                        if first_target_joint_logits is not None and joint_mask is not None
+                        else first_target_joint_logits
+                    ),
+                    second_target_logits=(
+                        second_target_joint_logits[joint_mask]
+                        if second_target_joint_logits is not None and joint_mask is not None
+                        else second_target_joint_logits
+                    ),
                 )
                 loss_joint_discovery = joint_losses["total"]
                 joint_consistency = joint_losses["consistency"]
@@ -1542,6 +1762,22 @@ def train_one_epoch_student(
                 joint_neighbor = joint_losses["neighbor"]
                 joint_memory_neighbor = joint_losses["memory_neighbor"]
                 joint_pseudo = joint_losses["pseudo"]
+                joint_assignment_entropy = joint_losses["assignment_entropy"]
+                joint_assignment_max_probability = joint_losses[
+                    "assignment_max_probability"
+                ]
+                joint_assignment_active_classes = joint_losses[
+                    "assignment_active_classes"
+                ]
+                joint_global_assignment_entropy = joint_losses[
+                    "global_assignment_entropy"
+                ]
+                joint_global_assignment_max_probability = joint_losses[
+                    "global_assignment_max_probability"
+                ]
+                joint_global_assignment_active_classes = joint_losses[
+                    "global_assignment_active_classes"
+                ]
             # Keep unknown gating independent from the novel-class logits.  In
             # a mixed discovery pool, only the paired high-risk candidates are
             # used as pseudo-unknowns; treating the whole pool as unknown would
@@ -1707,6 +1943,191 @@ def train_one_epoch_student(
                         similarity_margin=discovery_feature_margin,
                     )
                 )
+            if alpha_discovery_rejection_feature_margin > 0.0:
+                if s_out.get("rejection_logits") is None:
+                    raise ValueError(
+                        "rejection feature margin requires --rejection-feature-dim > 0"
+                    )
+                first_rejection_values = first_out["rejection_features"]
+                second_rejection_values = second_out["rejection_features"]
+                first_rejection_weight = torch.ones(
+                    first_rejection_values.size(0), device=first_rejection_values.device
+                )
+            if alpha_discovery_rejection_feature_separation > 0.0:
+                if s_out.get("rejection_logits") is None:
+                    raise ValueError(
+                        "rejection feature separation requires --rejection-feature-dim > 0"
+                    )
+                first_rejection_values = first_out["rejection_features"]
+                second_rejection_values = second_out["rejection_features"]
+                first_rejection_weight = first_out["uncertainty"].detach()
+                second_rejection_weight = second_out["uncertainty"].detach()
+                if feature_candidate_masks is not None:
+                    first_rejection_values = first_rejection_values[feature_candidate_masks[0]]
+                    second_rejection_values = second_rejection_values[feature_candidate_masks[1]]
+                    first_rejection_weight = first_rejection_weight[feature_candidate_masks[0]]
+                    second_rejection_weight = second_rejection_weight[feature_candidate_masks[1]]
+                known_rejection = s_out["rejection_features"]
+                loss_discovery_rejection_feature_separation = 0.5 * (
+                    unknown_feature_separation_loss(
+                        known_rejection,
+                        first_rejection_values,
+                        similarity_margin=discovery_rejection_feature_separation_margin,
+                        temperature=discovery_rejection_feature_separation_temperature,
+                        sample_weight=first_rejection_weight,
+                    )
+                    + unknown_feature_separation_loss(
+                        known_rejection,
+                        second_rejection_values,
+                        similarity_margin=discovery_rejection_feature_separation_margin,
+                        temperature=discovery_rejection_feature_separation_temperature,
+                        sample_weight=second_rejection_weight,
+                    )
+                )
+                second_rejection_weight = torch.ones(
+                    second_rejection_values.size(0), device=second_rejection_values.device
+                )
+                if discovery_pool_mode == "mixed":
+                    # Mixed pools are unlabeled; use the branch uncertainty as
+                    # a soft candidate weight rather than assigning unknown labels.
+                    first_rejection_weight = first_out["uncertainty"].detach()
+                    second_rejection_weight = second_out["uncertainty"].detach()
+                if feature_candidate_masks is not None:
+                    first_rejection_values = first_rejection_values[feature_candidate_masks[0]]
+                    second_rejection_values = second_rejection_values[feature_candidate_masks[1]]
+                    first_rejection_weight = first_rejection_weight[feature_candidate_masks[0]]
+                    second_rejection_weight = second_rejection_weight[feature_candidate_masks[1]]
+                loss_discovery_rejection_feature_margin = 0.5 * (
+                    unknown_feature_margin_loss(
+                        first_rejection_values,
+                        student.rejection_classifier.weight,
+                        similarity_margin=discovery_rejection_feature_margin,
+                        sample_weight=first_rejection_weight,
+                    )
+                    + unknown_feature_margin_loss(
+                        second_rejection_values,
+                        student.rejection_classifier.weight,
+                        similarity_margin=discovery_rejection_feature_margin,
+                        sample_weight=second_rejection_weight,
+                    )
+                )
+            if alpha_discovery_uncertainty_feature_margin > 0.0:
+                if discovery_uncertainty_feature_margin_mode not in {
+                    "soft_weighted",
+                    "pu_corrected",
+                }:
+                    raise ValueError(
+                        "Unsupported uncertainty feature-margin mode: "
+                        f"{discovery_uncertainty_feature_margin_mode}"
+                    )
+                if (
+                    discovery_uncertainty_feature_margin_mode == "pu_corrected"
+                    and discovery_pool_mode != "mixed"
+                ):
+                    raise ValueError(
+                        "pu_corrected uncertainty feature-margin requires a mixed discovery pool"
+                    )
+                # Do not assign hard novel labels to a mixed pool. The default
+                # gate is the learned uncertainty head; MSP-based alternatives
+                # are useful because the uncertainty head can be poorly
+                # calibrated even when the classifier's confidence separates
+                # known and novel samples better.
+                def soft_novelty_weight(output):
+                    uncertainty = output["uncertainty"].detach().clamp(0.0, 1.0)
+                    msp = output["logits"].detach().softmax(dim=-1).amax(dim=-1)
+                    confidence_novelty = (1.0 - msp).clamp(0.0, 1.0)
+                    if discovery_feature_margin_weight_source == "uncertainty":
+                        weight = uncertainty
+                    elif discovery_feature_margin_weight_source == "msp":
+                        weight = confidence_novelty
+                    elif discovery_feature_margin_weight_source == "mean":
+                        weight = 0.5 * (uncertainty + confidence_novelty)
+                    elif discovery_feature_margin_weight_source == "max":
+                        weight = torch.maximum(uncertainty, confidence_novelty)
+                    elif discovery_feature_margin_weight_source == "product":
+                        # A conservative agreement gate: both signals must
+                        # indicate novelty to receive a large feature penalty.
+                        weight = uncertainty * confidence_novelty
+                    elif discovery_feature_margin_weight_source == "cross_view_min_uncertainty":
+                        other_output = (
+                            second_out if output is first_out else first_out
+                        )
+                        weight = cross_view_min_uncertainty(
+                            uncertainty,
+                            other_output["uncertainty"].detach(),
+                        )
+                    elif discovery_feature_margin_weight_source.startswith("ema_"):
+                        if discovery_selection_model is None:
+                            raise ValueError(
+                                "EMA feature-margin weight sources require an "
+                                "EMA discovery selection model"
+                            )
+                        with torch.no_grad():
+                            selection = discovery_selection_model(
+                                output["_input_view"]
+                            )
+                        ema_uncertainty = selection["uncertainty"].detach().clamp(0.0, 1.0)
+                        ema_msp_novelty = (
+                            1.0 - selection["logits"].detach().softmax(dim=-1).amax(dim=-1)
+                        ).clamp(0.0, 1.0)
+                        if discovery_feature_margin_weight_source == "ema_uncertainty":
+                            weight = ema_uncertainty
+                        elif discovery_feature_margin_weight_source == "ema_msp":
+                            weight = ema_msp_novelty
+                        else:
+                            weight = ema_uncertainty * ema_msp_novelty
+                    else:
+                        raise ValueError(
+                            "Unsupported discovery feature-margin weight source: "
+                            f"{discovery_feature_margin_weight_source}"
+                        )
+                    return power_novelty_weights(
+                        weight, discovery_feature_margin_weight_power
+                    )
+
+                # The EMA branch needs the corresponding augmented view as
+                # input, while the current-student branch uses the output.
+                if discovery_feature_margin_weight_source.startswith("ema_"):
+                    first_out["_input_view"] = first_view
+                    second_out["_input_view"] = second_view
+                first_soft_weight = soft_novelty_weight(first_out)
+                second_soft_weight = soft_novelty_weight(second_out)
+                discovery_uncertainty_feature_margin_weight_mean = 0.5 * (
+                    first_soft_weight.mean().item()
+                    + second_soft_weight.mean().item()
+                )
+                if discovery_uncertainty_feature_margin_mode == "soft_weighted":
+                    loss_discovery_uncertainty_feature_margin = 0.5 * (
+                        unknown_feature_margin_loss(
+                            first_out["features"],
+                            student.classifier.weight,
+                            similarity_margin=discovery_uncertainty_feature_margin,
+                            sample_weight=first_soft_weight,
+                        )
+                        + unknown_feature_margin_loss(
+                            second_out["features"],
+                            student.classifier.weight,
+                            similarity_margin=discovery_uncertainty_feature_margin,
+                            sample_weight=second_soft_weight,
+                        )
+                    )
+                else:
+                    loss_discovery_uncertainty_feature_margin = 0.5 * (
+                        pu_unknown_feature_margin_loss(
+                            s_out["features"],
+                            first_out["features"],
+                            student.classifier.weight,
+                            known_prior=discovery_uncertainty_known_prior,
+                            similarity_margin=discovery_uncertainty_feature_margin,
+                        )
+                        + pu_unknown_feature_margin_loss(
+                            s_out["features"],
+                            second_out["features"],
+                            student.classifier.weight,
+                            known_prior=discovery_uncertainty_known_prior,
+                            similarity_margin=discovery_uncertainty_feature_margin,
+                        )
+                    )
             if alpha_discovery_objectosphere > 0.0:
                 if discovery_pool_mode == "mixed" and feature_candidate_masks is None:
                     raise ValueError(
@@ -1840,6 +2261,7 @@ def train_one_epoch_student(
                     s_out["uncertainty"],
                     unlabeled_uncertainty,
                     known_prior=discovery_uncertainty_known_prior,
+                    risk_mode=discovery_uncertainty_pu_risk,
                 )
             if alpha_discovery_selective_unknown > 0.0 or alpha_discovery_selective_energy > 0.0:
                 if discovery_selection_model is None:
@@ -1971,6 +2393,9 @@ def train_one_epoch_student(
             + alpha_supcon * loss_supcon
             + alpha_raw_supcon * loss_raw_supcon
             + alpha_proto * loss_proto
+            + alpha_center * loss_center
+            + alpha_radius * loss_radius
+            + alpha_center_margin * loss_center_margin
             + alpha_proto_repulsion * loss_proto_repulsion
             + alpha_proxy * loss_proxy
             + alpha_pseudo * loss_pseudo
@@ -1980,7 +2405,15 @@ def train_one_epoch_student(
             + alpha_discovery_unknown * loss_discovery_unknown
             + alpha_discovery_energy * loss_discovery_energy
             + alpha_discovery_uniform * loss_discovery_uniform
+            + alpha_discovery_feature_consistency * loss_discovery_feature_consistency
+            + alpha_discovery_projection_consistency * loss_discovery_projection_consistency
             + alpha_discovery_feature_margin * loss_discovery_feature_margin
+            + alpha_discovery_rejection_feature_margin
+            * loss_discovery_rejection_feature_margin
+            + alpha_discovery_rejection_feature_separation
+            * loss_discovery_rejection_feature_separation
+            + alpha_discovery_uncertainty_feature_margin
+            * loss_discovery_uncertainty_feature_margin
             + alpha_discovery_objectosphere * loss_discovery_objectosphere
             + alpha_discovery_feature_separation * loss_discovery_feature_separation
             + alpha_discovery_boundary * loss_discovery_boundary
@@ -1991,6 +2424,7 @@ def train_one_epoch_student(
             + alpha_discovery_selective_energy * loss_discovery_selective_energy
             + alpha_angular * loss_angular
             + alpha_proxy_anchor * loss_proxy_anchor
+            + alpha_hard_proxy_margin * loss_hard_proxy_margin
             + alpha_reciprocal * loss_reciprocal
             + alpha_joint_discovery * loss_joint_discovery
             + alpha_joint_proto_repulsion * joint_proto_repulsion
@@ -2007,9 +2441,23 @@ def train_one_epoch_student(
         loss.backward()
         optimizer.step()
         if (
+            joint_pseudo_target_model is not None
+            and joint_pseudo_target_novel_head is not None
+        ):
+            update_ema_model(
+                joint_pseudo_target_model,
+                student,
+                decay=joint_pseudo_target_decay,
+            )
+            update_ema_model(
+                joint_pseudo_target_novel_head,
+                novel_head,
+                decay=joint_pseudo_target_decay,
+            )
+        if (
             novel_head is not None
             and alpha_joint_discovery > 0.0
-            and alpha_joint_memory_neighbor > 0.0
+            and (alpha_joint_memory_neighbor > 0.0 or joint_global_assignment)
             and first_novel_logits is not None
         ):
             with torch.no_grad():
@@ -2072,9 +2520,13 @@ def train_one_epoch_student(
         kd_meter.update(loss_kd.item(), images.size(0))
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
+        rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
         sc_meter.update(loss_supcon.item(), images.size(0))
         raw_sc_meter.update(loss_raw_supcon.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
+        center_meter.update(loss_center.item(), images.size(0))
+        radius_meter.update(loss_radius.item(), images.size(0))
+        center_margin_meter.update(loss_center_margin.item(), images.size(0))
         proto_repulsion_meter.update(loss_proto_repulsion.item(), images.size(0))
         proxy_meter.update(loss_proxy.item(), images.size(0))
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
@@ -2085,6 +2537,24 @@ def train_one_epoch_student(
         discovery_energy_meter.update(loss_discovery_energy.item(), images.size(0))
         discovery_uniform_meter.update(loss_discovery_uniform.item(), images.size(0))
         discovery_feature_margin_meter.update(loss_discovery_feature_margin.item(), images.size(0))
+        discovery_rejection_feature_margin_meter.update(
+            loss_discovery_rejection_feature_margin.item(), images.size(0)
+        )
+        discovery_rejection_feature_separation_meter.update(
+            loss_discovery_rejection_feature_separation.item(), images.size(0)
+        )
+        discovery_feature_consistency_meter.update(
+            loss_discovery_feature_consistency.item(), images.size(0)
+        )
+        discovery_projection_consistency_meter.update(
+            loss_discovery_projection_consistency.item(), images.size(0)
+        )
+        discovery_uncertainty_feature_margin_meter.update(
+            loss_discovery_uncertainty_feature_margin.item(), images.size(0)
+        )
+        discovery_uncertainty_feature_margin_weight_meter.update(
+            discovery_uncertainty_feature_margin_weight_mean, images.size(0)
+        )
         discovery_objectosphere_meter.update(loss_discovery_objectosphere.item(), images.size(0))
         discovery_feature_separation_meter.update(loss_discovery_feature_separation.item(), images.size(0))
         discovery_boundary_meter.update(loss_discovery_boundary.item(), images.size(0))
@@ -2101,6 +2571,7 @@ def train_one_epoch_student(
         discovery_selective_energy_meter.update(loss_discovery_selective_energy.item(), images.size(0))
         angular_meter.update(loss_angular.item(), images.size(0))
         proxy_anchor_meter.update(loss_proxy_anchor.item(), images.size(0))
+        hard_proxy_margin_meter.update(loss_hard_proxy_margin.item(), images.size(0))
         reciprocal_meter.update(loss_reciprocal.item(), images.size(0))
         discovery_selected_meter.update(discovery_selected_ratio, images.size(0))
         discovery_raw_selected_meter.update(discovery_raw_selected_ratio, images.size(0))
@@ -2119,6 +2590,24 @@ def train_one_epoch_student(
             joint_memory_neighbor.item(), images.size(0)
         )
         joint_pseudo_meter.update(joint_pseudo.item(), images.size(0))
+        joint_assignment_entropy_meter.update(
+            joint_assignment_entropy.item(), images.size(0)
+        )
+        joint_assignment_max_probability_meter.update(
+            joint_assignment_max_probability.item(), images.size(0)
+        )
+        joint_assignment_active_classes_meter.update(
+            joint_assignment_active_classes.item(), images.size(0)
+        )
+        joint_global_assignment_entropy_meter.update(
+            joint_global_assignment_entropy.item(), images.size(0)
+        )
+        joint_global_assignment_max_probability_meter.update(
+            joint_global_assignment_max_probability.item(), images.size(0)
+        )
+        joint_global_assignment_active_classes_meter.update(
+            joint_global_assignment_active_classes.item(), images.size(0)
+        )
         joint_gate_meter.update(joint_gate.item(), images.size(0))
         joint_proto_repulsion_meter.update(joint_proto_repulsion.item(), images.size(0))
         joint_known_ce_meter.update(loss_joint_known_ce.item(), images.size(0))
@@ -2141,9 +2630,13 @@ def train_one_epoch_student(
         "kd": kd_meter.avg,
         "feat_kd": feat_kd_meter.avg,
         "unc": unc_meter.avg,
+        "rejection_ce": rejection_ce_meter.avg,
         "supcon": sc_meter.avg,
         "raw_supcon": raw_sc_meter.avg,
         "proto": proto_meter.avg,
+        "center": center_meter.avg,
+        "radius": radius_meter.avg,
+        "center_margin": center_margin_meter.avg,
         "proto_repulsion": proto_repulsion_meter.avg,
         "proxy": proxy_meter.avg,
         "pseudo": pseudo_meter.avg,
@@ -2154,6 +2647,14 @@ def train_one_epoch_student(
         "discovery_energy": discovery_energy_meter.avg,
         "discovery_uniform": discovery_uniform_meter.avg,
         "discovery_feature_margin": discovery_feature_margin_meter.avg,
+        "discovery_rejection_feature_margin": discovery_rejection_feature_margin_meter.avg,
+        "discovery_rejection_feature_separation": discovery_rejection_feature_separation_meter.avg,
+        "discovery_feature_consistency": discovery_feature_consistency_meter.avg,
+        "discovery_projection_consistency": discovery_projection_consistency_meter.avg,
+        "discovery_uncertainty_feature_margin": discovery_uncertainty_feature_margin_meter.avg,
+        "discovery_uncertainty_feature_margin_weight_mean": (
+            discovery_uncertainty_feature_margin_weight_meter.avg
+        ),
         "discovery_objectosphere": discovery_objectosphere_meter.avg,
         "discovery_feature_separation": discovery_feature_separation_meter.avg,
         "discovery_boundary": discovery_boundary_meter.avg,
@@ -2165,6 +2666,7 @@ def train_one_epoch_student(
         "angular": angular_meter.avg,
         "angular_active_ratio": angular_active_meter.avg,
         "proxy_anchor": proxy_anchor_meter.avg,
+        "hard_proxy_margin": hard_proxy_margin_meter.avg,
         "reciprocal": reciprocal_meter.avg,
         "discovery_selected_ratio": discovery_selected_meter.avg,
         "discovery_raw_selected_ratio": discovery_raw_selected_meter.avg,
@@ -2179,6 +2681,12 @@ def train_one_epoch_student(
         "joint_neighbor": joint_neighbor_meter.avg,
         "joint_memory_neighbor": joint_memory_neighbor_meter.avg,
         "joint_pseudo": joint_pseudo_meter.avg,
+        "joint_assignment_entropy": joint_assignment_entropy_meter.avg,
+        "joint_assignment_max_probability": joint_assignment_max_probability_meter.avg,
+        "joint_assignment_active_classes": joint_assignment_active_classes_meter.avg,
+        "joint_global_assignment_entropy": joint_global_assignment_entropy_meter.avg,
+        "joint_global_assignment_max_probability": joint_global_assignment_max_probability_meter.avg,
+        "joint_global_assignment_active_classes": joint_global_assignment_active_classes_meter.avg,
         "joint_gate": joint_gate_meter.avg,
         "joint_proto_repulsion": joint_proto_repulsion_meter.avg,
         "joint_known_ce": joint_known_ce_meter.avg,
@@ -2401,6 +2909,7 @@ def extract_outputs(
     all_head_uncertainty = []
     all_feature_norm = []
     all_features = []
+    all_rejection_features = []
     all_projections = []
     all_odin_msp = []
     all_odin_logits = []
@@ -2422,6 +2931,9 @@ def extract_outputs(
         all_aleatoric.append(mc["aleatoric"].cpu())
         all_head_uncertainty.append(mc["head_uncertainty"].cpu())
         all_features.append(out["features"].cpu())
+        all_rejection_features.append(
+            out.get("rejection_features", out["features"]).cpu()
+        )
         all_feature_norm.append(out["features"].norm(dim=-1).cpu())
         all_projections.append(out["proj"].cpu())
         if react_clip_value is not None:
@@ -2454,6 +2966,7 @@ def extract_outputs(
         "head_uncertainty": torch.cat(all_head_uncertainty).numpy(),
         "feature_norm": torch.cat(all_feature_norm).numpy(),
         "features": torch.cat(all_features).numpy(),
+        "rejection_features": torch.cat(all_rejection_features).numpy(),
         "projections": torch.cat(all_projections).numpy(),
         "labels": torch.cat(all_labels).numpy(),
         "raw_labels": torch.cat(all_raw).numpy(),
@@ -2476,6 +2989,9 @@ def build_rejector_features(
     features = features / np.clip(np.linalg.norm(features, axis=1, keepdims=True), 1e-6, None)
     if feature_mode == "embedding":
         return features
+    if feature_mode == "rejection_embedding":
+        rejection = np.asarray(outputs["rejection_features"], dtype=np.float32)
+        return rejection / np.clip(np.linalg.norm(rejection, axis=1, keepdims=True), 1e-6, None)
     if feature_mode not in {
         "augmented",
         "support_augmented",
@@ -2745,7 +3261,12 @@ def fit_pu_feature_rejector(
         sample_weight = np.concatenate(
             [np.ones(len(known_features), dtype=np.float64), unlabeled_weight]
         )
-        if feature_mode in {"augmented", "support_augmented"}:
+        if feature_mode in {
+            "augmented",
+            "support_augmented",
+            "uncertainty_augmented",
+            "support_uncertainty_augmented",
+        }:
             rejector = make_pipeline(
                 StandardScaler(),
                 LogisticRegression(
@@ -2801,6 +3322,27 @@ class NnPUFeatureRejector:
         return np.stack([1.0 - probability, probability], axis=1)
 
 
+class NnPUMlpFeatureRejector:
+    """Small nonlinear nnPU rejector with the same fitted feature scaling."""
+
+    def __init__(self, mean, scale, network):
+        self.mean_ = np.asarray(mean, dtype=np.float32)
+        self.scale_ = np.asarray(scale, dtype=np.float32)
+        self.network_ = network.eval()
+
+    def decision_function(self, values):
+        values = np.asarray(values, dtype=np.float32)
+        transformed = (values - self.mean_) / self.scale_
+        with torch.no_grad():
+            scores = self.network_(torch.from_numpy(transformed)).reshape(-1)
+        return scores.cpu().numpy()
+
+    def predict_proba(self, values):
+        scores = self.decision_function(values)
+        probability = 1.0 / (1.0 + np.exp(-np.clip(scores, -40.0, 40.0)))
+        return np.stack([1.0 - probability, probability], axis=1)
+
+
 def fit_nnpu_feature_rejector(
     known_outputs: Dict[str, np.ndarray],
     unlabeled_outputs: Dict[str, np.ndarray],
@@ -2811,11 +3353,25 @@ def fit_nnpu_feature_rejector(
     weight_decay: float = 1e-4,
     seed: int = 42,
     feature_mode: str = "embedding",
+    risk_mode: str = "legacy",
+    model_type: str = "linear",
 ):
-    """Fit a mixed-pool rejector with non-negative PU risk estimation."""
+    """Fit a mixed-pool rejector with a non-negative NU/PU-style risk.
+
+    ``legacy`` preserves the historical implementation. ``nu_corrected``
+    uses the direct negative-unlabeled risk decomposition for a pool whose
+    known fraction is ``known_prior``; this is the form that follows from
+    treating known samples as reliable negatives and unknown samples as the
+    positive class. Both modes keep the non-negative correction on the
+    unlabeled-derived positive risk.
+    """
     prior = float(known_prior)
     if not 0.0 < prior < 1.0:
         raise ValueError("known_prior must be in (0, 1) for nnPU")
+    if risk_mode not in {"legacy", "nu_corrected"}:
+        raise ValueError("risk_mode must be 'legacy' or 'nu_corrected'")
+    if model_type not in {"linear", "mlp"}:
+        raise ValueError("model_type must be 'linear' or 'mlp'")
     known = build_rejector_features(known_outputs, feature_mode=feature_mode)
     unlabeled = build_rejector_features(unlabeled_outputs, feature_mode=feature_mode)
     if known.ndim != 2 or unlabeled.ndim != 2 or known.shape[1] != unlabeled.shape[1]:
@@ -2841,15 +3397,38 @@ def fit_nnpu_feature_rejector(
     torch.manual_seed(int(seed))
     known_tensor = torch.from_numpy(known)
     unlabeled_tensor = torch.from_numpy(unlabeled)
-    weight = torch.zeros(known.shape[1], requires_grad=True)
-    bias = torch.zeros((), requires_grad=True)
-    optimizer = torch.optim.Adam([weight, bias], lr=float(lr), weight_decay=float(weight_decay))
+    if model_type == "linear":
+        weight = torch.zeros(known.shape[1], requires_grad=True)
+        bias = torch.zeros((), requires_grad=True)
+
+        def predict(values):
+            return values @ weight + bias
+
+        parameters = [weight, bias]
+        network = None
+    else:
+        network = torch.nn.Sequential(
+            torch.nn.Linear(known.shape[1], 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 32),
+            torch.nn.ReLU(),
+            torch.nn.Linear(32, 1),
+        )
+        network.train()
+
+        def predict(values):
+            return network(values).reshape(-1)
+
+        parameters = list(network.parameters())
+    optimizer = torch.optim.Adam(
+        parameters, lr=float(lr), weight_decay=float(weight_decay)
+    )
     known_zero = torch.zeros(len(known_tensor))
     known_one = torch.ones(len(known_tensor))
     unknown_one = torch.ones(len(unlabeled_tensor))
     for _ in range(max(1, int(iterations))):
-        known_logits = known_tensor @ weight + bias
-        unlabeled_logits = unlabeled_tensor @ weight + bias
+        known_logits = predict(known_tensor)
+        unlabeled_logits = predict(unlabeled_tensor)
         known_as_unknown = torch.nn.functional.binary_cross_entropy_with_logits(
             known_logits, known_zero
         )
@@ -2859,18 +3438,17 @@ def fit_nnpu_feature_rejector(
         unlabeled_as_unknown = torch.nn.functional.binary_cross_entropy_with_logits(
             unlabeled_logits, unknown_one
         )
-        negative_risk = (
-            unlabeled_as_unknown - prior * known_as_known
-        ) / max(1.0 - prior, 1e-6)
+        negative_risk = unlabeled_as_unknown - prior * known_as_known
+        if risk_mode == "legacy":
+            negative_risk = negative_risk / max(1.0 - prior, 1e-6)
         loss = prior * known_as_unknown + torch.relu(negative_risk)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+    if model_type == "mlp":
+        return NnPUMlpFeatureRejector(mean, scale, network.cpu())
     return NnPUFeatureRejector(
-        mean,
-        scale,
-        weight.detach().cpu().numpy(),
-        bias.detach().cpu().item(),
+        mean, scale, weight.detach().cpu().numpy(), bias.detach().cpu().item()
     )
 
 
@@ -3548,6 +4126,8 @@ def compute_open_score(
     score_mode: str = "full",
     normalization: Dict[str, Dict[str, float]] | None = None,
     gaussian_stats: Dict[str, np.ndarray] | None = None,
+    fusion_base_score: str = "normalized_entropy_min_class_knn",
+    fusion_rejector_weight: float = 0.5,
 ):
     entropy = outputs["entropy"]
     epistemic = outputs["epistemic"]
@@ -3970,6 +4550,48 @@ def compute_open_score(
         if "known_support_score" not in outputs:
             raise ValueError("known_support requires a fitted support detector")
         score = np.asarray(outputs["known_support_score"], dtype=float)
+    elif score_mode == "feature_rejector_fusion":
+        if "feature_rejector_score" not in outputs:
+            raise ValueError("feature_rejector_fusion requires a fitted rejector")
+        if "known_support_score" not in outputs:
+            raise ValueError("feature_rejector_fusion requires a fitted support detector")
+        if normalization is None:
+            raise ValueError("feature_rejector_fusion requires known-validation normalization")
+        rejector_weight = float(fusion_rejector_weight)
+        if not 0.0 <= rejector_weight <= 1.0:
+            raise ValueError("fusion_rejector_weight must be in [0, 1]")
+
+        def normalized_component(values, key):
+            if key not in normalization:
+                raise ValueError(
+                    f"feature_rejector_fusion requires known-validation statistics for {key}"
+                )
+            stats = normalization[key]
+            return (np.asarray(values, dtype=float) - float(stats["mean"])) / max(
+                float(stats["std"]), 1e-6
+            )
+
+        base_score, _ = compute_open_score(
+            outputs,
+            prototypes=prototypes,
+            weights=weights,
+            score_mode=fusion_base_score,
+            normalization=normalization,
+            gaussian_stats=gaussian_stats,
+            fusion_base_score=fusion_base_score,
+        )
+        # Equal weighting is deliberately fixed for the first ablation: each
+        # component is standardized on known validation data, so neither raw
+        # score scale can dominate the fusion by accident.
+        base_component = (
+            base_score
+            if fusion_base_score.startswith("normalized_")
+            else normalized_component(base_score, "fusion_base_score")
+        )
+        score = (1.0 - rejector_weight) * base_component
+        score += rejector_weight * normalized_component(
+            outputs["feature_rejector_score"], "feature_rejector_score"
+        )
     elif score_mode == "margin_uncertainty":
         logits = np.asarray(outputs["logits"], dtype=float)
         top2 = np.sort(np.partition(logits, -2, axis=1)[:, -2:], axis=1)
@@ -4029,6 +4651,10 @@ def fit_score_normalization(
     result["head_uncertainty"] = stats(
         outputs_known.get("head_uncertainty", np.zeros_like(entropy))
     )
+    if "feature_rejector_score" in outputs_known:
+        result["feature_rejector_score"] = stats(outputs_known["feature_rejector_score"])
+    if "known_support_score" in outputs_known:
+        result["known_support_score"] = stats(outputs_known["known_support_score"])
     if "knn_distance" in outputs_known:
         result["knn_distance"] = stats(outputs_known["knn_distance"])
     if "knn_predicted_class_distance" in outputs_known:
@@ -4550,6 +5176,8 @@ def run_discovery(
     score_mode: str = "full",
     normalization: Dict[str, Dict[str, float]] | None = None,
     gaussian_stats: Dict[str, np.ndarray] | None = None,
+    fusion_base_score: str = "normalized_entropy_min_class_knn",
+    fusion_rejector_weight: float = 0.5,
     cluster_k: int | str = "oracle",
     cluster_method: str = "kmeans",
     cluster_feature: str = "projection",
@@ -4573,6 +5201,8 @@ def run_discovery(
         score_mode=score_mode,
         normalization=normalization,
         gaussian_stats=gaussian_stats,
+        fusion_base_score=fusion_base_score,
+        fusion_rejector_weight=fusion_rejector_weight,
     )
     proto_dist = np.zeros_like(score) if proto_dist is None else proto_dist
     mahalanobis_score_modes = {
@@ -4617,17 +5247,28 @@ def run_discovery(
     oscr = compute_oscr(known_mask, pred_known, class_correct, score)
     known_class_correct = int(np.sum(known_mask & pred_known & (pred_class == true_labels)))
     known_class_wrong = int(np.sum(known_mask & pred_known & (pred_class != true_labels)))
+    known_class_correct_all = int(np.sum(known_mask & (pred_class == true_labels)))
     known_total = int(known_mask.sum())
     result = {
         "auroc": auroc,
         "aupr": aupr,
         "fpr95": fpr95,
         "oscr": oscr,
+        # ``known_ratio`` is retained for compatibility with historical
+        # reports; it is the overall accepted-sample fraction, not known
+        # coverage.  Use the explicit name in new analyses.
+        "overall_accept_rate": float(pred_known.mean()),
         "known_ratio": float(pred_known.mean()),
         "known_class_correct": known_class_correct,
         "known_class_wrong": known_class_wrong,
         "known_class_accuracy_after_accept": float(known_class_correct / max(known_class_correct + known_class_wrong, 1)),
-        "known_class_accuracy_all_known": float(known_class_correct / max(known_total, 1)),
+        # This is the ordinary classifier accuracy over every known sample;
+        # rejection is intentionally not counted as a classification error.
+        "known_class_correct_all_known": known_class_correct_all,
+        "known_class_accuracy_all_known": float(known_class_correct_all / max(known_total, 1)),
+        # Keep the old diagnostic quantity under an explicit name.  It is the
+        # fraction of all known samples that are both accepted and correct.
+        "accepted_correct_fraction_of_all_known": float(known_class_correct / max(known_total, 1)),
         "threshold_type": threshold_type,
     }
     result.update(open_confusion)
@@ -4858,6 +5499,12 @@ def run_discovery(
         "aleatoric": aleatoric,
         "expected_entropy": outputs.get("expected_entropy", aleatoric),
         "head_uncertainty": outputs.get("head_uncertainty", aleatoric),
+        "feature_rejector_score": np.asarray(
+            outputs.get("feature_rejector_score", np.zeros_like(score)), dtype=float
+        ),
+        "known_support_score": np.asarray(
+            outputs.get("known_support_score", np.zeros_like(score)), dtype=float
+        ),
         "proto_dist": proto_dist,
         "mahalanobis": mahalanobis,
         "odin_msp": np.asarray(outputs.get("odin_msp", np.zeros_like(score)), dtype=float),

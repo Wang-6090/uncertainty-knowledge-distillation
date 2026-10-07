@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.nn import functional as F
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -17,6 +18,7 @@ from novel_discovery.losses import (
     discovery_unknown_loss,
     angular_margin_loss,
     proxy_anchor_loss,
+    hard_proxy_margin_loss,
     reciprocal_point_loss,
     known_pseudo_label_consistency_loss,
     energy_margin_loss,
@@ -26,6 +28,7 @@ from novel_discovery.losses import (
     weighted_energy_margin_loss,
     uncertainty_weights,
     unknown_feature_margin_loss,
+    pu_unknown_feature_margin_loss,
     unknown_feature_separation_loss,
     unknown_feature_boundary_loss,
     knn_support_boundary_loss,
@@ -34,6 +37,9 @@ from novel_discovery.losses import (
     nnpu_known_uncertainty_loss,
     outlier_exposure_uniform_loss,
     prototype_repulsion_loss,
+    supervised_center_loss,
+    supervised_radius_loss,
+    supervised_center_margin_loss,
 )
 from novel_discovery.data import (
     build_data_bundle,
@@ -43,8 +49,11 @@ from novel_discovery.data import (
     split_known_indices,
     split_known_for_discovery,
     split_validation_for_calibration,
+    OpenSetImageFolder,
     _known_labels,
+    _known_flags,
     known_proportion,
+    unknown_subset,
     validate_class_split,
 )
 from scripts.make_cifar100_splits import build_protocols
@@ -88,12 +97,51 @@ from novel_discovery.pipeline import (
     fit_pu_feature_rejector,
     fit_nnpu_feature_rejector,
     attach_feature_rejector_score,
+    build_rejector_features,
+    power_novelty_weights,
+    cross_view_min_uncertainty,
 )
-from train import load_checkpoint, parse_args, scheduled_weight, save_checkpoint, save_command_config
+from train import (
+    initialize_novel_head_kmeans,
+    load_checkpoint,
+    parse_args,
+    scheduled_weight,
+    save_checkpoint,
+    save_command_config,
+)
 from novel_discovery.models import build_model, freeze_batchnorm_stats
 
 
 class CommandLineTest(unittest.TestCase):
+    def test_rejection_branch_has_separate_outputs_and_gradients(self):
+        model = build_model(
+            3,
+            backbone="resnet18",
+            pretrained=False,
+            rejection_feature_dim=16,
+        )
+        outputs = model(torch.randn(4, 3, 32, 32))
+        self.assertEqual(tuple(outputs["logits"].shape), (4, 3))
+        self.assertEqual(tuple(outputs["rejection_features"].shape), (4, 16))
+        self.assertEqual(tuple(outputs["rejection_logits"].shape), (4, 3))
+        loss = outputs["rejection_logits"].mean() + outputs["uncertainty"].mean()
+        loss.backward()
+        self.assertIsNotNone(model.rejection_projector[0].weight.grad)
+        self.assertIsNotNone(model.encoder.features[0].weight.grad)
+        self.assertIsNone(model.classifier.weight.grad)
+
+    def test_rejection_embedding_mode_uses_independent_features(self):
+        outputs = {
+            "features": np.zeros((2, 4), dtype=np.float32),
+            "rejection_features": np.asarray(
+                [[3.0, 0.0], [0.0, 4.0]], dtype=np.float32
+            ),
+        }
+        result = build_rejector_features(outputs, feature_mode="rejection_embedding")
+        np.testing.assert_allclose(
+            result, np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+        )
+
     def test_checkpoint_rejects_mismatched_class_split(self):
         with tempfile.TemporaryDirectory() as root:
             model = build_model(2, backbone="resnet18", pretrained=False)
@@ -175,6 +223,23 @@ class CommandLineTest(unittest.TestCase):
         prototypes = torch.tensor([[1.0, 0.0], [0.0, 1.0]], requires_grad=False)
         loss = unknown_feature_boundary_loss(
             known, labels, unknown, prototypes, similarity_margin=0.2
+        )
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreater(float(loss), 0.0)
+        loss.backward()
+        self.assertIsNotNone(unknown.grad)
+        self.assertTrue(torch.isfinite(unknown.grad).all())
+
+    def test_soft_unknown_feature_separation_accepts_sample_weights(self):
+        known = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        unknown = torch.tensor([[0.8, 0.2], [-0.2, 0.9]], requires_grad=True)
+        weights = torch.tensor([1.0, 0.5])
+        loss = unknown_feature_separation_loss(
+            known,
+            unknown,
+            similarity_margin=0.0,
+            temperature=0.1,
+            sample_weight=weights,
         )
         self.assertTrue(torch.isfinite(loss))
         self.assertGreater(float(loss), 0.0)
@@ -307,6 +372,54 @@ class CommandLineTest(unittest.TestCase):
         unknown_score = float(rejector.decision_function(np.asarray([[-1.0, 0.0]]))[0])
         self.assertTrue(np.isfinite([known_score, unknown_score]).all())
         self.assertGreater(unknown_score, known_score)
+
+    def test_nnpu_feature_rejector_supports_corrected_nu_risk(self):
+        known = {"features": np.asarray([[1.0, 0.0], [0.9, 0.1], [1.0, 0.1]])}
+        unlabeled = {
+            "features": np.asarray(
+                [[-1.0, 0.0], [-0.9, -0.1], [0.8, 0.2], [0.7, 0.3]]
+            )
+        }
+        corrected = fit_nnpu_feature_rejector(
+            known,
+            unlabeled,
+            known_prior=0.5,
+            iterations=30,
+            seed=0,
+            risk_mode="nu_corrected",
+        )
+        score = corrected.decision_function(np.asarray([[-1.0, 0.0], [1.0, 0.0]]))
+        self.assertTrue(np.isfinite(score).all())
+        self.assertGreater(score[0], score[1])
+
+    def test_nnpu_feature_rejector_rejects_unknown_risk_mode(self):
+        known = {"features": np.asarray([[1.0, 0.0], [0.9, 0.1]])}
+        unlabeled = {"features": np.asarray([[-1.0, 0.0], [-0.9, -0.1]])}
+        with self.assertRaisesRegex(ValueError, "risk_mode"):
+            fit_nnpu_feature_rejector(known, unlabeled, risk_mode="invalid")
+
+    def test_nnpu_mlp_rejector_returns_finite_unknown_scores(self):
+        known = {"features": np.asarray([[1.0, 0.0], [0.9, 0.1], [1.0, 0.1]])}
+        unlabeled = {
+            "features": np.asarray(
+                [[-1.0, 0.0], [-0.9, -0.1], [0.8, 0.2], [0.7, 0.3]]
+            )
+        }
+        rejector = fit_nnpu_feature_rejector(
+            known,
+            unlabeled,
+            known_prior=0.5,
+            iterations=30,
+            seed=0,
+            risk_mode="nu_corrected",
+            model_type="mlp",
+        )
+        scores = rejector.decision_function(
+            np.asarray([[-1.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+        )
+        self.assertEqual(scores.shape, (2,))
+        self.assertTrue(np.isfinite(scores).all())
+        self.assertEqual(rejector.predict_proba(np.asarray([[0.0, 0.0]])).shape, (1, 2))
 
     def test_virtual_outlier_rejector_uses_known_features_only(self):
         rng = np.random.default_rng(0)
@@ -499,6 +612,49 @@ class CommandLineTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build_data_bundle("imagefolder", root, 1, 0, 32)
 
+    def test_imagefolder_maps_known_classes_by_name_and_tracks_mixed_prior(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            for class_name, color in (("class_a", (255, 0, 0)), ("class_b", (0, 255, 0))):
+                class_dir = root_path / class_name
+                class_dir.mkdir()
+                Image.new("RGB", (8, 8), color).save(class_dir / "sample.png")
+
+            # ImageFolder's raw integer order is alphabetical (a=0, b=1),
+            # while the model's known-label order here deliberately contains
+            # only class_b. The mapping must use class names, not raw ids.
+            open_dataset = OpenSetImageFolder(root, ["class_b"], include_unknown=True)
+            unknown_item = open_dataset[0]
+            known_item = open_dataset[1]
+            self.assertEqual((unknown_item[1], unknown_item[2], unknown_item[3]), (-1, 0, 0))
+            self.assertEqual((known_item[1], known_item[2], known_item[3]), (0, 1, 1))
+            self.assertEqual(_known_flags(open_dataset), [False, True])
+            self.assertAlmostEqual(known_proportion(open_dataset), 0.5)
+            self.assertEqual(len(unknown_subset(open_dataset)), 1)
+
+            known_only = OpenSetImageFolder(root, ["class_b"], include_unknown=False)
+            self.assertEqual(len(known_only), 1)
+            self.assertEqual(_known_labels(known_only), [0])
+
+    def test_novelty_weight_power_sharpens_without_reordering(self):
+        weights = torch.tensor([0.0, 0.25, 0.5, 1.0])
+        torch.testing.assert_close(power_novelty_weights(weights), weights)
+        sharpened = power_novelty_weights(weights, power=4.0)
+        torch.testing.assert_close(sharpened, torch.tensor([0.0, 0.00390625, 0.0625, 1.0]))
+        self.assertTrue(torch.all(sharpened[1:] <= weights[1:]))
+        with self.assertRaisesRegex(ValueError, "greater than zero"):
+            power_novelty_weights(weights, power=0.0)
+
+    def test_cross_view_min_uncertainty_requires_both_views_to_agree(self):
+        first = torch.tensor([0.9, 0.2, 0.7])
+        second = torch.tensor([0.3, 0.8, 0.6])
+        weights = cross_view_min_uncertainty(first, second)
+        torch.testing.assert_close(weights, torch.tensor([0.3, 0.2, 0.6]))
+        with self.assertRaisesRegex(ValueError, "matching shapes"):
+            cross_view_min_uncertainty(first, second[:2])
+
     def test_discover_arguments_stay_in_sync_with_runtime(self):
         args = parse_args(
             [
@@ -593,6 +749,84 @@ class CommandLineTest(unittest.TestCase):
         self.assertTrue(known_pool_ids.issubset(mixed_ids))
         self.assertTrue({100, 101}.issubset(mixed_ids))
 
+    def test_matched_pool_protocol_holds_supervision_and_pool_size_constant(self):
+        def make_dataset(start, count, known):
+            ids = torch.arange(start, start + count)
+            labels = torch.zeros(count, dtype=torch.long) if known else torch.full((count,), -1)
+            flags = torch.ones(count, dtype=torch.long) if known else torch.zeros(count, dtype=torch.long)
+            return torch.utils.data.TensorDataset(
+                torch.zeros(count, 3, 2, 2), labels, ids, flags, ids
+            )
+
+        known = make_dataset(0, 40, known=True)
+        unknown = make_dataset(100, 80, known=False)
+        supervised, reserved_known = split_known_for_discovery(
+            known, 0.25, seed=11
+        )
+        pure = build_open_validation_and_discovery(
+            supervised,
+            make_dataset(300, 10, known=True),
+            unknown,
+            open_val_ratio=0.0,
+            seed=23,
+            discovery_pool_mode="unknown",
+            known_discovery_pool=reserved_known,
+            matched_discovery_pool=True,
+            matched_pool_size=20,
+            matched_known_prior=0.2,
+        )[2]
+        mixed = build_open_validation_and_discovery(
+            supervised,
+            make_dataset(300, 10, known=True),
+            unknown,
+            open_val_ratio=0.0,
+            seed=23,
+            discovery_pool_mode="mixed",
+            known_discovery_pool=reserved_known,
+            matched_discovery_pool=True,
+            matched_pool_size=20,
+            matched_known_prior=0.2,
+        )[2]
+
+        ids = lambda dataset: {int(dataset[index][4]) for index in range(len(dataset))}
+        train_ids = ids(supervised)
+        pure_unknown_ids = ids(pure)
+        mixed_ids = ids(mixed)
+        mixed_known_ids = {
+            int(mixed[index][4]) for index in range(len(mixed)) if int(mixed[index][3]) == 1
+        }
+        mixed_unknown_ids = mixed_ids - mixed_known_ids
+
+        self.assertEqual(len(pure), 20)
+        self.assertEqual(len(mixed), 20)
+        self.assertEqual(len(supervised), 30)
+        self.assertEqual(known_proportion(pure), 0.0)
+        self.assertAlmostEqual(known_proportion(mixed), 0.2)
+        self.assertTrue(train_ids.isdisjoint(mixed_ids))
+        self.assertTrue(mixed_unknown_ids.issubset(pure_unknown_ids))
+
+    def test_matched_pool_requires_enough_reserved_known_and_unknown_samples(self):
+        def make_dataset(start, count, known):
+            ids = torch.arange(start, start + count)
+            labels = torch.zeros(count, dtype=torch.long) if known else torch.full((count,), -1)
+            flags = torch.ones(count, dtype=torch.long) if known else torch.zeros(count, dtype=torch.long)
+            return torch.utils.data.TensorDataset(
+                torch.zeros(count, 3, 2, 2), labels, ids, flags, ids
+            )
+
+        with self.assertRaisesRegex(ValueError, "Not enough reserved known"):
+            build_open_validation_and_discovery(
+                make_dataset(0, 8, known=True),
+                make_dataset(20, 2, known=True),
+                make_dataset(40, 10, known=False),
+                open_val_ratio=0.0,
+                seed=1,
+                discovery_pool_mode="mixed",
+                matched_discovery_pool=True,
+                matched_pool_size=10,
+                matched_known_prior=0.5,
+            )
+
     def test_mixed_discovery_rejects_reusing_supervised_known_samples(self):
         dataset = torch.utils.data.TensorDataset(
             torch.zeros(4, 3, 2, 2),
@@ -637,6 +871,8 @@ class CommandLineTest(unittest.TestCase):
                 "--discovery-neighbor-temperature", "0.3",
                 "--alpha-discovery-feature-margin", "0.05",
                 "--discovery-feature-margin", "0.2",
+                "--discovery-feature-margin-weight-power", "4.0",
+                "--discovery-feature-margin-weight-source", "cross_view_min_uncertainty",
                 "--discovery-selective-warmup-epochs", "1",
             "--discovery-selective-ramp-epochs", "2",
                 "--uncertainty-separation-warmup-epochs", "1",
@@ -654,12 +890,36 @@ class CommandLineTest(unittest.TestCase):
         self.assertAlmostEqual(args.uncertainty_weight_min, 0.5)
         self.assertAlmostEqual(args.uncertainty_weight_max, 1.0)
         self.assertEqual(args.discovery_pool_mode, "mixed")
+        self.assertAlmostEqual(args.discovery_feature_margin_weight_power, 4.0)
+        self.assertEqual(
+            args.discovery_feature_margin_weight_source,
+            "cross_view_min_uncertainty",
+        )
+        self.assertEqual(
+            args.discovery_uncertainty_feature_margin_mode,
+            "soft_weighted",
+        )
         self.assertTrue(args.rejector_strict_mixed)
         self.assertAlmostEqual(args.alpha_discovery_selective_energy, 0.1)
         self.assertAlmostEqual(args.alpha_discovery_uniform, 0.07)
         self.assertEqual(args.discovery_uniform_warmup_epochs, 1)
         self.assertEqual(args.discovery_uniform_ramp_epochs, 2)
         self.assertAlmostEqual(args.discovery_select_ratio, 0.25)
+
+    def test_matched_discovery_pool_protocol_arguments_are_available(self):
+        args = parse_args(
+            [
+                "train_student",
+                "--matched-discovery-pool",
+                "--matched-pool-size", "5400",
+                "--matched-known-prior", "0.2",
+                "--mixed-known-pool-ratio", "0.05",
+            ]
+        )
+        self.assertTrue(args.matched_discovery_pool)
+        self.assertEqual(args.matched_pool_size, 5400)
+        self.assertAlmostEqual(args.matched_known_prior, 0.2)
+        self.assertAlmostEqual(args.mixed_known_pool_ratio, 0.05)
 
     def test_knn_boundary_options_are_exposed_with_safe_defaults(self):
         defaults = parse_args(["train_student"])
@@ -721,6 +981,11 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(scheduled_weight(1, warmup_epochs=1, ramp_epochs=0), 1.0)
 
     def test_uncertainty_separation_weight_schedule(self):
+        self.assertEqual(scheduled_weight(0, warmup_epochs=1, ramp_epochs=2), 0.0)
+        self.assertAlmostEqual(scheduled_weight(1, warmup_epochs=1, ramp_epochs=2), 0.5)
+        self.assertEqual(scheduled_weight(2, warmup_epochs=1, ramp_epochs=2), 1.0)
+
+    def test_nnpu_weight_schedule(self):
         self.assertEqual(scheduled_weight(0, warmup_epochs=1, ramp_epochs=2), 0.0)
         self.assertAlmostEqual(scheduled_weight(1, warmup_epochs=1, ramp_epochs=2), 0.5)
         self.assertEqual(scheduled_weight(2, warmup_epochs=1, ramp_epochs=2), 1.0)
@@ -843,6 +1108,17 @@ class UncertaintyKDTargetTest(unittest.TestCase):
         loss = proxy_anchor_loss(features, labels, proxies)
         loss.backward()
         self.assertTrue(torch.isfinite(loss))
+
+    def test_hard_proxy_margin_loss_is_finite_and_has_gradient(self):
+        features = torch.randn(8, 16, requires_grad=True)
+        labels = torch.tensor([0, 1, 2, 3, 0, 1, 2, 3])
+        proxies = torch.randn(4, 16, requires_grad=True)
+        loss = hard_proxy_margin_loss(features, labels, proxies, margin=0.2)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreaterEqual(loss.item(), 0.0)
+        loss.backward()
+        self.assertIsNotNone(features.grad)
+        self.assertIsNotNone(proxies.grad)
         self.assertIsNotNone(features.grad)
         self.assertIsNotNone(proxies.grad)
 
@@ -974,6 +1250,34 @@ class UncertaintyKDTargetTest(unittest.TestCase):
         far_loss = unknown_feature_margin_loss(far_features, prototypes, similarity_margin=0.2)
         self.assertAlmostEqual(far_loss.item(), 0.0, places=6)
 
+    def test_pu_unknown_feature_margin_corrects_known_contamination(self):
+        known = torch.tensor([[1.0, 0.0], [1.0, 0.0]], requires_grad=True)
+        mixed = torch.tensor([[1.0, 0.0], [-1.0, 0.0]], requires_grad=True)
+        prototypes = torch.tensor([[1.0, 0.0]])
+        loss = pu_unknown_feature_margin_loss(
+            known,
+            mixed,
+            prototypes,
+            known_prior=0.5,
+            similarity_margin=0.2,
+        )
+        self.assertAlmostEqual(loss.item(), 0.0, places=6)
+        loss.backward()
+        self.assertIsNotNone(mixed.grad)
+        self.assertIsNone(known.grad)
+
+        active_mixed = torch.tensor([[0.8, 0.6]], requires_grad=True)
+        active_loss = pu_unknown_feature_margin_loss(
+            known.detach(),
+            active_mixed,
+            prototypes,
+            known_prior=0.2,
+            similarity_margin=0.2,
+        )
+        self.assertGreater(active_loss.item(), 0.0)
+        active_loss.backward()
+        self.assertGreater(active_mixed.grad.norm().item(), 0.0)
+
     def test_objectosphere_loss_pushes_unknown_norm_down_and_has_gradients(self):
         known = torch.tensor([[2.0, 0.0], [0.0, 2.0]], requires_grad=True)
         unknown = torch.tensor([[1.0, 0.0], [0.0, 1.0]], requires_grad=True)
@@ -1009,6 +1313,27 @@ class UncertaintyKDTargetTest(unittest.TestCase):
     def test_nnpu_known_uncertainty_loss_rejects_invalid_prior(self):
         with self.assertRaises(ValueError):
             nnpu_known_uncertainty_loss(torch.tensor([0.2]), torch.tensor([0.4]), 1.0)
+
+    def test_nnpu_corrected_risk_matches_mixed_pool_decomposition(self):
+        known_uncertainty = torch.tensor([0.2, 0.4], requires_grad=True)
+        unlabeled_uncertainty = torch.tensor([0.3, 0.7], requires_grad=True)
+        prior = 0.25
+        known_u = known_uncertainty.clamp(1e-6, 1.0 - 1e-6)
+        unlabeled_u = unlabeled_uncertainty.clamp(1e-6, 1.0 - 1e-6)
+        known_logit = torch.log1p(-known_u) - torch.log(known_u)
+        unlabeled_logit = torch.log1p(-unlabeled_u) - torch.log(unlabeled_u)
+        expected = (
+            prior * F.softplus(-known_logit).mean()
+            + F.softplus(-unlabeled_logit).mean()
+            - prior * F.softplus(known_logit).mean()
+        )
+        actual = nnpu_known_uncertainty_loss(
+            known_uncertainty,
+            unlabeled_uncertainty,
+            known_prior=prior,
+            risk_mode="nu_corrected",
+        )
+        self.assertTrue(torch.allclose(actual, expected))
 
     def test_nnpu_negative_risk_uses_gradient_correction_not_clamp(self):
         known_uncertainty = torch.tensor([0.001, 0.002], requires_grad=True)
@@ -1155,6 +1480,8 @@ class DiscoveryTrainingDispatchTest(unittest.TestCase):
             alpha_joint_discovery=0.0,
         )
         self.assertGreater(stats["discovery_uncertainty_pu"], 0.0)
+        self.assertIn("discovery_uncertainty_feature_margin_weight_mean", stats)
+        self.assertEqual(stats["discovery_uncertainty_feature_margin_weight_mean"], 0.0)
 
     def test_candidate_gated_knn_boundary_consumes_mixed_unlabeled_batches(self):
         class TinyModel(torch.nn.Module):
@@ -1333,6 +1660,49 @@ class DiscoveryTrainingDispatchTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertGreater(loss.item(), 0.0)
 
+    def test_supervised_center_loss_compacts_same_class_features(self):
+        close = torch.tensor(
+            [[1.0, 0.0], [0.99, 0.01], [0.0, 1.0], [0.01, 0.99]],
+            requires_grad=True,
+        )
+        spread = torch.tensor(
+            [[1.0, 0.0], [0.0, 1.0], [0.0, 1.0], [1.0, 0.0]],
+            requires_grad=True,
+        )
+        labels = torch.tensor([0, 0, 1, 1])
+        close_loss = supervised_center_loss(close, labels)
+        spread_loss = supervised_center_loss(spread, labels)
+        close_loss.backward()
+        self.assertLess(close_loss.item(), spread_loss.item())
+        self.assertTrue(torch.isfinite(close.grad).all())
+
+    def test_supervised_radius_loss_only_penalizes_outliers(self):
+        features = torch.tensor(
+            [[1.0, 0.0], [0.99, 0.01], [0.0, 1.0], [0.01, 0.99]],
+            requires_grad=True,
+        )
+        labels = torch.tensor([0, 0, 1, 1])
+        loss = supervised_radius_loss(features, labels, radius=0.01)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreaterEqual(loss.item(), 0.0)
+        loss.backward()
+        self.assertTrue(torch.isfinite(features.grad).all())
+        self.assertEqual(
+            supervised_radius_loss(features.detach(), labels, radius=1.0).item(),
+            0.0,
+        )
+
+    def test_supervised_center_margin_loss_is_finite_and_differentiable(self):
+        features = torch.tensor(
+            [[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]],
+            requires_grad=True,
+        )
+        labels = torch.tensor([0, 0, 1, 1])
+        loss = supervised_center_margin_loss(features, labels, margin=0.2)
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        self.assertTrue(torch.isfinite(features.grad).all())
+
     def test_proxy_contrastive_loss_works_without_batch_positive_pairs(self):
         features = torch.eye(3, requires_grad=True)
         labels = torch.tensor([0, 1, 2])
@@ -1410,6 +1780,56 @@ class ScoreBehaviorTest(unittest.TestCase):
         self.assertEqual(score.shape, (4,))
         self.assertTrue(np.isfinite(score).all())
         self.assertTrue(np.isfinite(proto_dist).all())
+
+    def test_feature_rejector_fusion_uses_validation_normalization(self):
+        outputs = {
+            "entropy": np.array([0.1, 0.2, 0.4, 0.8]),
+            "epistemic": np.zeros(4),
+            "aleatoric": np.zeros(4),
+            "head_uncertainty": np.zeros(4),
+            "features": np.array(
+                [[1.0, 0.0], [0.9, 0.1], [0.1, 0.9], [0.0, 1.0]],
+                dtype=np.float32,
+            ),
+            "logits": np.array(
+                [[3.0, 0.0], [3.0, 0.0], [0.0, 3.0], [0.0, 3.0]],
+                dtype=np.float32,
+            ),
+            "probs": np.array(
+                [[0.95, 0.05], [0.95, 0.05], [0.05, 0.95], [0.05, 0.95]],
+                dtype=np.float32,
+            ),
+            "labels": np.array([0, 0, 1, 1]),
+            "feature_rejector_score": np.array([0.1, 0.2, 1.0, 1.2]),
+            "known_support_score": np.array([0.8, 0.9, 1.4, 1.6]),
+        }
+        prototypes = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+        normalization = fit_score_normalization(
+            outputs, prototypes=prototypes, gaussian_stats=None
+        )
+        score, _ = compute_open_score(
+            outputs,
+            prototypes=prototypes,
+            score_mode="feature_rejector_fusion",
+            normalization=normalization,
+            fusion_base_score="normalized_entropy_proto",
+            fusion_rejector_weight=0.75,
+        )
+        self.assertEqual(score.shape, (4,))
+        self.assertTrue(np.isfinite(score).all())
+        self.assertGreater(score[-1], score[0])
+
+        missing_support = dict(outputs)
+        missing_support.pop("known_support_score")
+        with self.assertRaises(ValueError):
+            compute_open_score(
+                missing_support,
+                prototypes=prototypes,
+                score_mode="feature_rejector_fusion",
+                normalization=normalization,
+                fusion_base_score="normalized_entropy_proto",
+                fusion_rejector_weight=0.75,
+            )
 
     def test_knn_ood_uses_nearest_known_projection_distances(self):
         outputs = {"features": np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)}
@@ -1917,6 +2337,42 @@ class AutoClusterSelectionTest(unittest.TestCase):
         self.assertTrue(all("gmm_bic" in row for row in diagnostics))
 
 
+class PrototypeRefreshTest(unittest.TestCase):
+    def test_kmeans_refresh_completes_with_single_init(self):
+        class DummyStudent(torch.nn.Module):
+            def forward(self, images):
+                return {
+                    "features": images,
+                    "logits": torch.zeros(images.size(0), 2),
+                    "uncertainty": torch.zeros(images.size(0)),
+                }
+
+        class DummyHead(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.prototypes = torch.nn.Parameter(torch.zeros(3, 2))
+
+        generator = torch.Generator().manual_seed(7)
+        features = torch.randn(12, 2, generator=generator)
+        loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(features, torch.zeros(12, dtype=torch.long)),
+            batch_size=4,
+        )
+        head = DummyHead()
+        stats = initialize_novel_head_kmeans(
+            head,
+            DummyStudent(),
+            loader,
+            torch.device("cpu"),
+            num_novel=3,
+            seed=7,
+            n_init=1,
+        )
+        self.assertEqual(stats["samples"], 12)
+        self.assertTrue(torch.isfinite(head.prototypes).all())
+        self.assertEqual(tuple(head.prototypes.shape), (3, 2))
+
+
 class CalibrationTest(unittest.TestCase):
     def test_open_threshold_maximizes_unknown_rejection_at_known_coverage(self):
         scores = np.array([0.1, 0.2, 0.7, 0.8, 0.3, 0.4, 0.5, 0.9])
@@ -2126,6 +2582,33 @@ class DiscoveryReportTest(unittest.TestCase):
         self.assertTrue(report["clustering_skipped"])
         self.assertIsNone(detail["pred_cluster"])
         self.assertNotIn("cluster_candidate_count", report)
+
+    def test_run_discovery_separates_classifier_accuracy_from_rejection(self):
+        outputs = {
+            "entropy": np.array([0.1, 2.0, 0.2]),
+            "epistemic": np.zeros(3),
+            "aleatoric": np.zeros(3),
+            "probs": np.array([[0.9, 0.1], [0.6, 0.4], [0.8, 0.2]]),
+            "logits": np.array([[2.0, 0.0], [1.2, 0.0], [1.5, 0.0]]),
+            "features": np.eye(3, dtype=np.float32),
+            "projections": np.eye(3, dtype=np.float32),
+            "labels": np.array([0, 0, 1]),
+            "raw_labels": np.array([0, 0, 1]),
+            "is_known": np.array([1, 1, 1]),
+        }
+        report, _, _, _ = run_discovery(
+            outputs,
+            threshold=1.0,
+            num_novel=1,
+            score_mode="entropy_only",
+            enable_clustering=False,
+        )
+
+        # The second known sample is rejected but its class prediction is
+        # correct.  Rejection must not lower ordinary known-class accuracy.
+        self.assertEqual(report["known_class_correct_all_known"], 2)
+        self.assertAlmostEqual(report["known_class_accuracy_all_known"], 2 / 3)
+        self.assertAlmostEqual(report["accepted_correct_fraction_of_all_known"], 1 / 3)
 
 
 if __name__ == "__main__":

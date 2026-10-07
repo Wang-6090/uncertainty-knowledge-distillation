@@ -1,0 +1,83 @@
+{
+  "protocol": {
+    "checkpoint": ".\\runs\\uncertainty_feature_margin_full_s3407\\student.pt",
+    "seed": 3407,
+    "pool_size": 25400,
+    "known_count": 5400,
+    "unknown_count": 20000,
+    "known_prior": 0.2125984251968504,
+    "labels_used_for": "post-hoc gate audit only; not training or calibration"
+  },
+  "uncertainty": {
+    "unknownness_auroc": 0.5875508333333334,
+    "known": {
+      "count": 5400,
+      "mean": 0.7896900177001953,
+      "std": 0.1740303486585617,
+      "q10": 0.5432037115097046,
+      "median": 0.8419348001480103,
+      "q90": 0.9573712348937988
+    },
+    "unknown": {
+      "count": 20000,
+      "mean": 0.8466261625289917,
+      "std": 0.11784182488918304,
+      "q10": 0.6992597579956055,
+      "median": 0.875851035118103,
+      "q90": 0.9598901271820068
+    },
+    "mean_weight": 0.8345216512680054,
+    "weight_ess_fraction": 0.9749196767807007
+  },
+  "msp": {
+    "unknownness_auroc": 0.6891047175925926,
+    "known_mean": 0.7125719785690308,
+    "unknown_mean": 0.5422528386116028
+  },
+  "uncertainty_weighted_margin_gate": {
+    "0.1": {
+      "selected_count": 2540,
+      "unknown_precision": 0.8039370078740158,
+      "known_contamination": 0.19606299212598424,
+      "unknown_recall": 0.1021,
+      "known_selected_fraction": 0.09222222222222222,
+      "mean_uncertainty_selected": 0.9746159315109253
+    },
+    "0.25": {
+      "selected_count": 6350,
+      "unknown_precision": 0.8222047244094488,
+      "known_contamination": 0.1777952755905512,
+      "unknown_recall": 0.26105,
+      "known_selected_fraction": 0.20907407407407408,
+      "mean_uncertainty_selected": 0.9553389549255371
+    },
+    "0.5": {
+      "selected_count": 12700,
+      "unknown_precision": 0.825275590551181,
+      "known_contamination": 0.1747244094488189,
+      "unknown_recall": 0.52405,
+      "known_selected_fraction": 0.4109259259259259,
+      "mean_uncertainty_selected": 0.9271875023841858
+    }
+  },
+  "normalized_power_weight_audit": {
+    "1.0": {
+      "ess_fraction": 0.9749196767807007,
+      "unknown_weight_mass_fraction": 0.7988226413726807,
+      "known_weight_mass_fraction": 0.20117735862731934,
+      "unknown_weight_mass_lift_over_pool_prior": 1.0145047545433044
+    },
+    "2.0": {
+      "ess_fraction": 0.9323177337646484,
+      "unknown_weight_mass_fraction": 0.8053908944129944,
+      "known_weight_mass_fraction": 0.19460900127887726,
+      "unknown_weight_mass_lift_over_pool_prior": 1.0228464359045029
+    },
+    "4.0": {
+      "ess_fraction": 0.8396396040916443,
+      "unknown_weight_mass_fraction": 0.8126067519187927,
+      "known_weight_mass_fraction": 0.18739323318004608,
+      "unknown_weight_mass_lift_over_pool_prior": 1.0320105749368667
+    }
+  }
+}

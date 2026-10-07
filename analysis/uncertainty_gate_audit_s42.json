@@ -1,0 +1,63 @@
+{
+  "protocol": {
+    "checkpoint": ".\\runs\\uncertainty_feature_margin_full_s42\\student.pt",
+    "seed": 42,
+    "pool_size": 25400,
+    "known_count": 5400,
+    "unknown_count": 20000,
+    "known_prior": 0.2125984251968504,
+    "labels_used_for": "post-hoc gate audit only; not training or calibration"
+  },
+  "uncertainty": {
+    "unknownness_auroc": 0.6444288194444445,
+    "known": {
+      "count": 5400,
+      "mean": 0.7069351077079773,
+      "std": 0.21633583307266235,
+      "q10": 0.3764936327934265,
+      "median": 0.768973171710968,
+      "q90": 0.9247666597366333
+    },
+    "unknown": {
+      "count": 20000,
+      "mean": 0.8079759478569031,
+      "std": 0.1438959240913391,
+      "q10": 0.6216851472854614,
+      "median": 0.8463425636291504,
+      "q90": 0.9436725378036499
+    },
+    "mean_weight": 0.7864949107170105,
+    "weight_ess_fraction": 0.9567499756813049
+  },
+  "msp": {
+    "unknownness_auroc": 0.6821757268518519,
+    "known_mean": 0.6823375821113586,
+    "unknown_mean": 0.5178249478340149
+  },
+  "uncertainty_weighted_margin_gate": {
+    "0.1": {
+      "selected_count": 2540,
+      "unknown_precision": 0.8681102362204725,
+      "known_contamination": 0.13188976377952755,
+      "unknown_recall": 0.11025,
+      "known_selected_fraction": 0.062037037037037036,
+      "mean_uncertainty_selected": 0.9597437977790833
+    },
+    "0.25": {
+      "selected_count": 6350,
+      "unknown_precision": 0.8623622047244095,
+      "known_contamination": 0.13763779527559056,
+      "unknown_recall": 0.2738,
+      "known_selected_fraction": 0.16185185185185186,
+      "mean_uncertainty_selected": 0.9361684918403625
+    },
+    "0.5": {
+      "selected_count": 12700,
+      "unknown_precision": 0.8524409448818898,
+      "known_contamination": 0.14755905511811024,
+      "unknown_recall": 0.5413,
+      "known_selected_fraction": 0.34703703703703703,
+      "mean_uncertainty_selected": 0.9026666283607483
+    }
+  }
+}

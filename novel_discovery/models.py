@@ -85,6 +85,7 @@ class UKDNet(nn.Module):
         dropout: float = 0.2,
         pretrained: bool = False,
         cifar_stem: bool = False,
+        rejection_feature_dim: int = 0,
     ) -> None:
         super().__init__()
         if backbone == "mobilenet_v3_small":
@@ -96,6 +97,31 @@ class UKDNet(nn.Module):
         self.dropout_p = dropout
         feat_dim = self.encoder.out_dim
         self.classifier = nn.Linear(feat_dim, num_classes)
+        self.rejection_feature_dim = int(rejection_feature_dim)
+        if self.rejection_feature_dim < 0:
+            raise ValueError("rejection_feature_dim must be non-negative")
+        if self.rejection_feature_dim > 0:
+            # Classification and rejection use separate representations. The
+            # branch is opt-in so historical checkpoints remain unchanged.
+            hidden_dim = max(feat_dim // 2, self.rejection_feature_dim)
+            self.rejection_projector = nn.Sequential(
+                nn.Linear(feat_dim, hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(hidden_dim, self.rejection_feature_dim),
+            )
+            self.rejection_classifier = nn.Linear(
+                self.rejection_feature_dim, num_classes
+            )
+            rejection_hidden = max(self.rejection_feature_dim // 2, 8)
+            self.rejection_uncertainty_head = nn.Sequential(
+                nn.Linear(self.rejection_feature_dim, rejection_hidden),
+                nn.ReLU(inplace=True),
+                nn.Linear(rejection_hidden, 1),
+            )
+        else:
+            self.rejection_projector = None
+            self.rejection_classifier = None
+            self.rejection_uncertainty_head = None
         self.uncertainty_head = nn.Sequential(
             nn.Linear(feat_dim, feat_dim // 2),
             nn.ReLU(inplace=True),
@@ -111,14 +137,37 @@ class UKDNet(nn.Module):
         feat = self.encoder(x)
         feat = F.dropout(feat, p=self.dropout_p, training=stochastic)
         logits = self.classifier(feat)
-        uncertainty = torch.sigmoid(self.uncertainty_head(feat)).squeeze(-1)
+        if self.rejection_projector is None:
+            rejection_features = feat
+            rejection_logits = None
+            uncertainty = torch.sigmoid(self.uncertainty_head(feat)).squeeze(-1)
+        else:
+            rejection_features = self.rejection_projector(feat)
+            rejection_logits = self.rejection_classifier(rejection_features)
+            uncertainty = torch.sigmoid(
+                self.rejection_uncertainty_head(rejection_features)
+            ).squeeze(-1)
         proj = F.normalize(self.projector(feat), dim=-1)
         return {
             "logits": logits,
             "features": feat,
+            "rejection_features": rejection_features,
+            "rejection_logits": rejection_logits,
             "proj": proj,
             "uncertainty": uncertainty,
         }
+
+    def rejection_forward(self, features: torch.Tensor):
+        """Apply the optional rejection branch to encoder-space features."""
+        if self.rejection_projector is None:
+            uncertainty = torch.sigmoid(self.uncertainty_head(features)).squeeze(-1)
+            return features, None, uncertainty
+        rejection_features = self.rejection_projector(features)
+        rejection_logits = self.rejection_classifier(rejection_features)
+        uncertainty = torch.sigmoid(
+            self.rejection_uncertainty_head(rejection_features)
+        ).squeeze(-1)
+        return rejection_features, rejection_logits, uncertainty
 
     @torch.no_grad()
     def mc_predict(self, x: torch.Tensor, mc_samples: int = 8):
@@ -160,6 +209,7 @@ def build_model(
     dropout: float = 0.2,
     pretrained: bool = False,
     cifar_stem: bool = False,
+    rejection_feature_dim: int = 0,
 ) -> UKDNet:
     return UKDNet(
         num_classes=num_classes,
@@ -168,4 +218,5 @@ def build_model(
         dropout=dropout,
         pretrained=pretrained,
         cifar_stem=cifar_stem,
+        rejection_feature_dim=rejection_feature_dim,
     )

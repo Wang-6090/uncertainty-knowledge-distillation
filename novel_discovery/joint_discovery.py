@@ -199,6 +199,59 @@ def balanced_assignments(
     return assignments / assignments.sum(dim=1, keepdim=True).clamp_min(1e-8)
 
 
+@torch.no_grad()
+def global_balanced_assignments(
+    current_logits: torch.Tensor,
+    memory_logits: torch.Tensor | None = None,
+    temperature: float = 1.0,
+    iterations: int = 3,
+    current_weights: torch.Tensor | None = None,
+    memory_weight: float = 1.0,
+) -> torch.Tensor:
+    """Assign current samples using a detached cross-batch assignment pool.
+
+    Batch-only Sinkhorn sees too few examples to reliably populate all novel
+    prototypes.  This helper balances the current rows together with a FIFO
+    memory bank, then returns only the current rows as pseudo-label targets.
+    The memory rows are detached and never receive gradients.
+    """
+    if current_logits.ndim != 2:
+        raise ValueError("current_logits must be two-dimensional")
+    if current_logits.numel() == 0:
+        return current_logits
+    if memory_logits is None or memory_logits.numel() == 0:
+        return balanced_assignments(
+            current_logits,
+            temperature=temperature,
+            iterations=iterations,
+            sample_weights=current_weights,
+        )
+    if memory_logits.ndim != 2:
+        raise ValueError("memory_logits must be two-dimensional")
+    if memory_logits.size(1) != current_logits.size(1):
+        raise ValueError("memory and current logits must have the same class dimension")
+    memory_weight = float(memory_weight)
+    if memory_weight <= 0.0:
+        raise ValueError("memory_weight must be positive")
+    current = current_logits.detach()
+    memory = memory_logits.detach().to(current)
+    if current_weights is None:
+        current_mass = current.new_ones(current.size(0))
+    else:
+        current_mass = current_weights.reshape(-1).detach().to(current).clamp_min(0.0)
+        if current_mass.numel() != current.size(0):
+            raise ValueError("current_weights must match current_logits rows")
+    memory_mass = current.new_full((memory.size(0),), memory_weight)
+    combined = torch.cat([current, memory], dim=0)
+    assignments = balanced_assignments(
+        combined,
+        temperature=temperature,
+        iterations=iterations,
+        sample_weights=torch.cat([current_mass, memory_mass], dim=0),
+    )
+    return assignments[: current.size(0)]
+
+
 def balanced_assignment_loss(
     logits: torch.Tensor,
     temperature: float = 1.0,
@@ -247,17 +300,23 @@ def novel_consistency_loss(
     temperature: float = 1.0,
     sample_weights: torch.Tensor | None = None,
     weighted_assignments: bool = True,
+    first_assignments: torch.Tensor | None = None,
+    second_assignments: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Use one augmented view as a balanced pseudo-label teacher."""
     if first_logits.numel() == 0 or second_logits.numel() == 0:
         return first_logits.new_tensor(0.0)
     assignment_weights = sample_weights if weighted_assignments else None
-    first_target = balanced_assignments(
-        first_logits.detach(), temperature=temperature, sample_weights=assignment_weights
-    )
-    second_target = balanced_assignments(
-        second_logits.detach(), temperature=temperature, sample_weights=assignment_weights
-    )
+    first_target = first_assignments
+    if first_target is None:
+        first_target = balanced_assignments(
+            first_logits.detach(), temperature=temperature, sample_weights=assignment_weights
+        )
+    second_target = second_assignments
+    if second_target is None:
+        second_target = balanced_assignments(
+            second_logits.detach(), temperature=temperature, sample_weights=assignment_weights
+        )
     # Measure confidence relative to a uniform novel assignment. This keeps
     # the threshold meaningful when the number of novel classes is large.
     num_novel = first_logits.size(-1)
@@ -294,6 +353,9 @@ def prototype_pseudo_label_loss(
     assignment_temperature: float = 1.0,
     sample_weights: torch.Tensor | None = None,
     weighted_assignments: bool = True,
+    first_assignments: torch.Tensor | None = None,
+    second_assignments: torch.Tensor | None = None,
+    target_mode: str = "hard",
 ) -> torch.Tensor:
     """Cross-view hard pseudo-label loss for prototype discovery.
 
@@ -306,16 +368,26 @@ def prototype_pseudo_label_loss(
     if first_logits.numel() == 0 or second_logits.numel() == 0:
         return first_logits.new_tensor(0.0)
     assignment_weights = sample_weights if weighted_assignments else None
-    first_target = balanced_assignments(
-        first_logits.detach(),
-        temperature=assignment_temperature,
-        sample_weights=assignment_weights,
-    ).argmax(dim=-1)
-    second_target = balanced_assignments(
-        second_logits.detach(),
-        temperature=assignment_temperature,
-        sample_weights=assignment_weights,
-    ).argmax(dim=-1)
+    if first_assignments is None:
+        first_assignments = balanced_assignments(
+            first_logits.detach(),
+            temperature=assignment_temperature,
+            sample_weights=assignment_weights,
+        )
+    if second_assignments is None:
+        second_assignments = balanced_assignments(
+            second_logits.detach(),
+            temperature=assignment_temperature,
+            sample_weights=assignment_weights,
+        )
+    if target_mode not in {"hard", "soft"}:
+        raise ValueError("target_mode must be 'hard' or 'soft'")
+    if target_mode == "hard":
+        first_target = first_assignments.argmax(dim=-1)
+        second_target = second_assignments.argmax(dim=-1)
+    else:
+        first_target = first_assignments
+        second_target = second_assignments
     first_conf = (
         first_logits.detach().softmax(dim=-1).max(dim=-1).values
         * first_logits.size(-1)
@@ -329,7 +401,13 @@ def prototype_pseudo_label_loss(
         mask = confidence >= float(confidence_threshold)
         if not mask.any():
             return logits.new_tensor(0.0)
-        values = F.cross_entropy(logits[mask], targets[mask], reduction="none")
+        if target_mode == "hard":
+            values = F.cross_entropy(logits[mask], targets[mask], reduction="none")
+        else:
+            values = -(
+                targets[mask].detach()
+                * F.log_softmax(logits[mask], dim=-1)
+            ).sum(dim=-1)
         if sample_weights is None:
             return values.mean()
         weights = sample_weights[mask].detach().to(values).clamp_min(0.0)
@@ -435,6 +513,13 @@ def joint_discovery_loss(
     alpha_memory_neighbor: float = 0.0,
     memory_neighbor_k: int = 5,
     memory_temperature: float = 0.2,
+    global_assignment: bool = False,
+    global_memory_logits: torch.Tensor | None = None,
+    global_memory_weight: float = 1.0,
+    global_assignment_iterations: int = 3,
+    pseudo_target_mode: str = "hard",
+    first_target_logits: torch.Tensor | None = None,
+    second_target_logits: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """Combine novel or unified-space pseudo-label objectives."""
     first_joint_logits = combine_known_novel_logits(
@@ -443,6 +528,60 @@ def joint_discovery_loss(
     second_joint_logits = combine_known_novel_logits(
         second_known_logits, second_logits, known_temperature=known_temperature
     )
+
+    first_assignments = None
+    second_assignments = None
+    assignment_first_logits = (
+        first_joint_logits if first_target_logits is None else first_target_logits.detach()
+    )
+    assignment_second_logits = (
+        second_joint_logits if second_target_logits is None else second_target_logits.detach()
+    )
+    if global_assignment:
+        first_assignments = global_balanced_assignments(
+            assignment_first_logits,
+            memory_logits=global_memory_logits,
+            temperature=assignment_temperature,
+            iterations=global_assignment_iterations,
+            current_weights=sample_weights,
+            memory_weight=global_memory_weight,
+        )
+        second_assignments = global_balanced_assignments(
+            assignment_second_logits,
+            memory_logits=global_memory_logits,
+            temperature=assignment_temperature,
+            iterations=global_assignment_iterations,
+            current_weights=sample_weights,
+            memory_weight=global_memory_weight,
+        )
+    if first_target_logits is not None:
+        first_assignments = balanced_assignments(
+            assignment_first_logits,
+            temperature=assignment_temperature,
+            iterations=global_assignment_iterations,
+            sample_weights=sample_weights if weighted_assignments else None,
+        )
+    if second_target_logits is not None:
+        second_assignments = balanced_assignments(
+            assignment_second_logits,
+            temperature=assignment_temperature,
+            iterations=global_assignment_iterations,
+            sample_weights=sample_weights if weighted_assignments else None,
+        )
+
+    def assignment_diagnostics(logits: torch.Tensor):
+        probs = logits.detach().softmax(dim=-1).clamp_min(1e-8)
+        entropy = -(probs * probs.log()).sum(dim=-1).mean()
+        max_probability = probs.max(dim=-1).values.mean()
+        active_classes = logits.argmax(dim=-1).unique().numel()
+        return entropy, max_probability, logits.new_tensor(float(active_classes))
+
+    first_entropy, first_max_probability, first_active_classes = assignment_diagnostics(
+        first_joint_logits
+    )
+    second_entropy, second_max_probability, second_active_classes = assignment_diagnostics(
+        second_joint_logits
+    )
     consistency = novel_consistency_loss(
         first_joint_logits,
         second_joint_logits,
@@ -450,6 +589,8 @@ def joint_discovery_loss(
         temperature=assignment_temperature,
         sample_weights=sample_weights,
         weighted_assignments=weighted_assignments,
+        first_assignments=first_assignments,
+        second_assignments=second_assignments,
     )
     balance = 0.5 * (
         balanced_assignment_loss(first_joint_logits, sample_weights=sample_weights)
@@ -486,6 +627,9 @@ def joint_discovery_loss(
         assignment_temperature=assignment_temperature,
         sample_weights=sample_weights,
         weighted_assignments=weighted_assignments,
+        first_assignments=first_assignments,
+        second_assignments=second_assignments,
+        target_mode=pseudo_target_mode,
     )
     total = (
         alpha_consistency * consistency
@@ -503,4 +647,51 @@ def joint_discovery_loss(
         "neighbor": neighbor,
         "memory_neighbor": memory_neighbor,
         "pseudo": pseudo,
+        "assignment_entropy": 0.5 * (first_entropy + second_entropy),
+        "assignment_max_probability": 0.5 * (
+            first_max_probability + second_max_probability
+        ),
+        "assignment_active_classes": 0.5 * (
+            first_active_classes + second_active_classes
+        ),
+        "global_assignment_entropy": (
+            0.5
+            * (
+                -(first_assignments * first_assignments.clamp_min(1e-8).log()).sum(dim=-1).mean()
+                + -(second_assignments * second_assignments.clamp_min(1e-8).log()).sum(dim=-1).mean()
+            )
+            if first_assignments is not None
+            else first_joint_logits.new_tensor(0.0)
+        ),
+        "global_assignment_max_probability": (
+            0.5
+            * (first_assignments.max(dim=-1).values.mean() + second_assignments.max(dim=-1).values.mean())
+            if first_assignments is not None
+            else first_joint_logits.new_tensor(0.0)
+        ),
+        "global_assignment_active_classes": (
+            first_joint_logits.new_tensor(
+                0.5
+                * (
+                    first_assignments.argmax(dim=-1).unique().numel()
+                    + second_assignments.argmax(dim=-1).unique().numel()
+                )
+            )
+            if first_assignments is not None
+            else first_joint_logits.new_tensor(0.0)
+        ),
     }
+    if first_target_logits is not None:
+        first_assignments = balanced_assignments(
+            assignment_first_logits,
+            temperature=assignment_temperature,
+            iterations=global_assignment_iterations,
+            sample_weights=sample_weights if weighted_assignments else None,
+        )
+    if second_target_logits is not None:
+        second_assignments = balanced_assignments(
+            assignment_second_logits,
+            temperature=assignment_temperature,
+            iterations=global_assignment_iterations,
+            sample_weights=sample_weights if weighted_assignments else None,
+        )

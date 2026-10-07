@@ -221,6 +221,18 @@ def _known_labels(dataset: Dataset) -> list[int]:
         for child in dataset.datasets:
             labels.extend(_known_labels(child))
         return labels
+    # ImageFolder exposes both ``targets`` (integer class ids) and ``samples``.
+    # Its open-set mapping is keyed by class *names*, unlike CIFAR's mapping,
+    # so handle it before the generic integer-target path below.
+    if isinstance(dataset, OpenSetImageFolder):
+        return [
+            int(
+                dataset.known_to_idx.get(
+                    dataset.base.classes[int(dataset.base.samples[index][1])], -1
+                )
+            )
+            for index in dataset.allowed_indices
+        ]
     if hasattr(dataset, "allowed_indices") and hasattr(dataset, "base"):
         allowed_indices = list(dataset.allowed_indices)
         if hasattr(dataset.base, "targets"):
@@ -276,6 +288,15 @@ def _known_flags(dataset: Dataset) -> list[bool]:
         for child in dataset.datasets:
             flags.extend(_known_flags(child))
         return flags
+    # ImageFolder has an integer ``targets`` attribute too, but
+    # ``known_to_idx`` is keyed by folder names. Do not treat those raw ids as
+    # CIFAR ids: this flag feeds mixed-pool prior estimation and PU training.
+    if isinstance(dataset, OpenSetImageFolder):
+        return [
+            dataset.base.classes[int(dataset.base.samples[index][1])]
+            in dataset.known_to_idx
+            for index in dataset.allowed_indices
+        ]
     if hasattr(dataset, "allowed_indices") and hasattr(dataset, "base"):
         allowed_indices = list(dataset.allowed_indices)
         known_to_idx = getattr(dataset, "known_to_idx", {})
@@ -472,6 +493,16 @@ def unknown_subset(dataset: Dataset) -> Dataset:
     """Build an unlabeled view of the samples outside the known classes."""
     if hasattr(dataset, "allowed_indices") and hasattr(dataset, "base"):
         allowed_indices = list(dataset.allowed_indices)
+        # ImageFolder also exposes integer ``targets``; its known-class map is
+        # keyed by folder names, so select its unknown rows by class name.
+        if isinstance(dataset, OpenSetImageFolder):
+            indices = []
+            for local_index, real_index in enumerate(allowed_indices):
+                raw_label = int(dataset.base.samples[real_index][1])
+                class_name = dataset.base.classes[raw_label]
+                if class_name not in dataset.known_to_idx:
+                    indices.append(local_index)
+            return Subset(dataset, indices)
         if hasattr(dataset.base, "targets"):
             raw_targets = dataset.base.targets
             indices = [
@@ -517,6 +548,9 @@ def build_open_validation_and_discovery(
     discovery_pool_mode: str,
     unknown_open_val_pool: Dataset | None = None,
     known_discovery_pool: Dataset | None = None,
+    matched_discovery_pool: bool = False,
+    matched_pool_size: int = 0,
+    matched_known_prior: float = 0.2,
 ):
     """Reserve training-split samples for open validation, never from test.
 
@@ -539,7 +573,33 @@ def build_open_validation_and_discovery(
     else:
         open_val = None
 
-    if discovery_pool_mode == "unknown":
+    if matched_discovery_pool:
+        pool_size = int(matched_pool_size)
+        known_prior = float(matched_known_prior)
+        if pool_size <= 0:
+            raise ValueError("matched_pool_size must be positive")
+        if not 0.0 <= known_prior < 1.0:
+            raise ValueError("matched_known_prior must be in [0, 1)")
+        known_count = int(round(pool_size * known_prior)) if discovery_pool_mode == "mixed" else 0
+        unknown_count = pool_size - known_count
+        if len(unknown_pool) < unknown_count:
+            raise ValueError(
+                "Not enough novel samples for the matched discovery pool: "
+                f"need {unknown_count}, have {len(unknown_pool)}"
+            )
+        matched_unknown_pool = limit_dataset(unknown_pool, unknown_count, seed + 31)
+        if known_count:
+            if known_discovery_pool is None or len(known_discovery_pool) < known_count:
+                available = 0 if known_discovery_pool is None else len(known_discovery_pool)
+                raise ValueError(
+                    "Not enough reserved known samples for the matched mixed pool: "
+                    f"need {known_count}, have {available}"
+                )
+            matched_known_pool = limit_dataset(known_discovery_pool, known_count, seed + 47)
+            discovery_pool = ConcatDataset([matched_known_pool, matched_unknown_pool])
+        else:
+            discovery_pool = matched_unknown_pool
+    elif discovery_pool_mode == "unknown":
         discovery_pool = unknown_pool
     else:
         if known_discovery_pool is None:
@@ -569,6 +629,9 @@ def build_data_bundle(
     calibration_overlap_control: bool = False,
     known_split_mode: str = "random",
     mixed_known_pool_ratio: float = 0.2,
+    matched_discovery_pool: bool = False,
+    matched_pool_size: int = 0,
+    matched_known_prior: float = 0.2,
 ) -> DataBundle:
     if discovery_pool_mode not in {"unknown", "mixed"}:
         raise ValueError(f"Unsupported discovery pool mode: {discovery_pool_mode}")
@@ -581,6 +644,25 @@ def build_data_bundle(
             "mixed discovery requires 0 < mixed_known_pool_ratio < 1 so the "
             "known portion is disjoint from supervised training"
         )
+    if matched_discovery_pool:
+        if not 0.0 < float(mixed_known_pool_ratio) < 1.0:
+            raise ValueError(
+                "matched discovery requires 0 < mixed_known_pool_ratio < 1 "
+                "to reserve the same known training subset in both arms"
+            )
+        if int(matched_pool_size) <= 0:
+            raise ValueError("matched_pool_size must be positive")
+        if not 0.0 < float(matched_known_prior) < 1.0:
+            raise ValueError("matched_known_prior must be in (0, 1)")
+        if discovery_pool_mode == "mixed" and int(round(int(matched_pool_size) * float(matched_known_prior))) <= 0:
+            raise ValueError("matched mixed pool must contain at least one known sample")
+        if discovery_pool_mode == "mixed" and int(round(int(matched_pool_size) * float(matched_known_prior))) >= int(matched_pool_size):
+            raise ValueError("matched mixed pool must contain at least one novel sample")
+        if limit_discovery and int(limit_discovery) != int(matched_pool_size):
+            raise ValueError(
+                "When matched_discovery_pool is enabled, limit_discovery must be "
+                "zero or equal matched_pool_size"
+            )
 
     if dataset_name.lower() == "cifar100":
         known_classes, novel_classes = make_class_split(list(range(100)), num_known, seed, split_path)
@@ -600,7 +682,7 @@ def build_data_bundle(
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
         known_discovery_pool = None
-        if discovery_pool_mode == "mixed":
+        if discovery_pool_mode == "mixed" or matched_discovery_pool:
             train_set, known_discovery_pool = split_known_for_discovery(
                 train_set,
                 mixed_known_pool_ratio,
@@ -618,6 +700,9 @@ def build_data_bundle(
             discovery_pool_mode,
             unknown_open_val_pool=unknown_open_val_pool,
             known_discovery_pool=known_discovery_pool,
+            matched_discovery_pool=matched_discovery_pool,
+            matched_pool_size=matched_pool_size,
+            matched_known_prior=matched_known_prior,
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
@@ -674,7 +759,7 @@ def build_data_bundle(
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
         known_discovery_pool = None
-        if discovery_pool_mode == "mixed":
+        if discovery_pool_mode == "mixed" or matched_discovery_pool:
             train_set, known_discovery_pool = split_known_for_discovery(
                 train_set,
                 mixed_known_pool_ratio,
@@ -692,6 +777,9 @@ def build_data_bundle(
             discovery_pool_mode,
             unknown_open_val_pool=unknown_open_val_pool,
             known_discovery_pool=known_discovery_pool,
+            matched_discovery_pool=matched_discovery_pool,
+            matched_pool_size=matched_pool_size,
+            matched_known_prior=matched_known_prior,
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
@@ -730,7 +818,7 @@ def build_data_bundle(
             train_full, val_ratio=0.1, seed=seed, mode=known_split_mode
         )
         known_discovery_pool = None
-        if discovery_pool_mode == "mixed":
+        if discovery_pool_mode == "mixed" or matched_discovery_pool:
             train_set, known_discovery_pool = split_known_for_discovery(
                 train_set,
                 mixed_known_pool_ratio,
@@ -749,6 +837,9 @@ def build_data_bundle(
             discovery_pool_mode,
             unknown_open_val_pool=unknown_open_val_pool,
             known_discovery_pool=known_discovery_pool,
+            matched_discovery_pool=matched_discovery_pool,
+            matched_pool_size=matched_pool_size,
+            matched_known_prior=matched_known_prior,
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
