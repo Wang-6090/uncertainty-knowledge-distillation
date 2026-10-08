@@ -357,6 +357,22 @@ def split_validation_for_calibration(
     return Subset(dataset, selection_indices), Subset(dataset, calibration_indices)
 
 
+def dataset_source_indices(dataset: Dataset) -> list[int]:
+    """Resolve subsets to stable positions in their base dataset for split audits."""
+    if isinstance(dataset, Subset):
+        parent_indices = dataset_source_indices(dataset.dataset)
+        return [parent_indices[int(index)] for index in dataset.indices]
+    if isinstance(dataset, ConcatDataset):
+        indices: list[int] = []
+        offset = 0
+        for child in dataset.datasets:
+            child_indices = dataset_source_indices(child)
+            indices.extend(offset + index for index in child_indices)
+            offset += len(child_indices)
+        return indices
+    return list(range(len(dataset)))
+
+
 def split_known_for_discovery(
     dataset: Dataset,
     pool_ratio: float,

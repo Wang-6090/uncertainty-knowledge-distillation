@@ -1,5 +1,65 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 2026-10-09: uncertainty loss 2x2 component screen
+
+To avoid attributing the previous positive signal to an inseparable loss
+combination, a paired 2x2 pilot was added. It independently toggles mixed-pool
+uncertainty nnPU and uncertainty-weighted feature margin while keeping the
+teacher, split, matched discovery pool, rejector, and 95% known-coverage
+calibration fixed. The 3-epoch seed-42 results were:
+
+| arm | AUROC | FPR95 | OSCR | known accept | unknown reject |
+|---|---:|---:|---:|---:|---:|
+| baseline | 0.6758 | 0.8020 | 0.1189 | 95.51% | 8.27% |
+| nnPU only | 0.7191 | 0.7072 | 0.2170 | 94.68% | 17.79% |
+| feature margin only | 0.7232 | 0.7488 | 0.1821 | 97.50% | 9.52% |
+| combined | 0.7126 | 0.7404 | 0.1811 | 96.01% | 13.28% |
+
+The current evidence favors nnPU as the more useful component for the fixed
+operating point: unknown rejection increases by 9.52 percentage points over
+baseline. Feature margin mainly improves ranking in this pilot, while the
+combined arm does not show synergy after only three epochs. This is still a
+single-seed, limited-data pilot and does not prove that feature overlap is
+solved. A 10-epoch paired run is being used to distinguish a short-training
+optimization conflict from a genuinely weak combination. Details are in
+`analysis/uncertainty_2x2_pilot_s42_20261009.md`; the runner is
+`scripts/run_uncertainty_2x2_pilot.ps1`.
+
+## 2026-10-09: 独立 rejection 表征上的 PU 特征间隔损失
+
+### 本轮修改
+
+针对“已知/未知共享特征和分数仍然重叠”的核心问题，本轮增加了一个独立的
+`rejection_features` 分支，并在该分支上加入混合 discovery pool 的 PU 特征间隔
+损失。它不把混合池全部当成未知，而是使用已知先验做风险修正：先计算混合池中
+样本到已知 rejection prototypes 的相似度间隔损失，再减去估计的已知贡献，得到
+未知部分的近似风险。主分类分支的 CE、KD 和原有损失保持不变。
+
+相关实现位于 `novel_discovery/losses.py` 和 `novel_discovery/pipeline.py`，命令行入口
+是 `--rejection-feature-dim`、`--alpha-discovery-rejection-pu-feature-margin` 和
+`--discovery-rejection-feature-margin`。该项要求 `--discovery-pool-mode mixed`，并且
+要求显式设置 `--rejection-feature-dim > 0`；默认权重为 0，因此不会改变历史配置的
+行为。训练日志会记录 `discovery_rejection_pu_feature_margin`，便于确认该项是否真的
+激活。
+
+### 本轮验证与结论
+
+已完成一轮 toy smoke：1 个 epoch、32 个训练样本、80 个 mixed discovery pool 样本、
+独立 rejection 表征维度 128。训练正常保存 checkpoint，日志中的新损失为
+`0.301456`，说明在该构造下损失非零并进入训练计算；此前间隔过大时损失为 0，已据此
+增加日志和函数级梯度测试。该结果只证明代码路径和梯度路径可运行，不能证明未知检测
+效果，也不能与 CIFAR-100 的完整实验直接比较。
+
+当前仍没有证据表明该方法解决了核心问题。下一步应在固定 CIFAR-100 语义隔离
+60/40、相同教师/学生、相同 discovery pool、训练轮数、checkpoint 选择和独立阈值校准
+协议下，做 baseline 与该 rejection-PU treatment 的配对对照；至少比较 AUROC、FPR95、
+OSCR、known accuracy/acceptance、unknown rejection，以及特征/分数分布重叠。只有在
+多个 seed 上提升排序和未知拒绝，且不明显增加已知误拒后，才考虑保留到主线。
+
+这一路线的思路来自 PU learning 的混合池风险分解和 open-set recognition 中显式拒绝
+空间的做法，但当前实现不是某篇论文的完整复现。它暂时属于待验证实验分支，不应把
+toy smoke 的非零 loss 写成算法有效性结论。
+
 本项目面向开放场景下的图像识别问题，研究如何同时完成已知类别分类、未知样本检测和未知样本的新类聚类。
 
 当前仓库已经实现了一套可运行的实验框架，但还不能直接宣称已经得到最终有效的新类发现方法。现阶段重点是建立公平、可复现的基线，验证不确定性知识蒸馏和 discovery pool 学习是否真正改善开放集检测与新类聚类。
@@ -54,7 +114,53 @@
 独立 rejection head 上的 uniform OE 已完成完整数据三随机种子配对复核。seed=42 有改善，seed=43 基本持平/部分指标下降，seed=44 的 AUROC、FPR95、OSCR 和 known accuracy 变差；因此它是效果混合的 opt-in 消融，不是已验证有效的主方法。完整结果见
 `analysis/rejection_uniform_oe_full_data_s42_20261007.md`。
 
-下一步优先修正评估协议：当前同一 validation split 同时用于 checkpoint 选择和阈值校准。应固定训练/模型选择规则，划分独立 calibration 子集后，重新评估现有候选，而不是继续扩大 OE 权重搜索或调整全局阈值。之后再针对语义相近未知类，检查特征距离与分数分布在不同训练 seed 上是否共同改善；所有比较继续报告 AUROC、FPR95、OSCR、known accuracy/acceptance、unknown rejection 和 feature-overlap，聚类指标单独报告，不能根据测试集标签调参。
+历史主线实验中，checkpoint 选择与阈值校准曾共用 validation split；2026-10-08 的 seed=42 配对复核已改用互斥子集，但只验证了这一组模型，不能覆盖旧实验结论。接下来应先保存并核对校准/模型选择样本索引，再用至少 3 个配对 seed 复核该训练改动；同时报告 AUROC、FPR95、OSCR、known accuracy/acceptance、unknown rejection 和 feature-overlap，聚类指标单独报告，不能根据测试集标签调参。
+
+## 2026-10-08 独立校准集配对复核
+
+为检查之前的训练改动是否依赖验证集阈值校准，本次在 CIFAR-100 语义隔离 60/40、seed=42 上，对 baseline 与 treatment 使用同一检测协议重新评估。检测配置固定为：完整测试集（6000 known / 4000 unknown）、matched discovery pool 5400（已知先验 0.2）、nnPU feature rejector（`support_augmented`）、独立校准比例 0.4、目标已知覆盖率 95%；聚类跳过，因此本次只评价分类与未知检测，不评价新类聚类。
+
+训练对照为同 seed、同教师/学生架构与训练预算的配对模型。baseline 不启用 discovery uncertainty nnPU loss 与 uncertainty-weighted feature margin；treatment 启用 `alpha_discovery_uncertainty_pu=0.1`、known prior `0.2`、`nu_corrected` risk，以及 `alpha_discovery_uncertainty_feature_margin=0.05`、margin `0.2`。两者按相同验证集已知分类准确率规则选 checkpoint，baseline 选到 epoch 10，treatment 选到 epoch 8；treatment 最佳验证准确率为 0.5167，baseline 为 0.4701。检测校准集与 checkpoint 选择子集在报告中标记为互斥（1823/1177 个样本）。
+
+| 指标 | baseline | treatment | treatment - baseline |
+|---|---:|---:|---:|
+| AUROC | 0.7664 | 0.7743 | +0.0079 |
+| AUPR | 0.6425 | 0.6496 | +0.0070 |
+| FPR95（越低越好） | 0.6357 | 0.6203 | -0.0153 |
+| OSCR | 0.3842 | 0.4296 | +0.0454 |
+| 已知分类准确率（全体 known） | 0.4433 | 0.4987 | +0.0553 |
+| 已知接受率 | 0.9587 | 0.9542 | -0.0045 |
+| 未知拒绝率 | 0.1663 | 0.1753 | +0.0090 |
+| 已知误拒数量 / 6000 | 248 | 275 | +27 |
+| 未知正确拒绝数量 / 4000 | 665 | 701 | +36 |
+
+分数诊断显示，treatment 的 entropy AUROC 从 0.6746 升至 0.7010，prototype distance AUROC 从 0.6716 升至 0.7125，epistemic AUROC 从 0.6260 升至 0.6536；但单独的模型 uncertainty head AUROC 从 0.6664 变为 0.6620，没有改善。这个模式更像是分类置信度/原型几何有所改善，而不是不确定性分支本身提供了更好的未知排序。最终拒绝率虽增加约 0.9 个百分点，已知误拒也增加 27 个，因此不能把拒绝率增量单独解释为有效分离。
+
+**结论与限制：** 这是一个完整测试集上的单 seed pilot，只有小幅正向信号，不能证明方法稳定有效，也没有验证聚类效果。未知拒绝率仍只有 17.53%，仍有 3299/4000 个未知样本被接受，核心问题没有解决。历史 JSON 只记录样本数和互斥标志；事后用保存的配置与当前确定性划分函数重建 seed=42 两臂数据划分，模型选择/校准分别为 1823/1177 个样本，实际索引交集均为 0。为后续实验增加了索引审计：新报告保存底层索引空间、数量、SHA-256 和交集计数。若多 seed 仍能提升排序且不以明显增加已知误拒为代价，再保留该训练改动；否则应回到表征/数据协议诊断，而不是继续调阈值。实验产物位于 `runs/semantic_isolated_cal40_s42_{baseline,treatment}_detect/`，训练配置与历史位于对应的 `runs/semantic_isolated_cal40_s42_{baseline,treatment}/`。
+
+### seed=43 配对复核
+
+沿用 seed=42 的唯一对照变量和评估协议，使用 seed=43 独立训练 baseline/treatment，并在完整 CIFAR-100 测试集上比较。两组均使用同一 seed、数据划分、教师模型、网络、训练预算、matched discovery pool（5400，known fraction/prior 均为 0.2）和独立校准比例 0.4；treatment 额外启用 uncertainty nnPU（权重 0.1、`nu_corrected`、prior 0.2）和 uncertainty-weighted feature margin（权重 0.05、margin 0.2）。两组配置差异还包括预期的输出路径和根据验证准确率选出的 checkpoint epoch（baseline 6、treatment 10）；baseline 未启用 nnPU 时其 prior 设置为 `auto`，该项不参与损失计算。校准与 checkpoint 选择子集分别为 1175/1825 个样本，报告标记为互斥，但没有保存样本 ID，因此仍未完成索引级互斥审计。
+
+| 指标 | baseline | treatment | treatment - baseline |
+|---|---:|---:|---:|
+| AUROC | 0.7722 | 0.7942 | +0.0220 |
+| AUPR | 0.6503 | 0.6728 | +0.0225 |
+| FPR95（越低越好） | 0.6343 | 0.5717 | -0.0627 |
+| OSCR | 0.3877 | 0.4363 | +0.0486 |
+| 已知分类准确率（全体 known） | 0.4525 | 0.4982 | +0.0457 |
+| 已知接受率 | 0.9478 | 0.9505 | +0.0027 |
+| 未知拒绝率 | 0.2003 | 0.2140 | +0.0138 |
+| 已知误拒数量 / 6000 | 313 | 297 | -16 |
+| 未知正确拒绝数量 / 4000 | 801 | 856 | +55 |
+
+seed=43 在排序指标、OSCR、known accuracy 和拒绝计数上均优于 baseline，方向与 seed=42 一致，是值得继续复核的正向信号。特别是已知误拒数没有随未知拒绝增加而变多，说明这次拒绝增益不只是把更多已知样本错误拒掉。但仍有 3144/4000 个未知样本被接受，AUROC/FPR95 也离理想水平较远；两个 seed 仍不足以证明稳定收益。用相同配置重建两臂的 seed=43 数据划分后，校准/选择集数量为 1175/1825，实际底层索引交集为 0。新代码会在后续运行报告里直接写入索引哈希与交集计数。该结果只支持“继续做多 seed 配对验证”，不支持把 treatment 宣称为已解决核心问题或默认主方法。下一步完成第三个配对 seed，并汇总逐 seed 差值和波动。产物位于 `runs/semantic_isolated_cal40_s43_{baseline,treatment}/` 与对应的 `_detect/` 目录。
+
+### 校准切分审计实现
+
+开放集评估报告新增 `validation_protocol.sample_index_audit`，解析嵌套 `Subset` 与 `ConcatDataset` 的底层位置索引，保存模型选择/阈值校准的索引数量、排序索引集合 SHA-256、交集数量及 `disjoint` 布尔值；不保存样本内容或逐条索引。该字段是审计证据，不改变训练或阈值算法。旧 seed=42/43 报告没有此字段，已用相同保存配置重建划分并确认交集为 0；未来报告可直接验证。新增单元测试覆盖嵌套子集及拼接数据集索引映射。
+
+第三个配对随机种子可从保存配置复现：`python scripts/run_paired_seed.py --seed 44`。脚本以 seed=43 的已保存 baseline/treatment 配置为模板，生成同一个 seed=44 教师、两臂学生和两臂完整检测报告，所有产物写入新的 `runs/semantic_isolated_cal40_s44_*` 目录。当前 treatment 同时增加 nnPU 与 feature-margin 两项损失；即使第三 seed 方向一致，也只能支持“这组损失组合值得进一步验证”，不能区分两项各自的贡献。下一阶段应在固定 seed 和评估协议下做小型 2×2 消融（两项分别关闭/开启），再决定是否保留或简化组合。
 
 ## 已实现功能
 

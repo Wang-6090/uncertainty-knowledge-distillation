@@ -869,6 +869,7 @@ def train_one_epoch_student(
     alpha_rejection_center: float = 0.0,
     alpha_rejection_kd: float = 0.0,
     alpha_rejection_feat_kd: float = 0.0,
+    alpha_discovery_rejection_pu_feature_margin: float = 0.0,
     alpha_kd: float = 1.0,
     alpha_feat_kd: float = 0.0,
     alpha_supcon: float = 0.1,
@@ -1084,6 +1085,7 @@ def train_one_epoch_student(
     discovery_knn_boundary_meter = AverageMeter()
     discovery_uncertainty_separation_meter = AverageMeter()
     discovery_uncertainty_pu_meter = AverageMeter()
+    discovery_rejection_pu_feature_margin_meter = AverageMeter()
     discovery_selective_unknown_meter = AverageMeter()
     discovery_selective_energy_meter = AverageMeter()
     angular_meter = AverageMeter()
@@ -1303,6 +1305,7 @@ def train_one_epoch_student(
         loss_discovery_knn_boundary = s_out["logits"].new_tensor(0.0)
         loss_discovery_uncertainty_separation = s_out["logits"].new_tensor(0.0)
         loss_discovery_uncertainty_pu = s_out["logits"].new_tensor(0.0)
+        loss_discovery_rejection_pu_feature_margin = s_out["logits"].new_tensor(0.0)
         loss_discovery_selective_unknown = s_out["logits"].new_tensor(0.0)
         loss_discovery_selective_energy = s_out["logits"].new_tensor(0.0)
         loss_joint_discovery = s_out["logits"].new_tensor(0.0)
@@ -1430,6 +1433,7 @@ def train_one_epoch_student(
             or alpha_discovery_knn_boundary > 0.0
             or alpha_discovery_uncertainty_separation > 0.0
             or alpha_discovery_uncertainty_pu > 0.0
+            or alpha_discovery_rejection_pu_feature_margin > 0.0
             or alpha_discovery_selective_unknown > 0.0
             or alpha_discovery_selective_energy > 0.0
             or alpha_reciprocal > 0.0
@@ -2365,6 +2369,30 @@ def train_one_epoch_student(
                     known_prior=discovery_uncertainty_known_prior,
                     risk_mode=discovery_uncertainty_pu_risk,
                 )
+            if alpha_discovery_rejection_pu_feature_margin > 0.0:
+                if s_out.get("rejection_logits") is None:
+                    raise ValueError(
+                        "PU rejection feature margin requires --rejection-feature-dim > 0"
+                    )
+                first_rejection = first_out["rejection_features"]
+                second_rejection = second_out["rejection_features"]
+                known_rejection = s_out["rejection_features"]
+                loss_discovery_rejection_pu_feature_margin = 0.5 * (
+                    pu_unknown_feature_margin_loss(
+                        known_rejection,
+                        first_rejection,
+                        student.rejection_classifier.weight,
+                        known_prior=discovery_uncertainty_known_prior,
+                        similarity_margin=discovery_rejection_feature_margin,
+                    )
+                    + pu_unknown_feature_margin_loss(
+                        known_rejection,
+                        second_rejection,
+                        student.rejection_classifier.weight,
+                        known_prior=discovery_uncertainty_known_prior,
+                        similarity_margin=discovery_rejection_feature_margin,
+                    )
+                )
             if alpha_discovery_selective_unknown > 0.0 or alpha_discovery_selective_energy > 0.0:
                 if discovery_selection_model is None:
                     first_selection_out = first_out
@@ -2527,6 +2555,8 @@ def train_one_epoch_student(
             + alpha_discovery_knn_boundary * loss_discovery_knn_boundary
             + alpha_discovery_uncertainty_separation * loss_discovery_uncertainty_separation
             + alpha_discovery_uncertainty_pu * loss_discovery_uncertainty_pu
+            + alpha_discovery_rejection_pu_feature_margin
+            * loss_discovery_rejection_pu_feature_margin
             + alpha_discovery_selective_unknown * loss_discovery_selective_unknown
             + alpha_discovery_selective_energy * loss_discovery_selective_energy
             + alpha_angular * loss_angular
@@ -2681,6 +2711,9 @@ def train_one_epoch_student(
         discovery_uncertainty_pu_meter.update(
             loss_discovery_uncertainty_pu.item(), images.size(0)
         )
+        discovery_rejection_pu_feature_margin_meter.update(
+            loss_discovery_rejection_pu_feature_margin.item(), images.size(0)
+        )
         discovery_selective_unknown_meter.update(loss_discovery_selective_unknown.item(), images.size(0))
         discovery_selective_energy_meter.update(loss_discovery_selective_energy.item(), images.size(0))
         angular_meter.update(loss_angular.item(), images.size(0))
@@ -2785,6 +2818,9 @@ def train_one_epoch_student(
         "discovery_knn_boundary": discovery_knn_boundary_meter.avg,
         "discovery_uncertainty_separation": discovery_uncertainty_separation_meter.avg,
         "discovery_uncertainty_pu": discovery_uncertainty_pu_meter.avg,
+        "discovery_rejection_pu_feature_margin": (
+            discovery_rejection_pu_feature_margin_meter.avg
+        ),
         "discovery_selective_unknown": discovery_selective_unknown_meter.avg,
         "discovery_selective_energy": discovery_selective_energy_meter.avg,
         "angular": angular_meter.avg,

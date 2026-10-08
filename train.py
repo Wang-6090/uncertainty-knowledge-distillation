@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import os
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from novel_discovery.data import (
     build_data_bundle,
     build_outlier_dataset,
     build_transforms,
+    dataset_source_indices,
     known_proportion,
 )
 from novel_discovery.joint_discovery import NovelPrototypeHead, combine_known_novel_logits
@@ -471,6 +473,15 @@ def parse_args(argv=None):
         type=float,
         default=0.0,
         help="Cosine feature-KD weight for the optional rejection branch.",
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-pu-feature-margin",
+        type=float,
+        default=0.0,
+        help=(
+            "PU-corrected feature-margin weight on the independent rejection "
+            "branch; requires a mixed discovery pool and --rejection-feature-dim > 0."
+        ),
     )
     p.add_argument("--kd-mode", choices=["standard", "uncertainty"], default="uncertainty")
     p.add_argument("--alpha-supcon", type=float, default=0.1)
@@ -2139,16 +2150,21 @@ def fit_student(args):
         or args.alpha_discovery_knn_boundary > 0.0
         or args.alpha_discovery_uncertainty_separation > 0.0
         or args.alpha_discovery_uncertainty_pu > 0.0
+        or args.alpha_discovery_rejection_pu_feature_margin > 0.0
         or args.alpha_discovery_selective_unknown > 0.0
         or args.alpha_discovery_selective_energy > 0.0
         or args.joint_discovery
     )
     if uses_discovery_regularizer and not args.discovery_pool:
         raise ValueError("Discovery regularizers require --discovery-pool.")
-    if args.alpha_discovery_uncertainty_pu > 0.0:
+    uses_mixed_pu = (
+        args.alpha_discovery_uncertainty_pu > 0.0
+        or args.alpha_discovery_rejection_pu_feature_margin > 0.0
+    )
+    if uses_mixed_pu:
         if args.discovery_pool_mode != "mixed":
             raise ValueError(
-                "PU uncertainty training requires --discovery-pool-mode mixed; "
+                "PU discovery training requires --discovery-pool-mode mixed; "
                 "it must not treat a pure unknown pool as unlabeled mixture."
             )
         requested_prior = str(args.discovery_uncertainty_known_prior).strip().lower()
@@ -2167,7 +2183,7 @@ def fit_student(args):
                 "--discovery-uncertainty-known-prior value."
             )
     resolved_discovery_uncertainty_known_prior = None
-    if args.alpha_discovery_uncertainty_pu > 0.0:
+    if uses_mixed_pu:
         measured_prior = known_proportion(bundle.discovery_pool)
         resolved_discovery_uncertainty_known_prior = (
             float(measured_prior)
@@ -2483,6 +2499,9 @@ def fit_student(args):
             alpha_rejection_center=args.alpha_rejection_center,
             alpha_rejection_kd=args.alpha_rejection_kd,
             alpha_rejection_feat_kd=args.alpha_rejection_feat_kd,
+            alpha_discovery_rejection_pu_feature_margin=(
+                args.alpha_discovery_rejection_pu_feature_margin
+            ),
             alpha_kd=args.alpha_kd,
             alpha_feat_kd=args.alpha_feat_kd,
             alpha_supcon=args.alpha_supcon,
@@ -3315,6 +3334,23 @@ def discover(args):
             outputs_val["probs"], outputs_val["labels"], args.calibration_bins
         ),
         "uncertainty_error": uncertainty_error_diagnostics(outputs_val),
+    }
+    selection_indices = dataset_source_indices(bundle.val)
+    calibration_indices = dataset_source_indices(calibration_dataset)
+    selection_index_set = set(selection_indices)
+    calibration_index_set = set(calibration_indices)
+    calibration_report["validation_protocol"]["sample_index_audit"] = {
+        "index_space": "base_dataset_positions",
+        "checkpoint_selection_index_count": len(selection_indices),
+        "threshold_calibration_index_count": len(calibration_indices),
+        "checkpoint_selection_indices_sha256": hashlib.sha256(
+            ",".join(map(str, sorted(selection_index_set))).encode("utf-8")
+        ).hexdigest(),
+        "threshold_calibration_indices_sha256": hashlib.sha256(
+            ",".join(map(str, sorted(calibration_index_set))).encode("utf-8")
+        ).hexdigest(),
+        "overlap_count": len(selection_index_set & calibration_index_set),
+        "disjoint": not bool(selection_index_set & calibration_index_set),
     }
     threshold = None
     if (args.score_mode == "auto" or args.auto_calibrate_score) and outputs_open_val is not None:

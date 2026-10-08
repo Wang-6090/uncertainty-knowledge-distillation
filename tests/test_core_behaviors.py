@@ -44,6 +44,7 @@ from novel_discovery.losses import (
 from novel_discovery.data import (
     build_data_bundle,
     build_open_validation_and_discovery,
+    dataset_source_indices,
     make_class_split,
     limit_dataset,
     split_known_indices,
@@ -744,6 +745,17 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(
             {int(dataset[index][1]) for index in calibration_indices}, set(range(4))
         )
+
+    def test_dataset_source_indices_resolves_nested_subsets_and_concat(self):
+        base = torch.utils.data.TensorDataset(torch.arange(12).float().unsqueeze(1))
+        nested = torch.utils.data.Subset(
+            torch.utils.data.Subset(base, [3, 7, 9, 11]), [1, 3]
+        )
+        self.assertEqual(dataset_source_indices(nested), [7, 11])
+        combined = torch.utils.data.ConcatDataset(
+            [nested, torch.utils.data.Subset(base, [0, 2])]
+        )
+        self.assertEqual(dataset_source_indices(combined), [7, 11, 2, 4])
 
     def test_calibration_overlap_control_matches_size_and_selection(self):
         labels = torch.tensor([label for label in range(4) for _ in range(20)])
@@ -2801,6 +2813,25 @@ class CalibrationTest(unittest.TestCase):
 
 
 class DiscoveryReportTest(unittest.TestCase):
+    def test_pu_unknown_feature_margin_has_nonzero_loss_and_gradient(self):
+        known_features = torch.tensor([[-1.0, 0.0]], dtype=torch.float32)
+        unlabeled_features = torch.tensor(
+            [[1.0, 0.5]], dtype=torch.float32, requires_grad=True
+        )
+        known_prototypes = torch.tensor([[1.0, 0.0]], dtype=torch.float32)
+
+        loss = pu_unknown_feature_margin_loss(
+            known_features,
+            unlabeled_features,
+            known_prototypes,
+            known_prior=0.5,
+            similarity_margin=0.2,
+        )
+        self.assertGreater(loss.item(), 0.0)
+        loss.backward()
+        self.assertIsNotNone(unlabeled_features.grad)
+        self.assertGreater(unlabeled_features.grad.norm().item(), 0.0)
+
     def test_labeled_knn_support_downranks_known_class_consensus(self):
         outputs = {
             "features": np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
