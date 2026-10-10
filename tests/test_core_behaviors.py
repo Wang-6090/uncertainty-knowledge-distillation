@@ -111,6 +111,7 @@ from train import (
     scheduled_weight,
     save_checkpoint,
     save_command_config,
+    validate_rejector_configuration,
 )
 from novel_discovery.models import build_model, freeze_batchnorm_stats
 
@@ -249,6 +250,21 @@ class CommandLineTest(unittest.TestCase):
         self.assertAlmostEqual(float(base[0, -1]), 0.3)
         self.assertAlmostEqual(float(with_logits[0, -1]), 0.3)
 
+    def test_rejection_balanced_support_mode_normalizes_class_logit_block(self):
+        outputs = {
+            "features": np.asarray([[1.0, 0.0]], dtype=np.float32),
+            "rejection_features": np.asarray([[0.0, 2.0]], dtype=np.float32),
+            "logits": np.asarray([[3.0, 4.0]], dtype=np.float32),
+            "probs": np.asarray([[0.75, 0.25]], dtype=np.float32),
+            "entropy": np.asarray([0.5], dtype=np.float32),
+            "head_uncertainty": np.asarray([0.1], dtype=np.float32),
+            "known_support_score": np.asarray([0.3], dtype=np.float32),
+        }
+        result = build_rejector_features(
+            outputs, feature_mode="rejection_balanced_support_augmented"
+        )
+        np.testing.assert_allclose(result[0, 2:4], [0.6, 0.8], atol=1e-6)
+
     def test_rejection_logit_mode_requires_extracted_logits(self):
         outputs = {
             "features": np.zeros((1, 2), dtype=np.float32),
@@ -264,6 +280,7 @@ class CommandLineTest(unittest.TestCase):
     def test_parser_accepts_rejection_logit_modes(self):
         for mode in (
             "rejection_support_augmented",
+            "rejection_balanced_support_augmented",
             "rejection_logit_augmented",
             "rejection_support_logit_augmented",
         ):
@@ -271,6 +288,19 @@ class CommandLineTest(unittest.TestCase):
                 ["discover", "--dataset", "toy", "--rejector-feature-mode", mode]
             )
             self.assertEqual(args.rejector_feature_mode, mode)
+
+    def test_nondefault_rejector_features_cannot_be_silently_ignored(self):
+        args = parse_args(
+            [
+                "discover",
+                "--dataset",
+                "toy",
+                "--rejector-feature-mode",
+                "rejection_balanced_support_augmented",
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "only affects the final detector"):
+            validate_rejector_configuration(args)
 
     def test_prototype_augmented_rejector_features_append_classwise_similarity(self):
         outputs = {
@@ -2960,6 +2990,8 @@ class DiscoveryReportTest(unittest.TestCase):
             "labels": np.array([0, 1, -1, -1]),
             "raw_labels": np.array([0, 1, 10, 11]),
             "is_known": np.array([1, 1, 0, 0]),
+            "feature_rejector_score": np.array([0.3, 0.4, 1.2, 1.4]),
+            "known_support_score": np.array([0.1, 0.2, 0.8, 0.9]),
         }
         report, _, _, detail = run_discovery(
             outputs,
@@ -2971,6 +3003,12 @@ class DiscoveryReportTest(unittest.TestCase):
 
         self.assertTrue(report["clustering_skipped"])
         self.assertIsNone(detail["pred_cluster"])
+        np.testing.assert_allclose(
+            detail["feature_rejector_score"], outputs["feature_rejector_score"]
+        )
+        np.testing.assert_allclose(
+            detail["known_support_score"], outputs["known_support_score"]
+        )
         self.assertNotIn("cluster_candidate_count", report)
 
     def test_run_discovery_separates_classifier_accuracy_from_rejection(self):

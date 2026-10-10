@@ -31,6 +31,7 @@ from .losses import (
     discovery_view_loss,
     distillation_loss,
     energy_margin_loss,
+    pu_unknown_energy_margin_loss,
     angular_margin_loss,
     feature_distillation_loss,
     hard_proxy_margin_loss,
@@ -870,6 +871,8 @@ def train_one_epoch_student(
     alpha_rejection_kd: float = 0.0,
     alpha_rejection_feat_kd: float = 0.0,
     alpha_discovery_rejection_pu_feature_margin: float = 0.0,
+    discovery_rejection_pu_risk: str = "hard_nnpu",
+    discovery_rejection_pu_softness: float = 0.05,
     alpha_kd: float = 1.0,
     alpha_feat_kd: float = 0.0,
     alpha_supcon: float = 0.1,
@@ -905,6 +908,10 @@ def train_one_epoch_student(
     alpha_discovery: float = 0.0,
     alpha_discovery_unknown: float = 0.0,
     alpha_discovery_energy: float = 0.0,
+    alpha_discovery_energy_pu: float = 0.0,
+    discovery_energy_pu_known_prior: float = 0.2,
+    discovery_energy_pu_risk: str = "hard_nnpu",
+    discovery_energy_pu_softness: float = 0.05,
     alpha_discovery_uniform: float = 0.0,
     alpha_discovery_feature_consistency: float = 0.0,
     alpha_discovery_projection_consistency: float = 0.0,
@@ -1071,6 +1078,7 @@ def train_one_epoch_student(
     discovery_meter = AverageMeter()
     discovery_unknown_meter = AverageMeter()
     discovery_energy_meter = AverageMeter()
+    discovery_energy_pu_meter = AverageMeter()
     discovery_uniform_meter = AverageMeter()
     discovery_feature_margin_meter = AverageMeter()
     discovery_rejection_feature_margin_meter = AverageMeter()
@@ -1292,6 +1300,7 @@ def train_one_epoch_student(
         loss_discovery = s_out["logits"].new_tensor(0.0)
         loss_discovery_unknown = s_out["logits"].new_tensor(0.0)
         loss_discovery_energy = s_out["logits"].new_tensor(0.0)
+        loss_discovery_energy_pu = s_out["logits"].new_tensor(0.0)
         loss_discovery_uniform = s_out["logits"].new_tensor(0.0)
         loss_discovery_feature_margin = s_out["logits"].new_tensor(0.0)
         loss_discovery_rejection_feature_margin = s_out["logits"].new_tensor(0.0)
@@ -1420,6 +1429,7 @@ def train_one_epoch_student(
             alpha_discovery > 0.0
             or alpha_discovery_unknown > 0.0
             or alpha_discovery_energy > 0.0
+            or alpha_discovery_energy_pu > 0.0
             or alpha_discovery_uniform > 0.0
             or alpha_discovery_feature_consistency > 0.0
             or alpha_discovery_projection_consistency > 0.0
@@ -2016,6 +2026,31 @@ def train_one_epoch_student(
                         temperature=energy_temperature,
                     )
                 )
+            if alpha_discovery_energy_pu > 0.0:
+                if discovery_pool_mode != "mixed":
+                    raise ValueError(
+                        "PU discovery energy requires discovery_pool_mode='mixed'"
+                    )
+                loss_discovery_energy_pu = 0.5 * (
+                    pu_unknown_energy_margin_loss(
+                        s_out["logits"],
+                        first_out["logits"],
+                        known_prior=discovery_energy_pu_known_prior,
+                        margin=energy_margin,
+                        temperature=energy_temperature,
+                        risk_mode=discovery_energy_pu_risk,
+                        softness=discovery_energy_pu_softness,
+                    )
+                    + pu_unknown_energy_margin_loss(
+                        s_out["logits"],
+                        second_out["logits"],
+                        known_prior=discovery_energy_pu_known_prior,
+                        margin=energy_margin,
+                        temperature=energy_temperature,
+                        risk_mode=discovery_energy_pu_risk,
+                        softness=discovery_energy_pu_softness,
+                    )
+                )
             if alpha_discovery_uniform > 0.0:
                 loss_discovery_uniform = 0.5 * (
                     outlier_exposure_uniform_loss(first_out["logits"])
@@ -2384,6 +2419,8 @@ def train_one_epoch_student(
                         student.rejection_classifier.weight,
                         known_prior=discovery_uncertainty_known_prior,
                         similarity_margin=discovery_rejection_feature_margin,
+                        risk_mode=discovery_rejection_pu_risk,
+                        softness=discovery_rejection_pu_softness,
                     )
                     + pu_unknown_feature_margin_loss(
                         known_rejection,
@@ -2391,6 +2428,8 @@ def train_one_epoch_student(
                         student.rejection_classifier.weight,
                         known_prior=discovery_uncertainty_known_prior,
                         similarity_margin=discovery_rejection_feature_margin,
+                        risk_mode=discovery_rejection_pu_risk,
+                        softness=discovery_rejection_pu_softness,
                     )
                 )
             if alpha_discovery_selective_unknown > 0.0 or alpha_discovery_selective_energy > 0.0:
@@ -2539,6 +2578,7 @@ def train_one_epoch_student(
             + alpha_discovery * loss_discovery
             + alpha_discovery_unknown * loss_discovery_unknown
             + alpha_discovery_energy * loss_discovery_energy
+            + alpha_discovery_energy_pu * loss_discovery_energy_pu
             + alpha_discovery_uniform * loss_discovery_uniform
             + alpha_discovery_feature_consistency * loss_discovery_feature_consistency
             + alpha_discovery_projection_consistency * loss_discovery_projection_consistency
@@ -2679,6 +2719,7 @@ def train_one_epoch_student(
         discovery_meter.update(loss_discovery.item(), images.size(0))
         discovery_unknown_meter.update(loss_discovery_unknown.item(), images.size(0))
         discovery_energy_meter.update(loss_discovery_energy.item(), images.size(0))
+        discovery_energy_pu_meter.update(loss_discovery_energy_pu.item(), images.size(0))
         discovery_uniform_meter.update(loss_discovery_uniform.item(), images.size(0))
         discovery_feature_margin_meter.update(loss_discovery_feature_margin.item(), images.size(0))
         discovery_rejection_feature_margin_meter.update(
@@ -2802,6 +2843,7 @@ def train_one_epoch_student(
         "discovery": discovery_meter.avg,
         "discovery_unknown": discovery_unknown_meter.avg,
         "discovery_energy": discovery_energy_meter.avg,
+        "discovery_energy_pu": discovery_energy_pu_meter.avg,
         "discovery_uniform": discovery_uniform_meter.avg,
         "discovery_feature_margin": discovery_feature_margin_meter.avg,
         "discovery_rejection_feature_margin": discovery_rejection_feature_margin_meter.avg,
@@ -3170,9 +3212,11 @@ def build_rejector_features(
         "rejection_uncertainty_augmented",
         "rejection_support_uncertainty_augmented",
         "rejection_support_augmented",
+        "rejection_balanced_support_augmented",
         "rejection_logit_augmented",
         "rejection_support_logit_augmented",
     }
+    rejection_balanced = feature_mode == "rejection_balanced_support_augmented"
     rejection_logit_augmented = feature_mode in {
         "rejection_logit_augmented",
         "rejection_support_logit_augmented",
@@ -3185,6 +3229,7 @@ def build_rejector_features(
         "rejection_uncertainty_augmented",
         "rejection_support_uncertainty_augmented",
         "rejection_support_augmented",
+        "rejection_balanced_support_augmented",
         "rejection_logit_augmented",
         "rejection_support_logit_augmented",
         "prototype_augmented",
@@ -3198,7 +3243,18 @@ def build_rejector_features(
     sorted_probs = np.sort(probs, axis=1)
     margin = (sorted_probs[:, -1] - sorted_probs[:, -2]).reshape(-1, 1)
     uncertainty = np.asarray(outputs["head_uncertainty"], dtype=np.float32).reshape(-1, 1)
-    summary = np.concatenate([logits, entropy, max_prob, margin, uncertainty], axis=1)
+    # The raw class-logit block has one coordinate per known class.  In a
+    # concatenated rejector representation it can dominate the learned
+    # rejection embedding simply because it has many coordinates and a
+    # different scale.  The balanced diagnostic normalizes this block per
+    # sample before the downstream StandardScaler, so the comparison tests
+    # representation geometry rather than feature-count/scale effects.
+    logit_block = logits
+    if rejection_balanced:
+        logit_block = logits / np.clip(
+            np.linalg.norm(logits, axis=1, keepdims=True), 1e-6, None
+        )
+    summary = np.concatenate([logit_block, entropy, max_prob, margin, uncertainty], axis=1)
     if rejection_logit_augmented:
         if "rejection_logits" not in outputs:
             raise ValueError(
@@ -3260,6 +3316,7 @@ def build_rejector_features(
         "support_uncertainty_augmented",
         "rejection_support_uncertainty_augmented",
         "rejection_support_augmented",
+        "rejection_balanced_support_augmented",
         "rejection_support_logit_augmented",
         "prototype_support_augmented",
     }:
@@ -3332,6 +3389,7 @@ def fit_feature_rejector(
         "rejection_uncertainty_augmented",
         "rejection_support_uncertainty_augmented",
         "rejection_support_augmented",
+        "rejection_balanced_support_augmented",
         "rejection_logit_augmented",
         "rejection_support_logit_augmented",
     }:
@@ -3581,6 +3639,7 @@ def fit_pu_feature_rejector(
             "rejection_uncertainty_augmented",
             "rejection_support_uncertainty_augmented",
             "rejection_support_augmented",
+            "rejection_balanced_support_augmented",
             "rejection_logit_augmented",
             "rejection_support_logit_augmented",
         }:
@@ -5657,6 +5716,15 @@ def run_discovery(
             "aleatoric": aleatoric,
             "expected_entropy": outputs.get("expected_entropy", aleatoric),
             "head_uncertainty": outputs.get("head_uncertainty", aleatoric),
+            "feature_rejector_score": np.asarray(
+                outputs.get("feature_rejector_score", np.zeros_like(score)), dtype=float
+            ),
+            "known_support_score": np.asarray(
+                outputs.get("known_support_score", np.zeros_like(score)), dtype=float
+            ),
+            "known_conformal_score": np.asarray(
+                outputs.get("known_conformal_score", np.zeros_like(score)), dtype=float
+            ),
             "proto_dist": proto_dist,
             "mahalanobis": mahalanobis,
             "odin_msp": np.asarray(outputs.get("odin_msp", np.zeros_like(score)), dtype=float),

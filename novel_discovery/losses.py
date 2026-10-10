@@ -136,6 +136,59 @@ def weighted_energy_margin_loss(
     return (per_sample * weight).sum() / denominator
 
 
+def pu_unknown_energy_margin_loss(
+    known_logits: torch.Tensor,
+    unlabeled_logits: torch.Tensor,
+    known_prior: float,
+    margin: float = 1.0,
+    temperature: float = 1.0,
+    risk_mode: str = "hard_nnpu",
+    softness: float = 0.05,
+) -> torch.Tensor:
+    """Estimate an unknown-energy boundary risk from a mixed unlabeled pool.
+
+    Energy is lower for familiar/known samples.  The batch of labelled known
+    samples supplies a detached reference boundary, while the discovery batch
+    is treated as a mixture rather than as all-unknown data.  The mixed risk
+    is corrected by the estimated known prior, analogous to nnPU risk
+    estimation.  Unlike ``energy_margin_loss``, this function is appropriate
+    for ``discovery_pool_mode=mixed`` and never assigns a hard unknown label to
+    every discovery example.
+
+    ``hard_nnpu`` uses the usual non-negative clamp.  ``soft_nnpu`` is a
+    smooth diagnostic surrogate that keeps a small gradient when the
+    corrected empirical risk is negative.
+    """
+    if known_logits.numel() == 0 or unlabeled_logits.numel() == 0:
+        reference = unlabeled_logits if unlabeled_logits.numel() else known_logits
+        return reference.new_tensor(0.0)
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if risk_mode not in {"hard_nnpu", "soft_nnpu"}:
+        raise ValueError("risk_mode must be 'hard_nnpu' or 'soft_nnpu'")
+    if float(softness) <= 0.0:
+        raise ValueError("softness must be positive")
+
+    known_energy = energy_score(known_logits, temperature=temperature)
+    # The reference is intentionally detached: this auxiliary mixed-pool term
+    # should move discovery energies outward, not lower the known boundary by
+    # making the known side worse.
+    reference = known_energy.detach().mean()
+
+    def unknown_violation(logits: torch.Tensor) -> torch.Tensor:
+        energy = energy_score(logits, temperature=temperature)
+        return F.relu(reference + float(margin) - energy)
+
+    mixed_risk = unknown_violation(unlabeled_logits).mean()
+    known_correction = unknown_violation(known_logits).mean().detach()
+    corrected = (mixed_risk - prior * known_correction) / (1.0 - prior)
+    if risk_mode == "hard_nnpu":
+        return corrected.clamp_min(0.0)
+    tau = float(softness)
+    return tau * F.softplus(corrected / tau)
+
+
 def feature_distillation_loss(
     student_projection: torch.Tensor,
     teacher_projection: torch.Tensor,
@@ -365,6 +418,8 @@ def pu_unknown_feature_margin_loss(
     known_prototypes: torch.Tensor,
     known_prior: float,
     similarity_margin: float = 0.2,
+    risk_mode: str = "hard_nnpu",
+    softness: float = 0.05,
 ) -> torch.Tensor:
     """Estimate unknown-only feature-margin risk from a mixed pool.
 
@@ -372,7 +427,9 @@ def pu_unknown_feature_margin_loss(
     subtracts the expected known contribution from the mixed-pool margin risk,
     following the positive-unlabeled risk decomposition. The known correction
     is detached so it changes the estimate without creating a gradient that
-    repels known features.
+    repels known features. ``hard_nnpu`` preserves the original hard clamp;
+    ``soft_nnpu`` uses a smooth non-negative surrogate to diagnose whether
+    the clamp is prematurely removing the unknown-separation gradient.
     """
     if (
         known_features.numel() == 0
@@ -384,6 +441,10 @@ def pu_unknown_feature_margin_loss(
     prior = float(known_prior)
     if not 0.0 < prior < 1.0:
         raise ValueError("known_prior must be in (0, 1)")
+    if risk_mode not in {"hard_nnpu", "soft_nnpu"}:
+        raise ValueError("risk_mode must be 'hard_nnpu' or 'soft_nnpu'")
+    if float(softness) <= 0.0:
+        raise ValueError("softness must be positive")
     prototypes = F.normalize(known_prototypes, dim=-1)
 
     def per_sample_margin(features: torch.Tensor) -> torch.Tensor:
@@ -394,7 +455,10 @@ def pu_unknown_feature_margin_loss(
     mixed_risk = per_sample_margin(unlabeled_features).mean()
     known_correction = per_sample_margin(known_features).mean().detach()
     unknown_risk = (mixed_risk - prior * known_correction) / (1.0 - prior)
-    return unknown_risk.clamp_min(0.0)
+    if risk_mode == "hard_nnpu":
+        return unknown_risk.clamp_min(0.0)
+    tau = float(softness)
+    return tau * F.softplus(unknown_risk / tau)
 
 
 def unknown_feature_separation_loss(

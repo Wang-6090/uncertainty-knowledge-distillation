@@ -69,6 +69,25 @@ from novel_discovery.pipeline import (
 from novel_discovery.utils import ensure_dir, save_json, set_seed
 
 
+def validate_rejector_configuration(args):
+    """Reject detector configurations whose feature ablation is unused."""
+    rejector_score_modes = {
+        "feature_rejector",
+        "feature_rejector_fusion",
+        "virtual_rejector",
+    }
+    if (
+        args.rejector_feature_mode != "embedding"
+        and args.score_mode not in rejector_score_modes
+    ):
+        raise ValueError(
+            "--rejector-feature-mode only affects the final detector when "
+            "--score-mode is feature_rejector, feature_rejector_fusion, or "
+            "virtual_rejector; choose a rejector score mode or use "
+            "--rejector-feature-mode embedding"
+        )
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -244,6 +263,7 @@ def parse_args(argv=None):
                 "rejection_uncertainty_augmented",
                 "rejection_support_uncertainty_augmented",
                 "rejection_support_augmented",
+                "rejection_balanced_support_augmented",
                 "rejection_logit_augmented",
                 "rejection_support_logit_augmented",
                 "prototype_augmented",
@@ -483,6 +503,22 @@ def parse_args(argv=None):
             "branch; requires a mixed discovery pool and --rejection-feature-dim > 0."
         ),
     )
+    p.add_argument(
+        "--discovery-rejection-pu-risk",
+        choices=["hard_nnpu", "soft_nnpu"],
+        default="hard_nnpu",
+        help=(
+            "PU risk for the independent rejection feature-margin loss; "
+            "hard_nnpu preserves the historical clamp and soft_nnpu uses a "
+            "smooth non-negative surrogate."
+        ),
+    )
+    p.add_argument(
+        "--discovery-rejection-pu-softness",
+        type=float,
+        default=0.05,
+        help="Temperature of the soft_nnpu surrogate; must be positive.",
+    )
     p.add_argument("--kd-mode", choices=["standard", "uncertainty"], default="uncertainty")
     p.add_argument("--alpha-supcon", type=float, default=0.1)
     p.add_argument(
@@ -628,6 +664,33 @@ def parse_args(argv=None):
         type=float,
         default=0.0,
         help="Apply energy-margin separation between known samples and a pure unknown discovery pool.",
+    )
+    p.add_argument(
+        "--alpha-discovery-energy-pu",
+        type=float,
+        default=0.0,
+        help=(
+            "PU-corrected energy-boundary loss for a mixed discovery pool; "
+            "does not assign every mixed sample a hard unknown label."
+        ),
+    )
+    p.add_argument(
+        "--discovery-energy-pu-known-prior",
+        type=float,
+        default=0.2,
+        help="Estimated known fraction in the mixed discovery pool for PU energy training.",
+    )
+    p.add_argument(
+        "--discovery-energy-pu-risk",
+        choices=["hard_nnpu", "soft_nnpu"],
+        default="hard_nnpu",
+        help="Non-negative risk variant for PU energy training.",
+    )
+    p.add_argument(
+        "--discovery-energy-pu-softness",
+        type=float,
+        default=0.05,
+        help="Softness for the soft_nnpu PU energy surrogate.",
     )
     p.add_argument(
         "--alpha-discovery-uniform",
@@ -2502,6 +2565,8 @@ def fit_student(args):
             alpha_discovery_rejection_pu_feature_margin=(
                 args.alpha_discovery_rejection_pu_feature_margin
             ),
+            discovery_rejection_pu_risk=args.discovery_rejection_pu_risk,
+            discovery_rejection_pu_softness=args.discovery_rejection_pu_softness,
             alpha_kd=args.alpha_kd,
             alpha_feat_kd=args.alpha_feat_kd,
             alpha_supcon=args.alpha_supcon,
@@ -2517,6 +2582,10 @@ def fit_student(args):
             alpha_proxy=args.alpha_proxy,
             alpha_pseudo=args.alpha_pseudo,
             alpha_energy=args.alpha_energy,
+            alpha_discovery_energy_pu=args.alpha_discovery_energy_pu,
+            discovery_energy_pu_known_prior=args.discovery_energy_pu_known_prior,
+            discovery_energy_pu_risk=args.discovery_energy_pu_risk,
+            discovery_energy_pu_softness=args.discovery_energy_pu_softness,
             alpha_vos=args.alpha_vos,
             vos_mode=args.vos_mode,
             vos_gaussian_stats=vos_gaussian_stats,
@@ -2829,6 +2898,7 @@ def fit_student(args):
 
 
 def discover(args):
+    validate_rejector_configuration(args)
     set_seed(args.seed)
     bundle = build_data_bundle(
         args.dataset,
@@ -3089,6 +3159,7 @@ def discover(args):
                 "support_uncertainty_augmented",
                 "rejection_support_uncertainty_augmented",
                 "rejection_support_augmented",
+                "rejection_balanced_support_augmented",
                 "rejection_support_logit_augmented",
                 "prototype_support_augmented",
             }:

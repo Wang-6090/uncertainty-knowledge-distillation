@@ -1,5 +1,68 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 2026-10-10：PU 能量边界配对实验（未纳入主线）
+
+针对 mixed discovery pool 中“不能把全部样本都当作未知”的问题，本轮新增
+`--alpha-discovery-energy-pu`。它使用已知样本提供能量参考，并按照
+`known_prior=0.2` 对混合池风险进行 PU 校正；与原有的纯未知能量损失不同，
+不会给 mixed pool 中每个样本硬贴未知标签。
+
+代码接线先经过 toy smoke 检查。最初发现训练循环条件漏掉了新参数，导致参数
+虽然可解析但损失没有执行；已修复并重新验证。正式实验中训练日志的
+`discovery_energy_pu` 非零，说明损失确实进入反向传播。
+
+严格配对条件为 CIFAR-100 semantic-isolated 60/40、seed=42、完整数据、
+预训练 ResNet-34/ResNet-18、3 epochs、5400 张 matched mixed pool、known
+prior=0.2，以及相同的 support-augmented nnPU rejector 和 95% known-coverage
+校准。唯一变量是 PU-energy 权重 `0 -> 0.1`。
+
+| 指标 | baseline | PU-energy | 变化 |
+|---|---:|---:|---:|
+| AUROC | 0.7703 | 0.7637 | -0.0066 |
+| FPR95 | 0.6423 | 0.6483 | 变差 |
+| OSCR | 0.3544 | 0.3508 | 变差 |
+| 已知接受率 | 94.35% | 95.23% | +0.88 个百分点 |
+| 未知拒绝率 | 20.25% | 20.43% | +0.18 个百分点 |
+
+结论：未知拒绝率只有很小的工作点变化，但 AUROC、FPR95 和 OSCR 均变差，
+不能认为该方法有效，也不进入主线。它保留为可复现实验开关，不继续盲目扫权重。
+分数审计还显示 known 分布整体略向 unknown 方向移动，而 unknown 分布没有同步远离，
+因此这不是形成了新的已知/未知间隔，而是检测排序变差。
+详细记录见 `analysis/pu_energy_margin_paired_s42_e3_20261010.md`。
+
+
+## 2026-10-10：rejection-PU 特征间隔配对实验结论
+
+本轮针对“已知/未知特征和分数仍然重叠”的核心问题，在独立
+`rejection_features` 分支上加入了混合池 PU 特征间隔损失。为了避免把
+结构、数据或阈值差异误判成算法收益，进行了严格配对：CIFAR-100
+semantic-isolated 60/40、seed=42、相同教师/学生、相同 3 epoch、相同
+5400 样本 mixed discovery pool（known prior=0.2），只改变
+`alpha_discovery_rejection_pu_feature_margin`（0 vs 0.1）。检测也固定为
+support-augmented linear `nu_corrected` nnPU rejector、95% known-coverage
+校准和 `feature_rejector` 分数。
+
+| 指标 | baseline | PU feature-margin | 差值 |
+|---|---:|---:|---:|
+| AUROC | 0.7823 | 0.7762 | -0.0062 |
+| FPR95（越低越好） | 0.6318 | 0.6263 | -0.0055 |
+| OSCR | 0.3723 | 0.3701 | -0.0022 |
+| 已知接受率 | 94.57% | 95.25% | +0.68 个百分点 |
+| 未知拒绝率 | 23.15% | 21.08% | -2.08 个百分点 |
+
+训练日志中 baseline 的新损失始终为 0，treatment 在三轮约为
+`0.002105 / 0.0000045 / 0.0000050`，因此代码路径和梯度连接是有效的，
+但损失很快饱和。综合指标不能支持该方法有效：它只带来很小的 FPR95
+改善，同时降低 AUROC、OSCR 和未知拒绝率。本方法暂不纳入主线，也不再
+仅通过调大权重或调阈值继续试验。详细记录见
+`analysis/rejection_pu_feature_margin_paired_s42_e3_20261010.md`。
+
+下一步应检查并改造 PU 特征风险本身：当前实现使用非负风险的硬
+`clamp_min(0)`，混合风险减去已知校正项后可能迅速归零，导致没有持续的
+未知分离梯度。后续先实现一个可记录、非饱和的 PU 风险变体，再保持同一
+配对协议验证；如果仍无改善，就停止这条 rejection-margin 路线，转向
+更直接的已知支持建模或训练时的能量/密度边界学习，而不是继续阈值搜索。
+
 ## 2026-10-09: uncertainty loss 2x2 component screen
 
 To avoid attributing the previous positive signal to an inseparable loss
@@ -3935,3 +3998,67 @@ opt-in 消融，不升为默认训练配置。完整结果见
 两者并不独立。下一步先划出独立 calibration 子集、固定模型选择规则，再检查不同 seed
 下 known/unknown 特征与分数分布是否一致变化；只有训练期诊断出现稳定趋势，才值得预先
 设定 OE 权重做下一轮对照。不要根据测试结果选择权重或继续做阈值调整。
+## 2026-10-11: rejection branch audit and balanced detector fusion
+
+本轮先纠正了一个实验归因风险：之前的 rejection 分支 baseline 与 treatment
+使用了不同 student checkpoint，不能把差异归因于 rejection 分支。重新控制
+teacher、student 训练协议、mixed pool、nnPU rejector、`rejection_support_augmented`
+和 95% known-coverage 校准后，只增加 `alpha_rejection_known_ce=1.0` 的处理组为
+AUROC `0.7626`、FPR95 `0.6417`、OSCR `0.3351`、unknown rejection `17.23%`，低于
+baseline 的 `0.7652/0.6472/0.3552/17.70%`。再加入
+`alpha_rejection_supcon=0.1` 后为 `0.7496/0.6235/0.3253/16.15%`，同样没有改善。
+两项损失在训练日志中均非零，因此不是参数未接入；当前不继续叠加 rejection
+分支的 CE/SupCon。
+
+随后审计发现，之前所谓的“representation-only”对照命令虽然改变了
+`rejector_feature_mode`，但仍使用 `score_mode=entropy_proto`；rejector 分数没有参与
+最终检测，因此那组 `0.7700/0.6332/0.3570` 结果不能归因于 balanced 特征，也不能作为
+有效的算法对照。代码现在会拒绝这种“配置了非默认 rejector 特征、但最终分数完全不用
+rejector”的静默错误；同时修复了 `skip_clustering` 时中间 rejector/support 分数被写成
+全零的问题。
+
+在真正使用 `score_mode=feature_rejector`、同一 seed=43 checkpoint 和同一 mixed-pool
+协议下重新对照：
+
+| rejector 特征 | AUROC | FPR95 | OSCR | known acceptance | unknown rejection |
+|---|---:|---:|---:|---:|---:|
+| `rejection_support_augmented` | 0.7509 | 0.6557 | 0.3151 | 94.58% | 16.43% |
+| `rejection_balanced_support_augmented` | 0.7519 | 0.6512 | 0.3161 | 95.30% | 15.03% |
+| balanced - support | +0.0010 | -0.0045 | +0.0011 | +0.72pp | -1.40pp |
+
+balanced 的排序指标只有很小改善，而且固定 95% known-coverage operating point 的未知
+拒绝率下降；因此它暂不升级为默认方案，只保留为轻量 detector ablation。当前结论仍是
+已知/未知表征重叠没有被解决，后续应转向语义相近未知类别的分层误差与训练表征审计，
+而不是继续堆叠特征拼接或阈值调节。
+
+注意：一次较早的 SupCon 检测命令漏写 `--threshold-policy known_coverage`，实际使用
+了默认 global policy；该结果不用于因果结论。完整记录见
+`analysis/rejection_branch_audit_and_balanced_fusion_20261011.md`。
+
+## 2026-10-11：seed-44 分层 known 采样复核与类别级误差审计
+
+在 seed=44 上重新进行了严格对照。两组使用同一个 student checkpoint，
+semantic-isolated CIFAR-100 60/40、5400 样本 mixed pool、known prior=0.2、
+linear `nu_corrected` nnPU、MC=4、验证集 95% known-coverage 校准和关闭聚类
+均保持不变；唯一变量是 rejector 拟合 known 支持样本是否按类别分层采样。
+这次明确使用 `score_mode=feature_rejector`，因此 rejector 分数确实参与了检测。
+
+| known 支持采样 | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection |
+|---|---:|---:|---:|---:|---:|
+| uniform | 0.7681 | 0.6137 | 0.3859 | 94.22% | 22.03% |
+| class-stratified | 0.7700 | 0.6115 | 0.3837 | 94.58% | 20.25% |
+
+seed=43 的复核也呈现相同趋势：分层采样只能带来极小排序改善，工作点未知
+拒绝率反而下降。因此该选项不设为默认方法，只保留为 ablation。类别级事后
+分析显示误接收并非集中在单一未知类别：uniform 支持下多个未知类别的误接收率
+达到 0.87--0.97；分层采样对不同类别的影响方向相反，最大改善约 10 个百分点，
+最大退化约 14 个百分点，说明它没有形成稳定的语义分离边界。
+
+本轮进一步确认：当前核心问题仍是训练得到的已知/未知表征重叠，不能继续依靠
+rejector 特征拼接、采样微调或阈值搜索解决。下一步应回到训练阶段，优先检查并
+改进两点：一是提高已知类闭集表征质量（当前审计 checkpoint 的 known 分类准确率
+仍偏低），二是对 mixed pool 使用不把伪标签直接当真值的稳定 teacher/EMA 目标、
+周期性刷新和类别均衡约束，避免 rejector 只学习当前错误分数。新增的逐类别报告为
+`analysis/classwise_rejection_stratified_s44_20261011.json`，完整记录见
+`analysis/rejection_branch_audit_and_balanced_fusion_20261011.md`。
+
