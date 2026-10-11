@@ -108,6 +108,17 @@ def parse_args(argv=None):
             ),
         )
         p.add_argument("--image-size", type=int, default=224)
+        p.add_argument(
+            "--transform-profile",
+            choices=["auto", "imagenet", "cifar"],
+            default="auto",
+            help=(
+                "Image preprocessing profile. 'auto' uses CIFAR-style transforms "
+                "for CIFAR-100 and ImageNet-style transforms otherwise; "
+                "'imagenet' preserves historical behavior; 'cifar' uses CIFAR "
+                "mean/std and crop/flip augmentation."
+            ),
+        )
         p.add_argument("--batch-size", type=int, default=64)
         p.add_argument("--num-workers", type=int, default=4)
         p.add_argument("--backbone", default="resnet18")
@@ -122,6 +133,16 @@ def parse_args(argv=None):
                 "Multiply the learning rate of the student encoder only. "
                 "Values below 1 preserve pretrained features during fine-tuning; "
                 "default 1.0 keeps the historical behavior."
+            ),
+        )
+        p.add_argument(
+            "--encoder-lr-decay",
+            type=float,
+            default=1.0,
+            help=(
+                "Optional layer-wise decay within the encoder. Values below 1 "
+                "use smaller learning rates for earlier feature stages; default "
+                "1.0 preserves the single encoder learning-rate group."
             ),
         )
         p.add_argument("--proj-dim", type=int, default=128)
@@ -431,6 +452,16 @@ def parse_args(argv=None):
 
     p = sub.add_parser("train_student")
     add_common(p)
+    p.add_argument(
+        "--open-val-ratio",
+        type=float,
+        default=0.0,
+        help=(
+            "Reserve matched known and novel examples from the training partition "
+            "for open-set validation. Use the identical value for the subsequent "
+            "discover command; test samples are never used for score selection."
+        ),
+    )
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight-decay", type=float, default=1e-4)
@@ -767,13 +798,14 @@ def parse_args(argv=None):
         "--discovery-feature-margin-weight-source",
         choices=[
             "uncertainty", "msp", "mean", "max", "product",
+            "prototype_distance", "distance_consensus",
             "ema_uncertainty", "ema_msp", "ema_product",
             "cross_view_min_uncertainty",
         ],
         default="uncertainty",
         help=(
             "Soft novelty weight for the mixed-pool feature margin: learned "
-            "uncertainty, 1-MSP, their mean, or their maximum."
+            "uncertainty, 1-MSP, prototype distance, or consensus variants."
         ),
     )
     p.add_argument(
@@ -856,6 +888,24 @@ def parse_args(argv=None):
         type=float,
         default=0.0,
         help="Weight a hybrid known-prototype/local-centroid boundary loss for pure-unknown discovery features.",
+    )
+    p.add_argument(
+        "--discovery-boundary-mode",
+        choices=["pure", "pu"],
+        default="pure",
+        help="Use the historical pure-unknown boundary or a mixed-pool PU-corrected boundary.",
+    )
+    p.add_argument(
+        "--discovery-boundary-pu-risk",
+        choices=["hard_nnpu", "soft_nnpu"],
+        default="hard_nnpu",
+        help="Non-negative risk variant for the mixed-pool PU boundary.",
+    )
+    p.add_argument(
+        "--discovery-boundary-pu-softness",
+        type=float,
+        default=0.05,
+        help="Softness for the soft_nnpu mixed-pool boundary surrogate.",
     )
     p.add_argument(
         "--discovery-boundary-margin",
@@ -963,8 +1013,46 @@ def parse_args(argv=None):
         default="legacy",
         help=(
             "Mixed-pool PU risk implementation. 'legacy' preserves historical "
-            "runs; 'nu_corrected' uses the unbiased known-positive risk "
-            "decomposition."
+            "runs; 'nu_corrected' uses the audited known-positive risk "
+            "decomposition. Both names currently map to the same mathematically "
+            "consistent uncertainty-head objective; the alias is retained for "
+            "old configs and comparison scripts."
+        ),
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-weight-source",
+        choices=[
+            "none", "prototype_distance", "msp", "entropy", "distance_consensus",
+            "known_support", "support_consensus", "support_blended",
+        ],
+        default="none",
+        help=(
+            "Optional semantic soft weighting for mixed-pool uncertainty PU. "
+            "This emphasizes unlabeled samples that look farther from known "
+            "classes by prototype distance, local known support, MSP, entropy, "
+            "or their consensus; "
+            "'none' preserves the audited unweighted PU objective."
+        ),
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-weight-temperature",
+        type=float,
+        default=0.5,
+        help="Temperature for semantic soft weights in mixed-pool uncertainty PU.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-weight-power",
+        type=float,
+        default=1.0,
+        help="Power used to sharpen semantic soft weights for uncertainty PU.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-detach-features",
+        action="store_true",
+        help=(
+            "Compute the mixed-pool PU uncertainty loss from detached encoder "
+            "features, so this objective updates the uncertainty/rejection head "
+            "without sending its gradient into the shared backbone."
         ),
     )
     p.add_argument(
@@ -1038,6 +1126,68 @@ def parse_args(argv=None):
         type=float,
         default=0.99,
         help="EMA decay for discovery-selection model when --discovery-selection-model ema is used.",
+    )
+    p.add_argument(
+        "--alpha-discovery-known-consistency",
+        type=float,
+        default=0.0,
+        help=(
+            "On a mixed discovery pool, apply a detached-teacher/EMA known-label "
+            "consistency loss only to low-risk, cross-view-agreeing samples."
+        ),
+    )
+    p.add_argument(
+        "--discovery-known-consistency-confidence",
+        type=float,
+        default=0.8,
+        help="Minimum target confidence for the mixed-pool known consistency anchors.",
+    )
+    p.add_argument(
+        "--discovery-known-consistency-target",
+        choices=["ema", "teacher"],
+        default="ema",
+        help="Detached target used for mixed-pool known consistency anchors.",
+    )
+    p.add_argument(
+        "--discovery-known-consistency-gate",
+        choices=["confidence", "prototype", "support", "prototype_support"],
+        default="confidence",
+        help=(
+            "Additional gate for mixed-pool known anchors. confidence keeps the "
+            "historical confidence-only rule; prototype/support require the "
+            "candidate to lie inside labelled-known feature support."
+        ),
+    )
+    p.add_argument(
+        "--discovery-known-consistency-support-multiplier",
+        type=float,
+        default=1.0,
+        help="Multiplier applied to the class-wise known support radius for anchor gating.",
+    )
+    p.add_argument(
+        "--discovery-known-consistency-uncertainty-max",
+        type=float,
+        default=None,
+        help=(
+            "Optional maximum detached target uncertainty for a mixed-pool known "
+            "anchor; omit it to keep uncertainty ungated."
+        ),
+    )
+    p.add_argument(
+        "--discovery-known-consistency-uncertainty-source",
+        choices=["head", "mc_epistemic", "mc_predictive_entropy"],
+        default="head",
+        help=(
+            "Uncertainty used by the mixed-pool known-anchor gate. head is the "
+            "learned uncertainty head; mc_epistemic uses MC-Dropout mutual "
+            "information; mc_predictive_entropy uses MC predictive entropy."
+        ),
+    )
+    p.add_argument(
+        "--discovery-known-consistency-uncertainty-mc-samples",
+        type=int,
+        default=4,
+        help="Number of stochastic teacher passes for MC known-anchor gating.",
     )
     p.add_argument(
         "--discovery-neighbor-filter",
@@ -1507,6 +1657,7 @@ def parse_args(argv=None):
             "normalized_entropy_gaussian_nll",
             "relative_mahalanobis",
             "normalized_entropy_relative_mahalanobis",
+            "normalized_entropy_proto_relative_mahalanobis",
             "vim_residual",
             "head_uncertainty",
             "feature_rejector",
@@ -1602,7 +1753,17 @@ def parse_args(argv=None):
     p = sub.add_parser("inspect_data")
     add_common(p)
     p.add_argument("--sample-count", type=int, default=5)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    resolve_transform_profile(args)
+    return args
+
+
+def resolve_transform_profile(args) -> None:
+    """Resolve the user-facing transform profile before data/model creation."""
+    requested = args.transform_profile
+    if requested == "auto":
+        args.transform_profile = "cifar" if args.dataset == "cifar100" else "imagenet"
+    args.transform_profile_requested = requested
 
 
 def load_checkpoint(
@@ -1756,6 +1917,47 @@ def save_command_config(run_dir, command: str, config: dict) -> None:
     save_json(run_dir / f"{command}_config.json", config)
 
 
+def build_encoder_optimizer_groups(encoder, base_lr: float, layer_decay: float = 1.0):
+    """Build optional layer-wise LR groups without changing the default path."""
+    if not 0.0 < layer_decay <= 1.0:
+        raise ValueError("encoder layer decay must be in (0, 1]")
+    named_parameters = [
+        (name, parameter)
+        for name, parameter in encoder.named_parameters()
+        if parameter.requires_grad
+    ]
+    if not named_parameters:
+        return []
+    if layer_decay == 1.0:
+        return [{"params": [parameter for _, parameter in named_parameters], "lr": base_lr}]
+
+    # ResNet and MobileNet expose ordered stages as features.<n>.
+    stage_indices = []
+    for name, _ in named_parameters:
+        parts = name.split(".")
+        for index, part in enumerate(parts[:-1]):
+            if part == "features" and parts[index + 1].isdigit():
+                stage_indices.append(int(parts[index + 1]))
+                break
+    if not stage_indices:
+        return [{"params": [parameter for _, parameter in named_parameters], "lr": base_lr}]
+    deepest_stage = max(stage_indices)
+    grouped = {}
+    for name, parameter in named_parameters:
+        stage = None
+        parts = name.split(".")
+        for index, part in enumerate(parts[:-1]):
+            if part == "features" and parts[index + 1].isdigit():
+                stage = int(parts[index + 1])
+                break
+        depth = deepest_stage - stage if stage is not None else 0
+        grouped.setdefault(depth, []).append(parameter)
+    return [
+        {"params": grouped[depth], "lr": base_lr * (layer_decay ** depth)}
+        for depth in sorted(grouped)
+    ]
+
+
 def scheduled_weight(epoch: int, warmup_epochs: int = 0, ramp_epochs: int = 0) -> float:
     """Return a loss multiplier using epoch-indexed warmup and linear ramp."""
     warmup_epochs = max(int(warmup_epochs), 0)
@@ -1768,15 +1970,21 @@ def scheduled_weight(epoch: int, warmup_epochs: int = 0, ramp_epochs: int = 0) -
     return min(1.0, max(0.0, (epoch_number - warmup_epochs) / ramp_epochs))
 
 
-def clone_dataset_with_eval_transform(dataset, image_size: int):
+def clone_dataset_with_eval_transform(
+    dataset, image_size: int, transform_profile: str = "imagenet"
+):
     """Shallow-clone Subset wrappers and use deterministic transforms on base data."""
     cloned = copy.copy(dataset)
     if hasattr(dataset, "indices") and hasattr(dataset, "dataset"):
-        cloned.dataset = clone_dataset_with_eval_transform(dataset.dataset, image_size)
+        cloned.dataset = clone_dataset_with_eval_transform(
+            dataset.dataset, image_size, transform_profile
+        )
         return cloned
     if hasattr(dataset, "base"):
         cloned.base = copy.copy(dataset.base)
-        cloned.base.transform = build_transforms(image_size, train=False)
+        cloned.base.transform = build_transforms(
+            image_size, train=False, profile=transform_profile
+        )
         return cloned
     raise TypeError(
         "kNN support-bank refresh requires a dataset wrapper exposing a base dataset"
@@ -1887,12 +2095,14 @@ def _score_needs_shared_mahalanobis(score_mode: str, auto_calibrate: bool = Fals
         "normalized_entropy_mahalanobis_knn",
         "relative_mahalanobis",
         "normalized_entropy_relative_mahalanobis",
+        "normalized_entropy_proto_relative_mahalanobis",
         "classwise_mahalanobis",
         "normalized_entropy_classwise_mahalanobis",
         "gaussian_nll",
         "normalized_entropy_gaussian_nll",
         "relative_mahalanobis",
         "normalized_entropy_relative_mahalanobis",
+        "normalized_entropy_proto_relative_mahalanobis",
     }
 
 
@@ -1976,6 +2186,7 @@ def fit_teacher(args):
         matched_pool_size=args.matched_pool_size,
         matched_known_prior=args.matched_known_prior,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
+        transform_profile=args.transform_profile,
     )
     device = resolve_device(args.device)
     print(f"device: {device}")
@@ -2131,6 +2342,43 @@ def fit_student(args):
                 "--joint-mixed-known-consistency requires "
                 "--alpha-joint-known-consistency > 0"
             )
+    if args.alpha_discovery_known_consistency > 0.0:
+        if args.discovery_pool_mode != "mixed" or not args.discovery_pool:
+            raise ValueError(
+                "--alpha-discovery-known-consistency requires "
+                "--discovery-pool and --discovery-pool-mode mixed"
+            )
+        if not 0.0 < args.discovery_known_consistency_confidence <= 1.0:
+            raise ValueError(
+                "--discovery-known-consistency-confidence must be in (0, 1]"
+            )
+        if args.discovery_known_consistency_target == "ema" and args.discovery_selection_model != "ema":
+            raise ValueError(
+                "EMA known consistency requires --discovery-selection-model ema"
+            )
+        if args.discovery_known_consistency_gate != "confidence" and args.alpha_discovery_knn_boundary <= 0.0:
+            # The support bank is also useful as an anchor gate.  It is built
+            # below independently of the optional KNN boundary loss, so this
+            # condition is intentionally informational rather than an error.
+            pass
+        if args.discovery_known_consistency_support_multiplier <= 0.0:
+            raise ValueError(
+                "--discovery-known-consistency-support-multiplier must be positive"
+            )
+        if args.discovery_known_consistency_uncertainty_max is not None and not (
+            0.0 <= args.discovery_known_consistency_uncertainty_max <= 1.0
+        ):
+            raise ValueError(
+                "--discovery-known-consistency-uncertainty-max must be in [0, 1]"
+            )
+        if (
+            args.discovery_known_consistency_uncertainty_source != "head"
+            and args.discovery_known_consistency_uncertainty_mc_samples < 2
+        ):
+            raise ValueError(
+                "MC known-anchor uncertainty requires "
+                "--discovery-known-consistency-uncertainty-mc-samples >= 2"
+            )
         if not 0.0 < args.joint_known_confidence_threshold <= 1.0:
             raise ValueError("--joint-known-confidence-threshold must be in (0, 1]")
     if args.joint_novel_ema_weights and (
@@ -2169,6 +2417,7 @@ def fit_student(args):
         matched_pool_size=args.matched_pool_size,
         matched_known_prior=args.matched_known_prior,
         open_val_ratio=getattr(args, "open_val_ratio", 0.0),
+        transform_profile=args.transform_profile,
     )
     device = resolve_device(args.device)
     print(f"device: {device}")
@@ -2194,6 +2443,7 @@ def fit_student(args):
             args.outlier_data_root,
             args.image_size,
             download=args.outlier_download,
+            transform_profile=args.transform_profile,
         )
         outlier_loader = build_loader(
             outlier_dataset,
@@ -2217,12 +2467,17 @@ def fit_student(args):
         or args.alpha_discovery_selective_unknown > 0.0
         or args.alpha_discovery_selective_energy > 0.0
         or args.joint_discovery
+        or args.alpha_discovery_known_consistency > 0.0
     )
     if uses_discovery_regularizer and not args.discovery_pool:
         raise ValueError("Discovery regularizers require --discovery-pool.")
     uses_mixed_pu = (
         args.alpha_discovery_uncertainty_pu > 0.0
         or args.alpha_discovery_rejection_pu_feature_margin > 0.0
+        or (
+            args.alpha_discovery_boundary > 0.0
+            and args.discovery_boundary_mode == "pu"
+        )
     )
     if uses_mixed_pu:
         if args.discovery_pool_mode != "mixed":
@@ -2272,7 +2527,10 @@ def fit_student(args):
                 (
                     args.alpha_discovery_feature_margin > 0.0
                     or args.alpha_discovery_feature_separation > 0.0
-                    or args.alpha_discovery_boundary > 0.0
+                    or (
+                        args.alpha_discovery_boundary > 0.0
+                        and args.discovery_boundary_mode == "pure"
+                    )
                 )
                 and not args.discovery_feature_candidate_gating
             )
@@ -2292,7 +2550,7 @@ def fit_student(args):
                 "for feature losses on a mixed pool."
             )
         discovery_loader = build_loader(
-            TwoViewDataset(bundle.discovery_pool),
+            TwoViewDataset(bundle.discovery_pool, include_metadata=True),
             args.discovery_batch_size or args.batch_size,
             True,
             args.num_workers,
@@ -2333,7 +2591,19 @@ def fit_student(args):
         for parameter in student_ema.parameters():
             parameter.requires_grad_(False)
     knn_support_loader = None
-    if args.alpha_discovery_knn_boundary > 0.0:
+    needs_known_support_bank = (
+        args.alpha_discovery_knn_boundary > 0.0
+        or (
+            args.alpha_discovery_known_consistency > 0.0
+            and args.discovery_known_consistency_gate != "confidence"
+        )
+        or (
+            args.alpha_discovery_uncertainty_pu > 0.0
+            and args.discovery_uncertainty_pu_weight_source
+            in {"known_support", "support_consensus", "support_blended"}
+        )
+    )
+    if needs_known_support_bank:
         if args.discovery_knn_k <= 0:
             raise ValueError("--discovery-knn-k must be positive")
         if not 0.5 <= args.discovery_knn_quantile < 1.0:
@@ -2341,7 +2611,7 @@ def fit_student(args):
         if args.discovery_knn_margin < 0.0:
             raise ValueError("--discovery-knn-margin must be non-negative")
         deterministic_known_train = clone_dataset_with_eval_transform(
-            bundle.train, args.image_size
+            bundle.train, args.image_size, args.transform_profile
         )
         knn_support_loader = build_loader(
             deterministic_known_train, args.batch_size, False, args.num_workers
@@ -2405,6 +2675,8 @@ def fit_student(args):
         print("initialized VOS class-conditional Gaussian statistics")
     if args.encoder_lr_scale < 0.0:
         raise ValueError("--encoder-lr-scale must be non-negative")
+    if not 0.0 < args.encoder_lr_decay <= 1.0:
+        raise ValueError("--encoder-lr-decay must be in (0, 1]")
     encoder_parameters = list(student.encoder.parameters())
     encoder_parameter_ids = {id(parameter) for parameter in encoder_parameters}
     head_parameters = [
@@ -2417,11 +2689,11 @@ def fit_student(args):
         reciprocal_points = torch.nn.Parameter(
             torch.randn(args.reciprocal_points, student.encoder.out_dim, device=device) * 0.02
         )
-    optimizer_groups = [
-        {
-            "params": encoder_parameters,
-            "lr": args.lr * args.encoder_lr_scale,
-        },
+    optimizer_groups = build_encoder_optimizer_groups(
+        student.encoder,
+        base_lr=args.lr * args.encoder_lr_scale,
+        layer_decay=args.encoder_lr_decay,
+    ) + [
         {
             "params": head_parameters,
             "lr": args.lr,
@@ -2499,9 +2771,28 @@ def fit_student(args):
             ramp_epochs=args.discovery_knn_ramp_epochs,
         )
         discovery_knn_support = None
+        support_pu_active = (
+            args.alpha_discovery_uncertainty_pu > 0.0
+            and args.discovery_uncertainty_pu_weight_source
+            in {"known_support", "support_consensus", "support_blended"}
+        )
         if (
-            args.alpha_discovery_knn_boundary > 0.0
-            and discovery_knn_boundary_weight > 0.0
+            (
+                args.alpha_discovery_knn_boundary > 0.0
+                or support_pu_active
+                or (
+                    args.alpha_discovery_known_consistency > 0.0
+                    and args.discovery_known_consistency_gate != "confidence"
+                )
+            )
+            and (
+                discovery_knn_boundary_weight > 0.0
+                or support_pu_active
+                or (
+                    args.alpha_discovery_known_consistency > 0.0
+                    and args.discovery_known_consistency_gate != "confidence"
+                )
+            )
         ):
             discovery_knn_support = collect_classwise_knn_support(
                 student,
@@ -2636,6 +2927,14 @@ def fit_student(args):
             discovery_cross_view_gating=args.discovery_cross_view_gating,
             discovery_pool_mode=args.discovery_pool_mode,
             alpha_discovery_boundary=args.alpha_discovery_boundary,
+            discovery_boundary_mode=args.discovery_boundary_mode,
+            discovery_boundary_known_prior=(
+                resolved_discovery_uncertainty_known_prior
+                if resolved_discovery_uncertainty_known_prior is not None
+                else 0.2
+            ),
+            discovery_boundary_pu_risk=args.discovery_boundary_pu_risk,
+            discovery_boundary_pu_softness=args.discovery_boundary_pu_softness,
             discovery_boundary_margin=args.discovery_boundary_margin,
             discovery_boundary_prototype_weight=args.discovery_boundary_prototype_weight,
             discovery_boundary_temperature=args.discovery_boundary_temperature,
@@ -2661,6 +2960,18 @@ def fit_student(args):
                 else 0.2
             ),
             discovery_uncertainty_pu_risk=args.discovery_uncertainty_pu_risk,
+            discovery_uncertainty_pu_weight_source=(
+                args.discovery_uncertainty_pu_weight_source
+            ),
+            discovery_uncertainty_pu_weight_temperature=(
+                args.discovery_uncertainty_pu_weight_temperature
+            ),
+            discovery_uncertainty_pu_weight_power=(
+                args.discovery_uncertainty_pu_weight_power
+            ),
+            discovery_uncertainty_pu_detach_features=(
+                args.discovery_uncertainty_pu_detach_features
+            ),
             alpha_discovery_selective_unknown=args.alpha_discovery_selective_unknown * selective_weight,
             alpha_discovery_selective_energy=args.alpha_discovery_selective_energy * selective_weight,
             discovery_select_ratio=args.discovery_select_ratio,
@@ -2687,6 +2998,23 @@ def fit_student(args):
                 args.discovery_selection_model == "ema"
             ),
             discovery_ema_decay=args.discovery_ema_decay,
+            alpha_discovery_known_consistency=args.alpha_discovery_known_consistency,
+            discovery_known_consistency_confidence=args.discovery_known_consistency_confidence,
+            discovery_known_consistency_target=args.discovery_known_consistency_target,
+            discovery_known_consistency_gate=args.discovery_known_consistency_gate,
+            discovery_known_consistency_support=discovery_knn_support,
+            discovery_known_consistency_support_multiplier=(
+                args.discovery_known_consistency_support_multiplier
+            ),
+            discovery_known_consistency_uncertainty_max=(
+                args.discovery_known_consistency_uncertainty_max
+            ),
+            discovery_known_consistency_uncertainty_source=(
+                args.discovery_known_consistency_uncertainty_source
+            ),
+            discovery_known_consistency_uncertainty_mc_samples=(
+                args.discovery_known_consistency_uncertainty_mc_samples
+            ),
             discovery_neighbor_filter=args.discovery_neighbor_filter,
             discovery_neighbor_k=args.discovery_neighbor_k,
             discovery_neighbor_min_votes=args.discovery_neighbor_min_votes,
@@ -2921,6 +3249,7 @@ def discover(args):
         matched_pool_size=args.matched_pool_size,
         matched_known_prior=args.matched_known_prior,
         open_val_ratio=args.open_val_ratio,
+        transform_profile=args.transform_profile,
     )
     device = resolve_device(args.device)
     print(f"device: {device}")
@@ -2970,7 +3299,7 @@ def discover(args):
         if not 0.5 <= args.knn_support_quantile < 1.0:
             raise ValueError("--knn-support-quantile must be in [0.5, 1.0)")
         deterministic_train = clone_dataset_with_eval_transform(
-            bundle.train, args.image_size
+            bundle.train, args.image_size, args.transform_profile
         )
         train_feature_loader = build_loader(
             deterministic_train, args.batch_size, False, args.num_workers
@@ -3795,8 +4124,11 @@ def inspect_data(args):
         matched_discovery_pool=args.matched_discovery_pool,
         matched_pool_size=args.matched_pool_size,
         matched_known_prior=args.matched_known_prior,
+        transform_profile=args.transform_profile,
     )
     print("dataset:", args.dataset)
+    print("transform profile:", args.transform_profile)
+    print("transform profile requested:", args.transform_profile_requested)
     print("known classes:", len(bundle.known_classes))
     print("novel classes:", len(bundle.novel_classes))
     print("train size:", len(bundle.train))

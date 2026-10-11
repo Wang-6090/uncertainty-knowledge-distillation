@@ -565,6 +565,81 @@ def unknown_feature_boundary_loss(
     return F.relu(hybrid_max - float(similarity_margin)).mean()
 
 
+def pu_unknown_feature_boundary_loss(
+    known_features: torch.Tensor,
+    known_labels: torch.Tensor,
+    unlabeled_features: torch.Tensor,
+    known_prototypes: torch.Tensor,
+    known_prior: float,
+    similarity_margin: float = 0.2,
+    prototype_weight: float = 0.5,
+    temperature: float = 0.1,
+    risk_mode: str = "hard_nnpu",
+    softness: float = 0.05,
+) -> torch.Tensor:
+    """Estimate unknown boundary risk from a mixed unlabeled pool.
+
+    The mixed-pool boundary penalty is corrected by the estimated known
+    contribution, so known samples in the pool are not directly repelled.
+    Class centroids are detached support statistics; gradients flow only into
+    the unlabeled features.
+    """
+    if (
+        known_features.numel() == 0
+        or unlabeled_features.numel() == 0
+        or known_prototypes.numel() == 0
+    ):
+        reference = unlabeled_features if unlabeled_features.numel() else known_features
+        return reference.new_tensor(0.0)
+    if known_features.ndim != 2 or unlabeled_features.ndim != 2:
+        raise ValueError("known_features and unlabeled_features must be 2-D")
+    if known_labels.ndim != 1 or known_labels.size(0) != known_features.size(0):
+        raise ValueError("known_labels must contain one label per known feature")
+    if known_prototypes.ndim != 2 or known_prototypes.size(1) != known_features.size(1):
+        raise ValueError("known_prototypes must match the feature dimension")
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if risk_mode not in {"hard_nnpu", "soft_nnpu"}:
+        raise ValueError("risk_mode must be 'hard_nnpu' or 'soft_nnpu'")
+    if float(softness) <= 0.0:
+        raise ValueError("softness must be positive")
+
+    tau = max(float(temperature), 1e-6)
+    weight = min(max(float(prototype_weight), 0.0), 1.0)
+    prototypes = F.normalize(known_prototypes.detach(), dim=-1)
+    known = F.normalize(known_features.detach(), dim=-1)
+    unlabeled = F.normalize(unlabeled_features, dim=-1)
+
+    centroids = []
+    for cls in torch.unique(known_labels.detach()):
+        class_values = known[known_labels == cls]
+        if class_values.numel():
+            centroids.append(F.normalize(class_values.mean(dim=0, keepdim=True), dim=-1).squeeze(0))
+    local_centroids = torch.stack(centroids, dim=0) if centroids else None
+
+    def boundary_penalty(values: torch.Tensor) -> torch.Tensor:
+        prototype_max = (values @ prototypes.T).max(dim=-1).values
+        if local_centroids is None:
+            local_max = prototype_max
+        else:
+            local_similarity = values @ local_centroids.T
+            local_max = tau * (
+                torch.logsumexp(local_similarity / tau, dim=-1)
+                - torch.log(local_similarity.new_tensor(float(local_similarity.size(1))))
+            )
+        hybrid_max = weight * prototype_max + (1.0 - weight) * local_max
+        return F.relu(hybrid_max - float(similarity_margin))
+
+    mixed_risk = boundary_penalty(unlabeled).mean()
+    known_correction = boundary_penalty(known).mean().detach()
+    unknown_risk = (mixed_risk - prior * known_correction) / (1.0 - prior)
+    if risk_mode == "hard_nnpu":
+        return unknown_risk.clamp_min(0.0)
+    tau_risk = float(softness)
+    return tau_risk * F.softplus(unknown_risk / tau_risk)
+
+
 def objectosphere_loss(
     known_features: torch.Tensor,
     unknown_features: torch.Tensor,
@@ -950,13 +1025,16 @@ def nnpu_known_uncertainty_loss(
     unlabeled_uncertainty: torch.Tensor,
     known_prior: float,
     risk_mode: str = "legacy",
+    unlabeled_weight: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Non-negative PU risk for known-vs-unknown scoring from a mixed pool.
 
     The uncertainty head estimates novelty, so ``1 - uncertainty`` is treated
     as the positive (known) probability. Labeled known samples are P; the
     mixed discovery pool is U and is never assigned per-example unknown labels.
-    ``known_prior`` is the assumed known proportion in U.
+    ``known_prior`` is the assumed known proportion in U. ``unlabeled_weight``
+    is an optional heuristic for emphasizing likely-unknown mixed-pool samples;
+    it is normalized to mean 1 so the loss scale stays comparable.
     """
     prior = float(known_prior)
     if not 0.0 < prior < 1.0:
@@ -969,19 +1047,40 @@ def nnpu_known_uncertainty_loss(
 
     known_u = known_uncertainty.reshape(-1).clamp(1e-6, 1.0 - 1e-6)
     unlabeled_u = unlabeled_uncertainty.reshape(-1).clamp(1e-6, 1.0 - 1e-6)
+    if unlabeled_weight is not None:
+        weight = unlabeled_weight.reshape(-1).to(unlabeled_u).clamp_min(0.0)
+        if weight.numel() != unlabeled_u.numel():
+            raise ValueError("unlabeled_weight must match unlabeled_uncertainty")
+        weight_sum = weight.sum()
+        if weight_sum.detach().item() <= 0.0:
+            weight = torch.ones_like(unlabeled_u)
+        else:
+            weight = weight * (weight.numel() / weight_sum.clamp_min(1e-8))
+    else:
+        weight = None
     # g is the knownness logit: positive values indicate known samples.
     known_logit = torch.log1p(-known_u) - torch.log(known_u)
     unlabeled_logit = torch.log1p(-unlabeled_u) - torch.log(unlabeled_u)
 
     positive_risk = prior * F.softplus(-known_logit).mean()
-    if risk_mode == "legacy":
-        # Preserve the historical implementation for exact replication.
-        unlabeled_known_risk = F.softplus(unlabeled_logit).mean()
+    # U = prior * P_known + (1 - prior) * P_unknown.  Since the classifier
+    # score is the *knownness* logit, P_known is the positive class and the
+    # negative-class logistic loss is softplus(known_logit).  Consequently
+    # the unbiased mixed-pool negative risk is
+    #
+    #   E_U[softplus(z)] - prior * E_P[softplus(z)].
+    #
+    # The historical branch already implements this expression.  The old
+    # opt-in ``nu_corrected`` branch accidentally used softplus(-z) for U,
+    # which is the positive-class loss and has the wrong sign for this label
+    # convention.  Keep ``legacy`` unchanged for reproducibility, but make
+    # ``nu_corrected`` mathematically consistent with the documented PU
+    # problem so future experiments do not silently train the opposite risk.
+    unlabeled_known_loss = F.softplus(unlabeled_logit)
+    if weight is None:
+        unlabeled_known_risk = unlabeled_known_loss.mean()
     else:
-        # U = prior * P_known + (1 - prior) * P_unknown.  For the
-        # known-positive classifier, the unbiased negative risk is
-        # E_U[l(known=0)] - prior * E_P[l(known=0)].
-        unlabeled_known_risk = F.softplus(-unlabeled_logit).mean()
+        unlabeled_known_risk = (unlabeled_known_loss * weight).mean()
     negative_risk = unlabeled_known_risk - prior * F.softplus(known_logit).mean()
     if negative_risk.detach().item() < 0.0:
         # Kiryo et al.'s nnPU correction uses gradient ascent in the region

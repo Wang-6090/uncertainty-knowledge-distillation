@@ -14,9 +14,36 @@ from .utils import load_json, save_json, split_list
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+CIFAR100_MEAN = (0.5071, 0.4867, 0.4408)
+CIFAR100_STD = (0.2675, 0.2565, 0.2761)
 
 
-def build_transforms(image_size: int, train: bool) -> transforms.Compose:
+def build_transforms(
+    image_size: int,
+    train: bool,
+    profile: str = "imagenet",
+) -> transforms.Compose:
+    if profile not in {"imagenet", "cifar"}:
+        raise ValueError(f"Unsupported transform profile: {profile}")
+    if profile == "cifar":
+        normalize = transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD)
+        if train:
+            return transforms.Compose(
+                [
+                    transforms.Resize((image_size, image_size)),
+                    transforms.RandomCrop(image_size, padding=max(2, image_size // 16)),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    normalize,
+                ]
+            )
+        return transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.ToTensor(),
+                normalize,
+            ]
+        )
     if train:
         return transforms.Compose(
             [
@@ -42,6 +69,7 @@ def build_outlier_dataset(
     root: str,
     image_size: int,
     download: bool = False,
+    transform_profile: str = "imagenet",
 ) -> Dataset:
     """Build an unlabeled auxiliary dataset for Outlier Exposure.
 
@@ -50,7 +78,7 @@ def build_outlier_dataset(
     collection of images from a disjoint source such as Tiny-ImageNet.
     """
     name = dataset_name.lower()
-    transform = build_transforms(image_size, train=True)
+    transform = build_transforms(image_size, train=True, profile=transform_profile)
     if name == "cifar10":
         return datasets.CIFAR10(root=root, train=True, transform=transform, download=download)
     if name == "imagefolder":
@@ -493,8 +521,9 @@ class DataBundle:
 class TwoViewDataset(Dataset):
     """Return two independently augmented views from one base sample."""
 
-    def __init__(self, dataset: Dataset) -> None:
+    def __init__(self, dataset: Dataset, include_metadata: bool = False) -> None:
         self.dataset = dataset
+        self.include_metadata = bool(include_metadata)
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -502,6 +531,10 @@ class TwoViewDataset(Dataset):
     def __getitem__(self, index: int):
         first = self.dataset[index]
         second = self.dataset[index]
+        if self.include_metadata:
+            # Metadata is used only for post-hoc diagnostics of pseudo-anchor
+            # purity. It must never be consumed by the training loss.
+            return first[0], second[0], first[1], first[2], first[3]
         return first[0], second[0]
 
 
@@ -648,6 +681,7 @@ def build_data_bundle(
     matched_discovery_pool: bool = False,
     matched_pool_size: int = 0,
     matched_known_prior: float = 0.2,
+    transform_profile: str = "imagenet",
 ) -> DataBundle:
     if discovery_pool_mode not in {"unknown", "mixed"}:
         raise ValueError(f"Unsupported discovery pool mode: {discovery_pool_mode}")
@@ -682,8 +716,8 @@ def build_data_bundle(
 
     if dataset_name.lower() == "cifar100":
         known_classes, novel_classes = make_class_split(list(range(100)), num_known, seed, split_path)
-        train_tf = build_transforms(image_size, train=True)
-        test_tf = build_transforms(image_size, train=False)
+        train_tf = build_transforms(image_size, train=True, profile=transform_profile)
+        test_tf = build_transforms(image_size, train=False, profile=transform_profile)
         train_full = OpenSetCIFAR100(root, known_classes, train=True, transform=train_tf, download=download, include_unknown=False)
         val_full = OpenSetCIFAR100(root, known_classes, train=True, transform=test_tf, download=download, include_unknown=False)
         pool_full = OpenSetCIFAR100(root, known_classes, train=True, transform=train_tf, download=download, include_unknown=True)
@@ -759,8 +793,8 @@ def build_data_bundle(
             split_file = Path(split_path)
             imagefolder_split = str(split_file.with_name(split_file.stem + "_imagefolder.json"))
         known_classes, novel_classes = make_class_split(base.classes, num_known, seed, imagefolder_split)
-        train_tf = build_transforms(image_size, train=True)
-        test_tf = build_transforms(image_size, train=False)
+        train_tf = build_transforms(image_size, train=True, profile=transform_profile)
+        test_tf = build_transforms(image_size, train=False, profile=transform_profile)
         train_full = OpenSetImageFolder(str(train_root), known_classes, transform=train_tf, include_unknown=False)
         val_full = OpenSetImageFolder(str(train_root), known_classes, transform=test_tf, include_unknown=False)
         pool_full = OpenSetImageFolder(str(train_root), known_classes, transform=train_tf, include_unknown=True)
@@ -821,8 +855,8 @@ def build_data_bundle(
 
     if dataset_name.lower() in {"toy", "fake"}:
         known_classes, novel_classes = make_class_split(list(range(100)), num_known, seed, split_path)
-        train_tf = build_transforms(image_size, train=True)
-        test_tf = build_transforms(image_size, train=False)
+        train_tf = build_transforms(image_size, train=True, profile=transform_profile)
+        test_tf = build_transforms(image_size, train=False, profile=transform_profile)
         train_full = OpenSetFakeData(1000, known_classes, image_size, transform=train_tf, include_unknown=False, random_offset=0)
         val_full = OpenSetFakeData(200, known_classes, image_size, transform=test_tf, include_unknown=False, random_offset=10000)
         pool_full = OpenSetFakeData(1000, known_classes, image_size, transform=train_tf, include_unknown=True, random_offset=30000)

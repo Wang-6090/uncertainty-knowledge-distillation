@@ -1,5 +1,384 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 2026-10-11：encoder 学习率缩放的第二个 seed 复核
+
+前一轮 seed=42 的结果显示，将学生模型预训练 encoder 的学习率从完整值缩放到
+`0.1`，可能在不改变 nnPU、蒸馏和检测器的情况下减轻已知/未知分数重叠。本轮在
+seed=123 上严格复核：CIFAR-100 semantic-isolated 60/40、同一 ResNet-34 teacher、
+ResNet-18 student、CIFAR transform、完整数据、5 epochs、matched mixed pool=5400、
+known prior=0.2、audited nnPU、`normalized_entropy_min_class_knn`、MC=4 和验证集
+95% known coverage 全部固定，只改变 `encoder_lr_scale: 1.0 -> 0.1`。
+
+| 指标 | nnPU baseline | encoder LR 0.1 | 变化 |
+|---|---:|---:|---:|
+| AUROC | 0.7933 | 0.8170 | +0.0237 |
+| AUPR | 0.6701 | 0.7226 | +0.0525 |
+| FPR95 | 0.6088 | 0.5910 | -0.0178 |
+| OSCR | 0.5349 | 0.5603 | +0.0254 |
+| 已知分类准确率 | 60.73% | 62.10% | +1.37 个百分点 |
+| 已知接受率 | 95.68% | 94.55% | -1.13 个百分点 |
+| 未知拒绝率 | 19.78% | 29.53% | +9.75 个百分点 |
+| score KS | 0.4547 | 0.4974 | +0.0427 |
+
+seed=42 和 seed=123 的 AUROC、AUPR、FPR95、OSCR、KS 及固定工作点大体同向改善，
+因此这是目前最有希望的候选方向；它改变了训练得到的连续分数分布，不是简单调阈值。
+但它仍不是核心问题的最终解决方案：seed=123 仍有约 70.47% 的未知样本被接受，且已知
+接受率下降约 1.1 个百分点。详细协议和限制见
+[`analysis/cifar_profile_encoder_lr01_s123_20261011.md`](analysis/cifar_profile_encoder_lr01_s123_20261011.md)。
+
+第三个 seed 的严格配对复核已经完成，结果见下方最新记录。当前暂不把
+boundary loss、angular margin、distance-consensus/support 加权 PU 等已表现不稳定的
+方案与 encoder 学习率缩放叠加；下一步应先在固定 `0.1` 主候选上做小型尺度消融
+（`1.0/0.1/0.01`）或继续做跨 seed 稳定性与表征几何诊断。
+
+## 2026-10-12：encoder 学习率缩放的第三个 seed 严格配对复核
+
+为避免把旧的非配对实验误当成证据，本轮重新训练了 seed=43 的 nnPU baseline，
+只比较 `encoder_lr_scale=1.0` 与 `0.1`。两组使用相同 teacher、数据划分、CIFAR
+transform、5 epochs、matched mixed pool=5400、known prior=0.2、KD、prototype loss、
+nnPU、检测器和验证集 95% known coverage；旧的 seed=43 baseline/treatment 目录没有
+用于归因，因为它们还同时改变了 feature-margin 或检测协议。
+
+| 指标 | scale 1.0 | scale 0.1 | 变化 |
+|---|---:|---:|---:|
+| AUROC | 0.7901 | 0.8228 | +0.0327 |
+| AUPR | 0.6773 | 0.7241 | +0.0468 |
+| FPR95 | 0.6400 | 0.5560 | -0.0840 |
+| OSCR | 0.5324 | 0.5570 | +0.0246 |
+| 已知分类准确率 | 60.55% | 62.12% | +1.57 个百分点 |
+| 已知接受率 | 95.08% | 95.45% | +0.37 个百分点 |
+| 未知拒绝率 | 21.45% | 26.25% | +4.80 个百分点 |
+| score KS | 0.4527 | 0.5113 | +0.0587 |
+| score 均值间隔 | 2.1084 | 2.3149 | +0.2065 |
+| 未知低于已知 q95 | 0.7850 | 0.7173 | -0.0678 |
+
+seed=42、123、43 的严格配对结果均显示同向改善。三 seed 平均值如下：
+
+| 指标 | scale 1.0 平均 | scale 0.1 平均 | 平均变化 |
+|---|---:|---:|---:|
+| AUROC | 0.7913 | 0.8175 | +0.0262 |
+| AUPR | 0.6744 | 0.7196 | +0.0453 |
+| FPR95 | 0.6258 | 0.5727 | -0.0530 |
+| OSCR | 0.5403 | 0.5570 | +0.0167 |
+| 已知分类准确率 | 61.45% | 62.10% | +0.65 个百分点 |
+| 已知接受率 | 95.19% | 95.04% | -0.15 个百分点 |
+| 未知拒绝率 | 21.41% | 27.52% | +6.11 个百分点 |
+| score KS | 0.4543 | 0.4975 | +0.0432 |
+
+这说明 `encoder_lr_scale=0.1` 是目前最值得保留的训练主候选，且收益不只是阈值
+变化：连续分数的 KS、均值间隔和 q95 overlap 同时改善。不过未知拒绝率平均仍约
+27.5%，大多数未知样本仍被接受，因此不能宣称核心重叠问题已经解决。详细 seed=43
+协议和结果见 [`analysis/cifar_profile_encoder_lr01_s43_20261012.md`](analysis/cifar_profile_encoder_lr01_s43_20261012.md)。
+
+## 2026-10-12：encoder 学习率尺度 `0.01` 消融
+
+为判断是否“越小的 encoder 学习率越能保护预训练特征”，在同一 seed=43、同一
+teacher、数据、5 epochs、matched mixed pool、nnPU、检测器和验证校准下，只把
+`encoder_lr_scale` 从 `0.1` 改为 `0.01`。
+
+| 指标 | scale 0.1 | scale 0.01 | 变化 |
+|---|---:|---:|---:|
+| AUROC | 0.8228 | 0.7971 | -0.0257 |
+| AUPR | 0.7241 | 0.6872 | -0.0369 |
+| FPR95 | 0.5560 | 0.6027 | +0.0467 |
+| OSCR | 0.5570 | 0.4762 | -0.0808 |
+| 已知分类准确率 | 62.12% | 53.62% | -8.50 个百分点 |
+| 已知接受率 | 95.45% | 94.68% | -0.77 个百分点 |
+| 未知拒绝率 | 26.25% | 23.98% | -2.28 个百分点 |
+| score KS | 0.5113 | 0.4584 | -0.0529 |
+| score 均值间隔 | 2.3149 | 1.9600 | -0.3549 |
+| 未知低于已知 q95 | 0.7173 | 0.7695 | +0.0523 |
+
+`0.01` 全面差于 `0.1`，说明当前收益不是来自简单地冻结 encoder；`0.1` 是保护
+预训练结构和适应已知类别之间更合适的折中。现在停止继续缩小统一学习率，保留
+`0.1` 为主候选。若后续测试 layer-wise 或 scheduled learning rate，必须以固定
+`0.1` 为单因素 baseline。详见
+[`analysis/cifar_profile_encoder_lr_scale_ablation_s43_20261012.md`](analysis/cifar_profile_encoder_lr_scale_ablation_s43_20261012.md)。
+
+## 2026-10-12：layer-wise encoder 学习率衰减的严格复核
+
+在不改变默认训练行为的前提下，代码新增 `--encoder-lr-decay`。默认值 `1.0` 时，
+encoder 仍使用原来的单一学习率；小于 `1.0` 时，按 backbone 的有序 feature stage
+给浅层更小、深层相对更大的学习率，并与 `--encoder-lr-scale` 相乘。该设计用于在
+当前 `scale=0.1` 的基础上进一步保护低层预训练特征，同时保留高层适应已知类别的能力。
+
+本轮按照该单因素条件完成了 CIFAR-100 seed=43 的严格复核：固定
+`encoder_lr_scale=0.1`，只比较 `encoder_lr_decay=1.0` 与 `0.8`。数据协议、teacher、
+student、5 epochs、matched mixed pool=5400、nnPU、检测器和验证集 95% known coverage
+均不变。
+
+| 指标 | decay 1.0 | decay 0.8 | 变化 |
+|---|---:|---:|---:|
+| AUROC | 0.8228 | 0.8223 | -0.0006 |
+| AUPR | 0.7241 | 0.7257 | +0.0016 |
+| FPR95 | 0.5560 | 0.5823 | +0.0263 |
+| OSCR | 0.5570 | 0.5440 | -0.0130 |
+| 已知分类准确率 | 62.12% | 60.78% | -1.34 个百分点 |
+| 已知接受率 | 95.45% | 94.95% | -0.50 个百分点 |
+| 未知拒绝率 | 26.25% | 28.18% | +1.53 个百分点 |
+| score KS | 0.5113 | 0.5075 | -0.0038 |
+
+未知拒绝率虽然提高了 1.53 个百分点，但同时已知接受率下降，且 FPR95、OSCR、KS
+和均值间隔没有改善。因此这主要是工作点变得更激进，不是连续分数分布真正分离，不能
+认为 layer-wise decay 解决了核心的已知/未知重叠问题。当前保留
+`--encoder-lr-decay` 作为可复现的可选消融开关，主线仍使用
+`encoder_lr_scale=0.1, encoder_lr_decay=1.0`，停止继续扫描 decay。完整协议和产物见
+[`analysis/cifar_profile_encoder_lr_decay08_s43_20261012.md`](analysis/cifar_profile_encoder_lr_decay08_s43_20261012.md)。
+
+### 今日阶段性总结
+
+今天完成了三项相互衔接的工作：
+
+1. 用三个严格配对 seed 复核 `encoder_lr_scale=0.1`。相较 scale=1.0，平均 AUROC
+   从 0.7913 提升到 0.8175，FPR95 从 0.6258 降到 0.5727，OSCR 从 0.5403 提升到
+   0.5570，未知拒绝率从 21.41% 提升到 27.52%；这是目前最有价值的训练改动，但仍
+   有多数未知样本被接受。
+2. 用 seed=43 做 `encoder_lr_scale=0.01` 消融。该设置全面差于 0.1，说明简单地
+   更强地冻结 encoder 不是解决方案。
+3. 新增并严格测试 layer-wise `encoder_lr_decay=0.8`。它没有改善排序和分布分离，
+   因此不进入默认主线。
+
+当前结论是：应停止在统一或分层 encoder 学习率上继续盲目搜索；保留
+`audited nnPU + encoder_lr_scale=0.1 + normalized_entropy_min_class_knn` 作为稳定
+基线。未知/已知重叠仍是首要问题，后续若继续研究，应优先从未知证据、开放集表征
+目标和数据协议审计入手，并继续使用配对 seed、固定 known coverage 以及 AUROC、
+FPR95、OSCR、KS、score overlap 的联合判断。上述判断和本轮数字均记录在
+[`analysis/cifar_profile_encoder_lr_decay08_s43_20261012.md`](analysis/cifar_profile_encoder_lr_decay08_s43_20261012.md)。
+
+## 2026-10-11：按预测类别校准阈值的小实验
+
+前一轮按类误差显示，不同未知类别会被吸收到不同已知预测类。代码已有基于已知验证样本
+的 `class_conditional` 阈值策略；本轮固定同一 seed=123 的 5/10 epoch checkpoint、
+检测分数与数据，只比较该策略和原有全局 95% known-coverage 阈值。类别阈值仅用已知验证
+样本按“模型预测类别”估计，样本不足时回退到全局阈值，未知测试标签只用于最终报告。
+
+5 epoch 下，按类阈值将未知拒绝率从 13.53% 提到 16.45%，但已知接受率从 95.92%
+降到 94.30%；检测平衡准确率（已知接受率与未知拒绝率的平均值）增加 0.65 个百分点。
+在 seed=42 的 5 epoch 模型上也复核到相同方向：未知拒绝率从 14.95% 提到 17.28%，
+已知接受率从 94.43% 降到 93.48%，平衡准确率增加约 0.69 个百分点。10 epoch 下，
+拒绝率从 13.60% 提到 14.98%，已知接受率从 95.07% 降到 93.68%，平衡准确率基本不变。
+各比较的 AUROC/AUPR/FPR95/OSCR 均不变，因为只改变了二元决策阈值，
+没有改变连续分数或特征。进一步把每个样本分数减去其预测类别的验证阈值，尝试按类中心化
+后统一排序，seed=42/123 的 AUROC/AUPR/FPR95 均变差，因此拒绝该分数重排方案。
+按类阈值最多是有待更多 seed 复核的可选工作点策略，不是核心重叠问题
+的解决方案，也不能据此声称表征改善。测试集仍显示皮卡车、电视/公共汽车等未知类难以拒绝，
+并会流向语义相近的已知类。详细协议、指标和局限见
+[`analysis/class_conditional_threshold_pilot_s123_20261011.md`](analysis/class_conditional_threshold_pilot_s123_20261011.md)。
+
+本轮也修正了按类误差脚本：现在能正确应用全局标量阈值或类别阈值数组，并输出未知类被接收后
+对应的已知预测类别，避免审计 class-conditional 实验时错误地把阈值数组转成单个数。
+
+## 2026-10-11：几何诊断与训练时长复核
+
+本轮针对已知/未知重叠，使用 CIFAR-100 semantic-isolated 60/40、seed=123
+和完整数据做了按样本配对的特征距离诊断，并在相同数据、教师、无权重
+audited nnPU、检测器及验证校准下比较 5 与 10 epochs。几何诊断分别考察分类器
+原型距离、经验类中心距离、最近已知训练样本距离；测试标签只用于事后分组统计。
+
+结果没有支持“某个 PU 梯度路由全面改善表征”：直接加权 PU 的三个距离指标都变差；
+detached PU 只改善原型距离，类中心和最近样本距离反而变差。延长到 10 epochs
+使全部已知分类准确率从 46.58% 升至 52.13%、OSCR 从 0.3914 升至 0.4358，
+但 AUROC 从 0.7180 降至 0.7156、AUPR 从 0.5938 降至 0.5824、FPR95 从
+0.7635 升至 0.7685、未知拒绝率仅从 13.53% 变为 13.60%，KS 也略降。
+因此，更多训练对已知分类有帮助，但没有解决开集排序和分布重叠；拒绝率的微小变化
+不构成有效提升。当前不把 detached PU 或 10-epoch 训练升级为开集主方案。
+
+按类事后审计进一步显示，误接收不是由少数未知类单独造成：5 epoch 接受了
+3459/4000 个未知样本，10 epoch 接受了 3456/4000 个。皮卡车（CIFAR-100 类别 58）
+在两者中都最难拒绝（误接收率均为 98%），但大量其他未知类别也有高误接收；误接收
+还分散流入多个已知预测类别（5 epoch 主要流向仓鼠、沙发、摩天大楼、蘑菇、衣柜；
+10 epoch 主要流向鲨鱼、沙发、仓鼠、蘑菇、松鼠）。这说明问题不只是某一个未知类别，
+也可能同时受类别表征/分类混淆影响。此结果只作测试集事后诊断，不据此设置类阈值或训练。
+详见 [`analysis/feature_geometry_and_training_budget_20261011.md`](analysis/feature_geometry_and_training_budget_20261011.md)
+及 [`analysis/classwise_open_errors_unweighted_5vs10_s123_20261011.json`](analysis/classwise_open_errors_unweighted_5vs10_s123_20261011.json)。
+
+按类误差审计已完成：误接收分散于多个未知类，并流入多个已知预测类；下一步应做
+逐样本近邻诊断，检查已知误分类与未知误接收是否共享局部邻域，再据此区分语义相似、
+类别多模态或数据/分辨率问题。测试标签只用于事后分析，不能参与训练、阈值选择或调参。
+协议、全部距离结果和限制见
+[`analysis/feature_geometry_and_training_budget_20261011.md`](analysis/feature_geometry_and_training_budget_20261011.md)。
+
+## 2026-10-11：分离 nnPU 梯度路由的全量复核
+
+前一轮 seed=123 发现，`distance_consensus` 加权 nnPU 能提高 uncertainty
+head 自身排序，却损害 prototype distance、entropy 与最终检测器。本轮检验
+“PU 梯度干扰共享特征表示”这一具体假设：新增默认关闭的
+`--discovery-uncertainty-pu-detach-features`，让 PU loss 在 detach 后的特征上
+更新 uncertainty/rejection head，但不让该项梯度回到 backbone；其余训练损失
+仍按原路径更新表示。定向单测验证 head 有梯度、输入特征无梯度。
+
+本轮在 CIFAR-100 semantic-isolated 60/40、seed=123、全量数据、同一教师、预训练
+ResNet-18 学生、5 epochs、matched mixed pool=5400、known prior=0.2 下比较加权 PU
+直接回传与 detached 特征；两组只差 detach 开关。检测固定为
+`normalized_entropy_proto`、MC=4、验证集 95% known coverage；另列此前无权重 nnPU
+模型作为参照。
+
+| 指标 | 无权重 nnPU | 加权 PU：直接梯度 | 加权 PU：detached features |
+|---|---:|---:|---:|
+| AUROC | 0.7180 | 0.7012 | 0.6997 |
+| AUPR | 0.5938 | 0.5716 | 0.5615 |
+| FPR95 | 0.7635 | 0.7800 | 0.7832 |
+| OSCR | 0.3914 | 0.3720 | 0.3639 |
+| 已知接受率 | 95.92% | 94.75% | 95.47% |
+| 未知拒绝率 | 13.53% | 13.18% | 11.73% |
+| 全部已知分类准确率 | 46.58% | 44.78% | 43.68% |
+| score KS | 0.3348 | 0.3041 | 0.3103 |
+
+**结论：这个梯度隔离方案没有改善总体开放集表现，不应设为默认。**它比直接梯度略
+多接受已知样本，但 AUROC/AUPR/OSCR 和未知拒绝率更差于无权重参照；不能把已知接受率
+单项变化误判为解决了已知/未知重叠。保留为可选消融，不继续对同一开关做参数扫描。
+实验协议、限制与后续诊断方向见
+[`analysis/pu_detached_features_full_recheck_20261011.md`](analysis/pu_detached_features_full_recheck_20261011.md)。
+
+## 2026-10-11：distance-consensus 全量独立 seed 复核
+
+上一轮 seed=42 的全量实验中，`distance_consensus` 加权 mixed-pool uncertainty
+nnPU 曾显示小幅正向信号，但只有一个完整 seed，不能据此设为主线。本轮按相同
+协议补做 seed=123 的严格配对复核：只改变
+`discovery_uncertainty_pu_weight_source`（`none` 对 `distance_consensus`），其余
+教师、数据划分、ResNet-34/18、全量数据、5 epoch、matched pool=5400、known
+prior=0.2、`normalized_entropy_proto` 检测器、MC=4 和 validation-only 95%
+known coverage 均保持一致。
+
+| 指标 | none 对照 | distance-consensus | treatment - baseline |
+|---|---:|---:|---:|
+| AUROC | 0.7180 | 0.7012 | -0.0167 |
+| AUPR | 0.5938 | 0.5716 | -0.0222 |
+| FPR95 | 0.7635 | 0.7800 | +0.0165 |
+| OSCR | 0.3914 | 0.3720 | -0.0193 |
+| 已知接受率 | 95.92% | 94.75% | -1.17 个百分点 |
+| 未知拒绝率 | 13.53% | 13.18% | -0.35 个百分点 |
+| score KS | 0.3348 | 0.3041 | -0.0308 |
+
+结论：seed=42 的正向结果没有在 seed=123 复现，且 treatment 的排序指标、固定
+已知覆盖率工作点和分布分离指标均变差。因此该方法只能保留为可复现实验开关和
+消融/诊断项，不能设为默认，也不再继续盲目搜索 temperature 或融合比例。当前
+主线应回到不加该权重的 audited nnPU，并转向直接作用于特征空间的表征学习和
+数据协议审计。详细记录见
+`analysis/distance_consensus_full_recheck_20261011.md`；产物见
+`runs/distance_consensus_full_s123_baseline_discover/` 和
+`runs/distance_consensus_full_s123_treatment_discover/`。
+
+这次复核也再次说明：unknown reject 单独上升不能证明算法有效，必须同时检查
+AUROC、FPR95、OSCR、known accept 和 score KS；如果只改变阈值附近工作点而没有
+降低整体 overlap，就不能宣称核心问题得到解决。
+
+进一步的组件诊断显示，seed=123 treatment 并非所有信号都变差：最终
+`normalized_entropy_proto` 的 AUROC/KS 从 `0.7180/0.3348` 降到
+`0.7012/0.3041`，prototype distance 从 `0.7042/0.3053` 降到
+`0.6851/0.2812`，entropy 从 `0.6994/0.2993` 降到 `0.6863/0.2785`；只有
+uncertainty head 自身从 `0.6087/0.1741` 升到 `0.6415/0.2072`。这说明该 PU
+权重确实强化了 uncertainty head 的排序，却损害了最终检测器依赖的原型距离和
+熵几何，属于训练目标冲突，而不是简单阈值问题。后续应优先研究如何解耦或协调
+uncertainty head 与已知类表征目标，而不是继续调同一个权重来源。
+
+## 2026-10-11：局部已知支持几何的成对复核
+
+本轮针对“已知/未知分布重叠”测试了训练端局部支持几何。新增的
+`known_support` 使用已知训练样本建立每类 leave-one-out kNN cosine 支持半径，
+将混合 discovery pool 中相对远离已知支持的样本赋予更高的 nnPU 未标注项权重；
+`support_consensus` 将该信号与 prototype distance、entropy、MSP 等信号等权融合；
+`support_blended` 保留原 `distance_consensus` 的 75% 权重，只加入 25% 局部支持排名。
+这些权重仍是启发式样本权重，不是严格无偏 nnPU 估计，也没有使用未知标签训练。
+
+代码审计方面，支持库构建现在通过 `torch.random.fork_rng` 恢复 CPU/CUDA RNG，
+避免启用支持库后改变训练增强和 batch 顺序；候选选择器 CLI 不接受这些仅属于
+PU 权重的模式。全量测试为 `201 passed`。
+
+检测协议固定为 CIFAR-100 random 60/40、seed、预训练 teacher、1200/300/1000
+数据限制、2 epochs、matched mixed pool 400、known prior 0.2、
+`normalized_entropy_proto`、验证集 95% known coverage。只改变 PU 权重来源：
+
+| seed | 方法 | AUROC | FPR95 | OSCR | known accept | unknown reject | KS distance |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 42 | distance_consensus | 0.6331 | 0.8430 | 0.1915 | 93.22% | 8.86% | 0.2223 |
+| 42 | known_support | 0.6223 | 0.8777 | 0.1732 | 96.69% | 7.34% | 0.2079 |
+| 42 | support_consensus | 0.6232 | 0.8165 | 0.2111 | 93.22% | 6.84% | 0.1959 |
+| 42 | support_blended | 0.6317 | 0.8132 | 0.1929 | 95.04% | 7.85% | 0.2277 |
+| 123 | distance_consensus | 0.5772 | 0.8844 | 0.2588 | 95.48% | 7.94% | 0.1131 |
+| 123 | support_blended | 0.5755 | 0.8878 | 0.2311 | 93.97% | 7.94% | 0.1338 |
+
+判断：`known_support` 单独使用无效；`support_consensus` 只改善 seed=42 的
+FPR95/OSCR 工作点，整体排序和未知拒绝率没有改善；`support_blended` 在 seed=42
+的工作点较好，但 seed=123 未复现，两个 seed 的 AUROC 均低于对照。局部支持信号
+在两 seed 上提高了 KS distance，却没有稳定提高 AUROC，说明它可能只改变分数的
+局部形状或校准，而没有可靠解决已知/未知特征重叠。因此当前主线仍是
+`distance_consensus`，支持几何保留为可选消融与诊断，不纳入默认配置，也不继续
+盲目搜索更多融合比例。
+
+下一步应转向更根本的表征学习/协议审计：检查 uncertainty head 的 PU 目标是否与
+分类蒸馏目标冲突，并测试能直接作用于特征空间的、严格单变量的未知代理或类条件
+边界目标；同时继续报告 AUROC、OSCR、known accept、unknown reject 与 score KS，
+不能只依据某个阈值工作点的拒绝率判断有效。
+
+## 2026-10-11：围绕核心重叠问题的继续审计与组合尝试
+
+本轮继续围绕“已知/未知特征与分数分布重叠，未知拒绝率低”做小步迭代。为了避免只看 unknown reject 而误判，代码新增了 score_distribution 诊断：discover 报告现在会输出 known/unknown 分数均值、分位数、KS distance、unknown 落在 known 95% 分位以下的比例、阈值处 known/unknown 的实际拒绝比例。这个诊断不改变模型，只帮助判断方法是否真的拉开分布。
+
+对昨天最有希望的 distance_consensus weighted nnPU 做了分布复核。结论是：weighted PU 能提高 unknown 分数均值、降低一部分阈值附近重叠，但 KS distance 没有同步明显变好，说明它还没有真正整体解决分布重叠，更像是在高分尾部和工作点附近改善。
+
+本轮尝试的组合方法中，distance_consensus PU + consensus feature-margin 得到 AUROC 0.5956、FPR95 0.8793、unknown reject 9.11%，差于 PU alone 的 AUROC 0.6034、FPR95 0.8496、unknown reject 9.37%，所以暂不保留。teacher known-anchor consistency 的普通门控得到 AUROC 0.5708、unknown reject 6.33%，训练日志中锚点真实已知比例约 52%；更严格门控得到 AUROC 0.5954、FPR95 0.8281、unknown reject 8.10%，但锚点真实已知比例反而约 37%，说明伪已知锚点筛选仍不可靠。candidate-gated KNN boundary 修复维度错误后可以运行，但 AUROC 0.5630、AUPR 0.4230、unknown reject 4.81%，也暂不纳入主线。
+
+本轮还发现一个代码问题：candidate-gated KNN boundary 的 soft weighting 分支在 distance_consensus 模式下错误使用了 projection 特征与 classifier prototype 相乘，出现 64x128 与 512x60 维度不匹配。现在已改为使用 backbone features，并通过测试。这个修复是必要的代码健壮性改动，但 KNN boundary 组合本身的短实验结果仍不支持纳入主线。
+
+检测分数复核显示，同一个 distance_consensus weighted PU 模型下，不同 score-mode 差异明显。normalized_entropy_mahalanobis 为 AUROC 0.6034、AUPR 0.4808、FPR95 0.8496、OSCR 0.1732、unknown reject 9.37%；normalized_entropy_proto 提升到 AUROC 0.6331、AUPR 0.4908、FPR95 0.8430、OSCR 0.1915，是当前最强 AUROC/OSCR 检测信号；normalized_entropy_relative_mahalanobis 也达到 AUROC 0.6261、OSCR 0.1916。新增的 normalized_entropy_proto_relative_mahalanobis 为 AUROC 0.6327、AUPR 0.4913、FPR95 0.8463，与 proto 接近但没有明显超过 proto。prototype_distance 训练配合 normalized_entropy_proto 检测得到 AUROC 0.6083、FPR95 0.8083、unknown reject 10.38%，工作点更激进，但排序不如 consensus 训练。
+
+阶段判断：训练端目前仍以 distance_consensus weighted nnPU 最值得继续；检测端应把 normalized_entropy_proto 加入主报告，因为它更能利用当前特征中的几何信号。prototype_distance 训练能提高 unknown reject/FPR95，但会牺牲 known accept 和 AUROC；更适合当作偏激进工作点的对照，而不是替代主线。
+
+下一步建议：优先做 distance_consensus weighted nnPU + normalized_entropy_proto 的 3 seed 完整复核，并同步报告 score_distribution。如果 proto score 在多 seed 上稳定更好，后续应考虑把 prototype-distance 信号更温和地反馈到训练，而不是继续叠加当前已经验证无效的 feature-margin、known-anchor 或 KNN boundary。
+
+## 2026-10-11：语义距离加权 mixed-pool uncertainty nnPU
+
+本轮继续围绕核心问题“已知/未知特征与分数分布重叠，未知拒绝率低”进行修改。上一轮审计确认：直接修正 mixed-pool uncertainty nnPU 公式后，相比 baseline 有稳定提升，但三种子完整协议的 unknown reject 平均仍只有约 11.19%，说明不能继续只调阈值或简单扫全局 prior。
+
+本轮新增一个可关闭的训练开关：--discovery-uncertainty-pu-weight-source，支持 none、prototype_distance、msp、entropy、distance_consensus。它只作用于 mixed-pool uncertainty nnPU 的 unlabeled 项：对更像未知的混合池样本赋更高软权重，对更像已知的样本赋更低权重；损失内部会把权重归一化到均值 1，避免单纯改变 loss 尺度。该方法不是严格无偏 nnPU 的新公式，而是一个受 prototype distance、MSP/entropy OOD 信号启发的语义加权启发式，用于缓解 mixed pool 中已知样本污染未知训练信号的问题。
+
+代码验证已经完成：python -m pytest -q 通过，结果为 197 passed, 2 warnings；python -m compileall -q train.py novel_discovery tests 通过。新增测试保证全 1 unlabeled 权重与原 nnPU 等价，并检查权重形状错误会报错。
+
+短实验协议固定为：CIFAR-100 random 60/40，seed=42，limit-train/val/test=1200/300/1000，预训练 ResNet-34 teacher / ResNet-18 student，2 epochs，matched mixed pool=400，known ratio/prior=0.2，检测器固定为 normalized_entropy_mahalanobis，阈值固定为 validation-only 95% known coverage，跳过聚类。只改变 uncertainty nnPU 的 unlabeled 权重来源。
+
+| 配置 | AUROC | AUPR | FPR95 | OSCR | known acc all known | known accept | unknown reject | 判断 |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| unweighted 当前对照 | 0.5982 | 0.4597 | 0.9273 | 0.1591 | 22.64% | 95.54% | 3.80% | 当前短实验基线 |
+| prototype_distance | 0.6004 | 0.4758 | 0.8579 | 0.1704 | 25.62% | 92.73% | 12.66% | 未知拒绝提升最大，但已知接受下降明显 |
+| msp | 0.6008 | 0.4759 | 0.8777 | 0.1650 | 23.80% | 94.55% | 9.87% | 有提升，但 FPR95 不如 consensus |
+| distance_consensus, temperature=0.5 | 0.6034 | 0.4808 | 0.8496 | 0.1732 | 24.46% | 95.21% | 9.37% | 当前最平衡，优先保留继续验证 |
+| distance_consensus, temperature=0.25 | 0.5991 | 0.4706 | 0.8595 | 0.1547 | 21.65% | 96.36% | 6.84% | 权重过尖锐后效果下降 |
+
+阶段结论：语义加权 PU 是目前比盲目扫 prior 更有价值的方向。distance_consensus 在保住 known accept 的同时，改善 AUROC/AUPR/FPR95/OSCR 和 unknown reject；单独 prototype_distance 能更强地拒绝未知，但会误拒更多已知。下一步不建议继续扩大无目的方法搜索，而是围绕 distance_consensus 做多 seed 和更长训练验证，并检查它是否真的拉开特征/分数分布，而不只是改变阈值工作点。
+
+后续优先事项：1）用完整测试集和 seed=42/123/3407 复核 distance_consensus；2）增加特征/分数分布诊断，比较加权前后已知/未知 overlap 是否下降；3）如果多 seed 仍有效，再考虑和已有的 uncertainty feature-margin 或 KNN support-boundary 组合；4）如果只提升 unknown reject 但不提升 AUROC/OSCR，则说明它只是改变工作点，需要转向更强的表征学习或数据划分/语义难度审计。
+
+## 2026-10-11：不确定性 nnPU 公式审计与 warmup 小实验（重要修正）
+
+本轮先审计了 mixed-pool 不确定性损失的标签定义，而不是继续堆叠检测分数。`nnpu_known_uncertainty_loss` 中 `u` 表示未知概率，`z = log((1-u)/u)` 表示已知性 logit；已知训练样本是正类，mixed discovery pool 是包含已知/未知样本的无标注混合分布。因此标准混合池风险中的负类项应为 `softplus(z)`。
+
+审计发现，旧的 `nu_corrected` uncertainty-head 分支错误地对 mixed pool 使用了 `softplus(-z)`，这与当前“已知为正类”的定义相反。现在代码已修正：`legacy` 和 `nu_corrected` 两个名称都使用数学一致的风险表达式；两个名称保留是为了兼容历史配置和复现实验，不再把它们视为两个不同的 uncertainty-head 算法。注意：这项修正只针对训练时的 uncertainty head；post-hoc feature rejector 使用的是相反的“未知为正类”操作约定，未随本次修改改变。
+
+在 CIFAR-100 random 60/40、seed=42、预训练 ResNet-34/18、matched mixed pool=400、known prior=0.2、1200/300/1000 数据限制、2 epochs、相同 `normalized_entropy_mahalanobis` 检测器和 validation-only 95% known-coverage 下进行了小规模审计：
+
+| 配置 | AUROC | FPR95 | OSCR | known acceptance | unknown rejection |
+|---|---:|---:|---:|---:|---:|
+| 直接 nnPU（legacy 名称） | 0.6003 | 0.8843 | 0.1781 | 93.72% | 8.86% |
+| 审计后的公式（nu_corrected 名称） | 0.6119 | 0.8760 | 0.1637 | 94.88% | 6.33% |
+| 审计公式 + 1 epoch warmup/1 epoch ramp | 0.5753 | 0.8959 | 0.1652 | 95.70% | 7.09% |
+
+这轮结果不能证明公式名称之间存在算法增益；两次训练均为独立 smoke run，修正后两个名称对应同一目标。warmup/ramp 在短训练预算下没有改善排序，暂不设为默认方案。核心问题“已知/未知特征与分数分布重叠、未知拒绝率低”仍未解决。完整公式推导、命令和结果见 `analysis/uncertainty_nnpu_formula_audit_20261011.md`。
+
+随后完成了 CIFAR-100 random 60/40、seed=42/123/3407、完整测试集、5 epochs、预训练 ResNet-34/18、matched mixed pool、相同 `normalized_entropy_mahalanobis` 检测器和 validation-only 95% known-coverage 的三种子复核。对比变量只看训练端是否使用审计后的 mixed-pool uncertainty nnPU；旧 `treatment` 使用修正前公式，因此只能作为历史/部分审计参考。
+
+| 方法 | AUROC | AUPR | FPR95 | OSCR | known acc | known accept | unknown reject |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline（三种子均值） | 0.5977 | 0.4623 | 0.8632 | 0.3052 | 41.28% | 94.61% | 7.11% |
+| 旧 treatment（历史/部分审计） | 0.6491 | 0.5226 | 0.8272 | 0.3718 | 48.11% | 95.24% | 10.44% |
+| 审计后 direct nnPU | 0.6518 | 0.5209 | 0.8160 | 0.3767 | 50.07% | 94.54% | 11.19% |
+
+结论：审计后的 direct nnPU 相对 baseline 在三种子上稳定改善 AUROC、FPR95、OSCR、已知分类准确率和未知拒绝率，说明这个方向有继续深入价值；但未知拒绝率均值仍只有约 11.19%，大量未知样本仍被接受，不能宣称核心问题已解决。相对旧 treatment，审计版平均 FPR95、OSCR、known acc 和 unknown reject 更好，但 seed=3407 的 AUROC/AUPR 低于旧 treatment，说明仍有 seed 敏感性。
+
+下一步不应继续只调阈值或堆叠 score fusion。更合理的改进方向是围绕 mixed-pool nnPU 本身做单变量深入：检查 known prior 与 mixed-known-pool-ratio 是否匹配真实池分布；尝试类条件/语义距离感知的 prior 或权重；把 uncertainty-head 训练诊断和特征重叠统计绑定报告；必要时重新审查 discovery pool 划分是否过于接近已知类，导致已知/未知天然难分。
+
+补充做了一个轻量 prior sensitivity pilot：保持 seed=42、CIFAR-100 random 60/40、1200/300/1000 限制、matched pool=400、2 epochs、同一 teacher 和同一检测器，只把 matched mixed pool 的 known ratio / nnPU known prior 从 0.2 改到 0.1 或 0.3。0.1 得到 AUROC 0.6075、FPR95 0.8876、unknown reject 3.80%；0.3 得到 AUROC 0.5520、FPR95 0.9190、unknown reject 2.78%。二者都差于 0.2 smoke（AUROC 0.6119、FPR95 0.8760、unknown reject 6.33%）。因此当前不建议继续盲扫全局 prior；下一步应尝试类条件/语义距离感知的样本权重或 prior，而不是把所有 mixed-pool 样本用同一个已知比例解释。
+
 ## 2026-10-10：PU 能量边界配对实验（未纳入主线）
 
 针对 mixed discovery pool 中“不能把全部样本都当作未知”的问题，本轮新增
@@ -4061,4 +4440,367 @@ rejector 特征拼接、采样微调或阈值搜索解决。下一步应回到�
 周期性刷新和类别均衡约束，避免 rejector 只学习当前错误分数。新增的逐类别报告为
 `analysis/classwise_rejection_stratified_s44_20261011.json`，完整记录见
 `analysis/rejection_branch_audit_and_balanced_fusion_20261011.md`。
+
+## 2026-10-11: mixed-pool PU boundary pilot
+
+The current code now includes an opt-in `PU boundary` loss for mixed discovery
+pools. The historical boundary loss treated the whole pool as pure unknown;
+the new mode subtracts the estimated known contribution using the configured
+known prior and uses detached class-centroid/prototype support statistics.
+This directly targets feature overlap while avoiding hard unknown labels for
+the mixed pool. It is enabled with `--alpha-discovery-boundary 0.05`
+`--discovery-boundary-mode pu`; the default remains unchanged.
+
+The controlled semantic-isolated CIFAR-100 pilot used the same teacher,
+pretrained ResNet-18 student, 1200/300/1000 limits, 2 epochs, matched
+400-sample mixed pool, known prior 0.2, `normalized_entropy_proto`, MC=4 and
+validation-only 95% known-coverage calibration. Only the PU boundary term
+changed:
+
+| Seed | Arm | AUROC | FPR95 | OSCR | Known acceptance | Unknown rejection | KS |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 42 | baseline -> PU boundary | 0.6420 -> 0.6581 | 0.8436 -> 0.8802 | 0.1722 -> 0.1963 | 93.51% -> 95.67% | 10.53% -> 9.27% | 0.2667 -> 0.2801 |
+| 43 | baseline -> PU boundary | 0.5886 -> 0.6251 | 0.9161 -> 0.8725 | 0.1861 -> 0.1904 | 96.14% -> 92.11% | 5.20% -> 10.89% | 0.1714 -> 0.2232 |
+| 44 | baseline -> PU boundary | 0.5975 -> 0.6000 | 0.8774 -> 0.8519 | 0.1501 -> 0.1484 | 92.04% -> 94.27% | 13.98% -> 10.22% | 0.1835 -> 0.1548 |
+| 3-seed mean | baseline -> PU boundary | 0.6094 -> 0.6277 | 0.8790 -> 0.8682 | 0.1695 -> 0.1784 | 93.90% -> 94.02% | 9.90% -> 10.13% | 0.2072 -> 0.2194 |
+
+This is a small positive ranking signal, not a solution: the mean unknown
+rejection gain is only 0.23 percentage points and seed variation remains.
+Keep the method as an ablation, do not make it default, and do not stack more
+losses before a full-data, longer-budget confirmation. Detailed commands and
+limitations are in `analysis/pu_boundary_pilot_20261011.md`.
+
+On the same seed-42 protocol, replacing `hard_nnpu` with `soft_nnpu` at
+softness `0.05` gave AUROC `0.6457`, FPR95 `0.8552`, OSCR `0.1961`, known
+acceptance `93.84%`, unknown rejection `14.54%`, and KS `0.2235`. The hard
+variant gave `0.6581/0.8802/0.1963/95.67%/9.27%/0.2801`. Soft-PU is therefore
+more aggressive but worse for ranking, feature separation, and known
+acceptance; hard-PU remains the preferred optional variant.
+
+## Full-data PU boundary confirmation (2026-10-11)
+
+The new mixed-pool PU boundary loss was checked with a matched full-data
+experiment. Both arms used semantic-isolated CIFAR-100 60/40, seed 42, the
+same pretrained ResNet-34 teacher and ResNet-18 student, all training data,
+five student epochs, a matched mixed discovery pool of 5400 samples, known
+prior 0.2, the same uncertainty nnPU term, and validation-only 95% known
+coverage. The only intended training difference was the PU boundary term:
+weight 0 for baseline versus weight 0.05, `mode=pu`, `hard_nnpu`, margin
+0.2, and prototype weight 0.5 for treatment.
+
+| Metric | Baseline | PU boundary | Difference |
+|---|---:|---:|---:|
+| AUROC | 0.6993 | 0.7059 | +0.0066 |
+| AUPR | 0.5666 | 0.5761 | +0.0095 |
+| FPR95 | 0.8023 | 0.7715 | -0.0308 |
+| OSCR | 0.3840 | 0.3808 | -0.0031 |
+| Known acceptance | 94.43% | 94.95% | +0.52 pp |
+| Unknown rejection | 13.58% | 14.43% | +0.85 pp |
+| Score KS distance | 0.3079 | 0.3043 | -0.0036 |
+
+The result is a small positive signal for ranking and the selected operating
+point, but it does not reduce global score overlap and still accepts 3423 of
+4000 unknown test samples. PU boundary therefore remains an optional ablation,
+not the main solution. Further work should prioritize direct feature-space
+separation, calibrated rejection modeling, and semantic split difficulty
+audits instead of repeatedly tuning this boundary loss. Full reports are in
+`runs/pu_boundary_full_s42_baseline_discover/discovery_report.json` and
+`runs/pu_boundary_full_s42_treatment_discover/discovery_report.json`.
+### Same-checkpoint detector audit
+
+The same full-data baseline and PU-boundary checkpoints were also evaluated
+with the existing class-wise kNN support detector (`normalized_entropy_min_class_knn`,
+feature bank from known training data, `k=10`, MC=4). The kNN score was more
+informative than the prototype score, and the boundary model improved ranking
+and score KS, but not the fixed-coverage unknown-rejection rate:
+
+| Metric | Baseline + kNN | PU boundary + kNN | Difference |
+|---|---:|---:|---:|
+| AUROC | 0.7053 | 0.7185 | +0.0132 |
+| FPR95 | 0.7743 | 0.7473 | -0.0270 |
+| OSCR | 0.3857 | 0.3838 | -0.0019 |
+| Known acceptance | 94.52% | 95.25% | +0.73 pp |
+| Unknown rejection | 14.05% | 13.53% | -0.53 pp |
+| Score KS distance | 0.3190 | 0.3339 | +0.0149 |
+
+This confirms that local known-support geometry is useful for detection, but
+does not by itself prove that the student embedding is separated. The next
+training comparison therefore returns to semantic distance-consensus weighting
+inside mixed-pool nnPU, which directly addresses known-sample contamination.
+
+## 2026-10-11 follow-up: training budget is not the main fix
+
+The completed seed-123 5-vs-10 epoch comparison shows that longer training
+improves closed-set known accuracy (`46.58% -> 52.13%`) and OSCR
+(`0.3914 -> 0.4358`), but does not improve open-set score ranking: AUROC
+`0.7180 -> 0.7156`, AUPR `0.5938 -> 0.5824`, FPR95
+`0.7635 -> 0.7685`, and unknown rejection at the validation-calibrated
+operating point `13.53% -> 13.60%`. Known acceptance also falls slightly
+(`95.92% -> 95.07%`). Thus this is a known-class learning gain, not a solution
+to known/unknown overlap.
+
+A paired, stratified bootstrap over the same test examples (2,000 replicates)
+estimated the AUROC change as `-0.00233`, 95% interval `[-0.01126, 0.00673]`.
+The interval includes zero; this single fixed split does not establish a
+reliable AUROC difference. The result is conditional on the split/checkpoints
+and is not multi-seed uncertainty. A 20-epoch extension was stopped before
+checkpoint creation because each full-data epoch takes about two minutes and
+the 5-vs-10 comparison gives little reason to expect longer training alone to
+fix rejection. The interrupted attempt is not a result.
+
+The per-class retrospective audit already shows false accepts spread across
+many unknown classes and several known predicted-class sinks; it does not
+support solving the issue with one class-specific threshold. A follow-up kNN
+audit on the same seed-123 checkpoints exactly reconstructed the supervised
+known training subset (21,600 samples; 1,080 known samples were reserved
+unlabeled in the matched 5,400-sample discovery pool), used it as a
+normalized-embedding bank (`k=10`), and reused the existing validation
+thresholds. Unknown false accepts were closer to known training support than
+rejected unknowns (nearest cosine distance `0.0846` vs `0.1267` at 5 epochs;
+`0.0936` vs `0.1367` at 10 epochs), and their top-10 predicted-class neighbor
+purity was `33.3%` / `39.6%`, compared with `11.7%` / `13.3%` for rejected
+unknowns. This indicates both local feature absorption and acceptance of
+weak-support examples; it does not show that one threshold or one class is the
+whole cause. In particular, pickup truck (class 58) is 98% falsely accepted
+in both runs, but its nearest known training class differs from the most
+frequent classifier prediction, so local geometry and classifier decisions
+are not interchangeable.
+
+The next step is to create a genuinely disjoint open-validation subset from
+the CIFAR-100 training partition (`--open-val-ratio > 0`) and retrain under
+that protocol, because the existing checkpoints did not reserve such a subset.
+Only then should a hybrid detector score be selected on open-validation and
+evaluated once on untouched test data. Do not tune the fusion weight on the
+test results. If ranking and known-coverage operating points do not improve
+together, do not turn the diagnostic into a training loss. Keep test labels
+strictly post-hoc and do not tune per-class thresholds from the test class
+breakdown.
+Full protocol and class-level evidence are in
+[`analysis/error_neighborhood_audit_s123_20261011.md`](analysis/error_neighborhood_audit_s123_20261011.md)
+and [`analysis/error_neighborhoods_s123_20261011.json`](analysis/error_neighborhoods_s123_20261011.json).
+# 2026-10-11 严格配对消融审计：feature KD 与 prototype loss
+
+本轮完成了一个严格的一因素对照，用于确认“关闭 feature KD 和 prototype loss 后未知检测变好”的结论是否可靠。实验固定 CIFAR-100 semantic-isolated 60/40、seed=123、预训练 ResNet-34/18、完整数据、5 epochs、matched mixed pool=5400、known prior=0.2、MC=4、`normalized_entropy_min_class_knn`（k=10）检测器、仅用 known validation 校准到 95% known coverage，并跳过聚类。唯一改变的是训练端 `alpha_feat_kd/alpha_proto`：主线为 `0.1/0.1`，消融为 `0/0`。
+
+结果如下：主线 AUROC/FPR95/OSCR/known acceptance/unknown rejection/known accuracy 为 `0.7273/0.7455/0.3950/95.43%/13.63%/46.58%`；关闭两项损失后为 `0.7261/0.7327/0.3955/95.47%/14.70%/46.63%`。消融的 FPR95 和未知拒绝率小幅改善，但 AUROC 略降、OSCR 基本不变，不能认定这两项损失已经解决核心问题，也不足以支持直接删除默认损失。特征几何审计显示，关闭损失后最近已知训练样本距离的 unknownness AUROC 从 `0.7203` 到 `0.7250`，直方图重叠从 `0.6678` 到 `0.6545`，但该局部几何改善没有稳定转化为最终检测收益。
+
+因此当前结论更新为：`feature KD + prototype loss` 不是核心瓶颈的可靠解决方案，但也没有证据证明应立即删除。后续停止盲目微调这两个权重，优先设计能够跨 seed 改善已知支持边界的表征学习或独立拒绝表征，并继续使用完全相同的检测协议复核。完整记录见 [`analysis/strict_feature_proto_ablation_s123_20261011.md`](analysis/strict_feature_proto_ablation_s123_20261011.md)，原始几何数据见 [`analysis/feature_geometry_strict_pair_s123_20261011.json`](analysis/feature_geometry_strict_pair_s123_20261011.json)。
+
+## 2026-10-11 update: stricter ablation audit and CIFAR preprocessing pilot
+
+This round focused on the same core problem: known and unknown features/scores
+still overlap heavily, so the unknown rejection rate remains low. The first
+change is methodological: scripts/audit_paired_runs.py now compares two saved
+training configs and lists every non-ignored difference. It caught that an
+older seed-42 feature-KD/prototype ablation was not strict, because many
+discovery-loss and default fields differed. Future ablations should run this
+audit before being interpreted.
+
+After retraining a strict seed-42 pair, the only differences were
+alpha_feat_kd=0.1 to 0.0 and alpha_proto=0.1 to 0.0. With the same
+semantic-isolated CIFAR-100 60/40 split, full data, 5 epochs, matched mixed
+pool, normalized_entropy_min_class_knn, k=10, MC=4, validation-only 95%
+known coverage and clustering skipped, the result was:
+
+| Variant | AUROC | FPR95 | OSCR | known acc | known accept | unknown reject |
+|---|---:|---:|---:|---:|---:|---:|
+| feature KD + prototype | 0.6939 | 0.7622 | 0.3447 | 41.37% | 95.22% | 11.75% |
+| both disabled | 0.6829 | 0.7680 | 0.3214 | 38.43% | 94.92% | 10.83% |
+
+Conclusion: feature KD and prototype loss should stay in the current recipe,
+but they are supporting terms rather than a solution to the overlap problem.
+Do not spend more time blindly tuning their small weights. Details are in
+analysis/strict_feature_proto_ablation_s42_20261011.md.
+
+The second change adds an opt-in preprocessing switch:
+--transform-profile imagenet keeps historical behavior, while
+--transform-profile cifar uses CIFAR-100 mean/std and CIFAR-style
+resize/crop/flip transforms. This matters because CIFAR-100 images are small,
+and weak known-class representation can make unknown samples easier to absorb
+into known classes. The default remains imagenet for compatibility.
+
+A first quick check with a CIFAR-profile student and an old ImageNet-profile
+teacher was rejected as a KD protocol mismatch. A stricter short paired pilot
+then trained matching teachers and students for each profile, using the same
+seed, split, 1,200/300 train/validation limit, 2 teacher epochs, 2 student
+epochs, and full 10,000-image open test evaluation:
+
+| Profile | teacher acc | student acc | AUROC | FPR95 | OSCR | known accept | unknown reject | score KS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| ImageNet profile | 13.67% | 20.70% | 0.6062 | 0.8875 | 0.1521 | 95.27% | 7.98% | 0.1617 |
+| CIFAR profile | 18.00% | 27.68% | 0.6502 | 0.8528 | 0.2253 | 94.42% | 10.23% | 0.2389 |
+
+Conclusion: CIFAR-style preprocessing is a promising new direction because it
+improves known accuracy, AUROC, FPR95, OSCR, unknown rejection and score KS in
+a matched short pilot, although known acceptance drops slightly. It should be
+rechecked with longer/full training and matching teachers before becoming the
+recommended CIFAR-100 protocol. Details are in
+analysis/cifar_transform_profile_pilot_s42_20261011.md.
+
+## 2026-10-11 update: full CIFAR preprocessing recheck
+
+The short CIFAR preprocessing pilot was followed by a full seed-42 recheck.
+This is now the most important result from this round. The comparison uses the
+same semantic-isolated CIFAR-100 60/40 split, pretrained ResNet-34/ResNet-18,
+5 student epochs, matched mixed pool of 5,400 samples, feature KD + prototype
+loss, the same normalized_entropy_min_class_knn detector, k=10, MC=4,
+validation-only 95% known coverage and clustering skipped. The CIFAR-profile
+arm retrains its own teacher, so KD is not affected by input-normalization
+mismatch.
+
+| Profile | teacher val acc | student val acc | test known acc | AUROC | FPR95 | OSCR | known accept | unknown reject | score KS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ImageNet profile | 43.87% | 40.80% | 41.37% | 0.6939 | 0.7622 | 0.3447 | 95.22% | 11.75% | 0.2893 |
+| CIFAR profile | 57.33% | 56.30% | 56.65% | 0.7710 | 0.6547 | 0.4934 | 95.08% | 19.35% | 0.4173 |
+
+Conclusion: this is a real direction change. The current bottleneck is not only
+which open-set loss is used; the CIFAR-100 input/data protocol was weakening
+the representation. CIFAR-style preprocessing substantially improves known
+accuracy and known/unknown score separation while keeping known acceptance
+almost unchanged. It still does not solve the task, because unknown rejection
+is only 19.35%, but it is much more effective than the recent small loss
+tweaks. The next priority should be multi-seed CIFAR-profile rechecks, not
+adding another new loss immediately. Full record:
+analysis/cifar_transform_profile_full_s42_20261011.md.
+
+## 2026-10-11 update: strict seed-123 CIFAR preprocessing confirmation
+
+After the seed-42 full recheck, we ran a stricter seed-123 comparison to avoid
+mixing preprocessing effects with discovery-pool or PU-loss differences. The
+student training config audit reports only one substantive difference:
+`transform_profile: imagenet -> cifar`. The discovery config audit differs
+only in checkpoint/output paths and `transform_profile`. This makes the result
+much cleaner than several earlier historical comparisons.
+
+Protocol: CIFAR-100 semantic-isolated 60/40, seed 123, full data, pretrained
+ResNet-34 teacher / ResNet-18 student, 5 epochs, matched discovery pool 5400,
+feature KD + prototype loss kept on, PU discovery losses disabled, same
+`normalized_entropy_min_class_knn` detector with k=10, MC=4, validation-only
+95% known coverage, clustering skipped.
+
+| Profile | teacher val acc | student val acc | test known acc | AUROC | AUPR | FPR95 | OSCR | known accept | unknown reject | score KS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ImageNet profile | 42.00% | 42.00% | 42.37% | 0.6789 | 0.5412 | 0.7643 | 0.3511 | 95.35% | 10.73% | 0.2578 |
+| CIFAR profile | 58.70% | 54.83% | 54.53% | 0.7550 | 0.6314 | 0.6793 | 0.4726 | 95.20% | 16.08% | 0.3972 |
+
+Conclusion: CIFAR-style preprocessing is now a validated high-value direction,
+not just another small detector tweak. It improves known-class representation,
+AUROC/AUPR/FPR95/OSCR, unknown rejection, score KS, and score-gap diagnostics
+while keeping known acceptance near 95%. The core problem is still not solved:
+even the better profile rejects only about 16% of unknown samples at this
+operating point. But the result shows that part of the known/unknown overlap
+came from a weak CIFAR-100 input protocol.
+
+Code update: `--transform-profile` now supports `auto` and uses it by default.
+For CIFAR-100, `auto` resolves to `cifar`; for other datasets it resolves to
+`imagenet`. Historical runs remain reproducible by explicitly passing
+`--transform-profile imagenet`. `inspect_data` now prints both the requested
+and resolved transform profile so group members can see which protocol is
+actually active.
+
+Next direction: use the CIFAR profile as the recommended CIFAR-100 protocol and
+re-evaluate the most promising training-side methods under this stronger
+representation baseline. Avoid continuing to tune thresholds or score fusions
+on the older ImageNet-profile CIFAR runs. Full record:
+analysis/cifar_transform_profile_strict_s123_20261011.md.
+
+## 2026-10-11 update: CIFAR profile plus audited mixed-pool nnPU
+
+After validating CIFAR-style preprocessing, we rechecked whether the audited
+mixed-pool uncertainty nnPU objective still adds value on top of that stronger
+representation baseline. This experiment directly targets the current core
+problem: known/unknown scores still overlap, and unknown rejection remains low.
+
+The comparison fixes CIFAR-100 semantic-isolated 60/40, seed 123, CIFAR
+preprocessing, the same CIFAR-profile ResNet-34 teacher, pretrained ResNet-18
+student, 5 epochs, the same `normalized_entropy_min_class_knn` detector with
+k=10, MC=4, validation-only 95% known coverage, and clustering skipped. The
+treatment changes the student training protocol by enabling
+`alpha_discovery_uncertainty_pu=0.1` and using a matched mixed discovery pool
+with known prior 0.2. The discover config audit confirms the detector settings
+are unchanged; only the student checkpoint/output path changes.
+
+| Student | val known acc | test known acc | AUROC | AUPR | FPR95 | OSCR | known accept | unknown reject | score KS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| CIFAR profile baseline | 54.83% | 54.53% | 0.7550 | 0.6314 | 0.6793 | 0.4726 | 95.20% | 16.08% | 0.3972 |
+| CIFAR profile + nnPU | 59.03% | 60.73% | 0.7933 | 0.6701 | 0.6088 | 0.5349 | 95.68% | 19.78% | 0.4547 |
+
+This is a meaningful positive result. The gain is not just a threshold effect:
+known accuracy, AUROC, AUPR, FPR95, OSCR, unknown rejection, score KS, and
+overlap diagnostics all improve together. The mean unknown-minus-known score
+gap improves from 1.7302 to 2.1143, and the unknown-below-known-q95 overlap
+drops from 0.8303 to 0.7805.
+
+Limitation: the task is still not solved. Even after this improvement, only
+about 19.78% of unknown samples are rejected at the 95% known-coverage operating
+point. The next step is not to tune thresholds on the test set; it is to repeat
+this exact comparison on more seeds. If the gain repeats, CIFAR profile +
+audited mixed-pool nnPU should become the recommended CIFAR-100 recipe, and
+future feature-margin or semantic-weight variants should be tested as single
+changes on top of it. Full record:
+analysis/cifar_profile_nnpu_s123_20261011.md.
+
+## 2026-10-11 update: PU class-boundary loss recheck
+
+We tested the existing class-conditional prototype/local-centroid boundary
+loss in its mixed-pool PU-corrected form. The strict baseline was CIFAR-style
+preprocessing plus audited mixed-pool uncertainty nnPU (`alpha=0.1`) on the
+semantic-isolated CIFAR-100 60/40 split with seed 42. The treatment changed
+only `alpha_discovery_boundary=0.1` and `discovery_boundary_mode=pu`; all
+training, detector, and validation-only 95% known-coverage settings were held
+fixed.
+
+| Variant | AUROC | FPR95 | OSCR | known acc | known accept | unknown reject | score KS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| CIFAR + nnPU | 0.7906 | 0.6285 | 0.5536 | 63.08% | 94.80% | 23.00% | 0.4554 |
+| + PU boundary | 0.7829 | 0.6570 | 0.5387 | 61.65% | 94.42% | 23.30% | 0.4412 |
+
+The boundary term is confirmed to be active, but it does not improve the
+distribution-overlap problem: most ranking and separation metrics decline,
+while unknown rejection rises only 0.30 percentage points. It is not part of
+the recommended recipe. Full details are in
+`analysis/cifar_profile_boundary_pu_s42_20261011.md`.
+
+The current main recipe remains CIFAR preprocessing plus unweighted audited
+mixed-pool nnPU at `alpha=0.1`. Angular margin has now been tested and is not
+enabled in the main recipe; the next controlled experiment changes only the
+pretrained encoder fine-tuning scale, with threshold tuning and score fusion
+unchanged.
+
+## 2026-10-11 update: angular-margin recheck
+
+We also tested an ArcFace-style known-class angular margin on top of the strict
+CIFAR + nnPU baseline. Only `alpha_angular=0.05` was enabled (margin `0.2`,
+scale `16`); the data split, teacher, mixed pool, nnPU coefficient, detector,
+and validation-only threshold rule were fixed.
+
+| Variant | AUROC | FPR95 | OSCR | known acc | known accept | unknown reject | score KS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| CIFAR + nnPU | 0.7906 | 0.6285 | 0.5536 | 63.08% | 94.80% | 23.00% | 0.4554 |
+| + angular margin | 0.7806 | 0.6518 | 0.5424 | 61.95% | 93.92% | 25.13% | 0.4347 |
+
+The rejection-rate increase is accompanied by lower AUROC, AUPR, OSCR, known
+accuracy, known acceptance, and score separation. It is therefore not a valid
+core improvement and is not enabled in the main recipe. Details are in
+`analysis/cifar_profile_angular_margin_s42_20261011.md`.
+
+## 2026-10-11 update: preserving pretrained encoder features
+
+The next controlled test changed only the student encoder learning-rate scale
+from `1.0` to `0.1` on top of the CIFAR + audited mixed-pool nnPU recipe. The
+motivation is to preserve pretrained visual structure that may help separate
+unknowns from known support.
+
+| Variant | AUROC | AUPR | FPR95 | OSCR | known acc | known accept | unknown reject | score KS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| CIFAR + nnPU | 0.7906 | 0.6757 | 0.6285 | 0.5536 | 63.08% | 94.80% | 23.00% | 0.4554 |
+| encoder LR scale 0.1 | 0.8128 | 0.7121 | 0.5712 | 0.5536 | 62.08% | 95.12% | 26.78% | 0.4837 |
+
+The result is promising: ranking, FPR95, score KS, score gap, and fixed
+known-coverage unknown rejection improve together, while known acceptance stays
+near 95%. Known accuracy drops by about one percentage point and OSCR is
+essentially unchanged, so this is not yet a final solution. The correct next
+step is strict replication on seed 123, not immediate stacking of another
+loss. Full details are in
+`analysis/cifar_profile_encoder_lr01_s42_20261011.md`.
 

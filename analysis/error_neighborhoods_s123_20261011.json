@@ -1,0 +1,4164 @@
+{
+  "five_epoch": {
+    "checkpoint": ".\\runs\\distance_consensus_full_s123_baseline\\student.pt",
+    "detector_detail": "runs\\distance_consensus_full_s123_baseline_discover\\discovery_detail.json",
+    "protocol": {
+      "dataset": "cifar100",
+      "split_path": ".\\splits_cifar100_protocols\\cifar100_60_40_semantic_isolated.json",
+      "seed": 123,
+      "known_train_count": 21600,
+      "test_count": 10000,
+      "k": 10,
+      "discovery_pool_mode": "mixed",
+      "matched_pool_size": 5400,
+      "matched_known_prior": 0.2,
+      "mixed_known_pool_ratio": 0.2,
+      "threshold": 3.1160398960113525,
+      "threshold_source": "existing validation-calibrated discovery_report; not refit",
+      "note": "test labels are used only for post-hoc cohort summaries"
+    },
+    "cohorts": {
+      "known_correct_accepted": {
+        "count": 2754,
+        "mean_nearest_cosine_distance": 0.046468209475278854,
+        "median_nearest_cosine_distance": 0.0404907763004303,
+        "top1_neighbor_matches_predicted_class": 0.8002904865649964,
+        "mean_topk_purity_for_predicted_class": 0.764960058097313,
+        "mean_topk_neighbor_class_entropy": 0.5311403113941834,
+        "mean_topk_neighbor_class_entropy_normalized": 0.23067130635486868
+      },
+      "known_wrong_accepted": {
+        "count": 3001,
+        "mean_nearest_cosine_distance": 0.0699147954583168,
+        "median_nearest_cosine_distance": 0.06725871562957764,
+        "top1_neighbor_matches_predicted_class": 0.27224258580473176,
+        "mean_topk_purity_for_predicted_class": 0.28813728757080975,
+        "mean_topk_neighbor_class_entropy": 1.2154186242743215,
+        "mean_topk_neighbor_class_entropy_normalized": 0.5278496017247795
+      },
+      "known_correct_rejected": {
+        "count": 41,
+        "mean_nearest_cosine_distance": 0.13247159123420715,
+        "median_nearest_cosine_distance": 0.13249093294143677,
+        "top1_neighbor_matches_predicted_class": 0.43902439024390244,
+        "mean_topk_purity_for_predicted_class": 0.29268292682926833,
+        "mean_topk_neighbor_class_entropy": 1.6004761443419788,
+        "mean_topk_neighbor_class_entropy_normalized": 0.6950779579055137
+      },
+      "known_wrong_rejected": {
+        "count": 204,
+        "mean_nearest_cosine_distance": 0.12333298474550247,
+        "median_nearest_cosine_distance": 0.12318408489227295,
+        "top1_neighbor_matches_predicted_class": 0.08823529411764706,
+        "mean_topk_purity_for_predicted_class": 0.09754901960784312,
+        "mean_topk_neighbor_class_entropy": 1.7581400655205193,
+        "mean_topk_neighbor_class_entropy_normalized": 0.7635505288685831
+      },
+      "unknown_false_accept": {
+        "count": 3459,
+        "mean_nearest_cosine_distance": 0.08464664220809937,
+        "median_nearest_cosine_distance": 0.08428651094436646,
+        "top1_neighbor_matches_predicted_class": 0.3203237930037583,
+        "mean_topk_purity_for_predicted_class": 0.3328129517201503,
+        "mean_topk_neighbor_class_entropy": 1.3061713157346562,
+        "mean_topk_neighbor_class_entropy_normalized": 0.5672629948438712
+      },
+      "unknown_rejected": {
+        "count": 541,
+        "mean_nearest_cosine_distance": 0.12669509649276733,
+        "median_nearest_cosine_distance": 0.12771958112716675,
+        "top1_neighbor_matches_predicted_class": 0.12199630314232902,
+        "mean_topk_purity_for_predicted_class": 0.11700554528650646,
+        "mean_topk_neighbor_class_entropy": 1.7456848053278176,
+        "mean_topk_neighbor_class_entropy_normalized": 0.7581412780962234
+      }
+    },
+    "unknown_false_accept_local_support": {
+      "count": 3459,
+      "mean_topk_neighbor_support_for_predicted_class": 0.3328129517201503,
+      "unknown_class_breakdown": [
+        {
+          "raw_unknown_class": 58,
+          "count": 100,
+          "false_accept_count": 98,
+          "false_accept_rate": 0.98,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 89,
+              "count": 30
+            },
+            {
+              "raw_class": 81,
+              "count": 16
+            },
+            {
+              "raw_class": 25,
+              "count": 13
+            },
+            {
+              "raw_class": 41,
+              "count": 7
+            },
+            {
+              "raw_class": 85,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 25,
+              "count": 49
+            },
+            {
+              "raw_class": 89,
+              "count": 19
+            },
+            {
+              "raw_class": 81,
+              "count": 5
+            },
+            {
+              "raw_class": 84,
+              "count": 4
+            },
+            {
+              "raw_class": 37,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 87,
+          "count": 100,
+          "false_accept_count": 96,
+          "false_accept_rate": 0.96,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 16,
+              "count": 12
+            },
+            {
+              "raw_class": 94,
+              "count": 10
+            },
+            {
+              "raw_class": 5,
+              "count": 9
+            },
+            {
+              "raw_class": 81,
+              "count": 6
+            },
+            {
+              "raw_class": 28,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 94,
+              "count": 37
+            },
+            {
+              "raw_class": 25,
+              "count": 13
+            },
+            {
+              "raw_class": 76,
+              "count": 9
+            },
+            {
+              "raw_class": 84,
+              "count": 7
+            },
+            {
+              "raw_class": 5,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 22,
+          "count": 100,
+          "false_accept_count": 95,
+          "false_accept_rate": 0.95,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 61,
+              "count": 24
+            },
+            {
+              "raw_class": 10,
+              "count": 9
+            },
+            {
+              "raw_class": 67,
+              "count": 4
+            },
+            {
+              "raw_class": 28,
+              "count": 4
+            },
+            {
+              "raw_class": 26,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 61,
+              "count": 31
+            },
+            {
+              "raw_class": 53,
+              "count": 8
+            },
+            {
+              "raw_class": 0,
+              "count": 6
+            },
+            {
+              "raw_class": 69,
+              "count": 5
+            },
+            {
+              "raw_class": 10,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 13,
+          "count": 100,
+          "false_accept_count": 94,
+          "false_accept_rate": 0.94,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 81,
+              "count": 36
+            },
+            {
+              "raw_class": 37,
+              "count": 13
+            },
+            {
+              "raw_class": 89,
+              "count": 11
+            },
+            {
+              "raw_class": 12,
+              "count": 9
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 81,
+              "count": 20
+            },
+            {
+              "raw_class": 37,
+              "count": 17
+            },
+            {
+              "raw_class": 25,
+              "count": 16
+            },
+            {
+              "raw_class": 84,
+              "count": 8
+            },
+            {
+              "raw_class": 94,
+              "count": 7
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 23,
+          "count": 100,
+          "false_accept_count": 94,
+          "false_accept_rate": 0.94,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 67,
+              "count": 18
+            },
+            {
+              "raw_class": 73,
+              "count": 13
+            },
+            {
+              "raw_class": 69,
+              "count": 13
+            },
+            {
+              "raw_class": 28,
+              "count": 6
+            },
+            {
+              "raw_class": 10,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 76,
+              "count": 27
+            },
+            {
+              "raw_class": 67,
+              "count": 26
+            },
+            {
+              "raw_class": 94,
+              "count": 11
+            },
+            {
+              "raw_class": 69,
+              "count": 10
+            },
+            {
+              "raw_class": 73,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 49,
+          "count": 100,
+          "false_accept_count": 94,
+          "false_accept_rate": 0.94,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 76,
+              "count": 16
+            },
+            {
+              "raw_class": 68,
+              "count": 13
+            },
+            {
+              "raw_class": 73,
+              "count": 10
+            },
+            {
+              "raw_class": 17,
+              "count": 10
+            },
+            {
+              "raw_class": 37,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 76,
+              "count": 37
+            },
+            {
+              "raw_class": 17,
+              "count": 9
+            },
+            {
+              "raw_class": 73,
+              "count": 8
+            },
+            {
+              "raw_class": 68,
+              "count": 6
+            },
+            {
+              "raw_class": 59,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 86,
+          "count": 100,
+          "false_accept_count": 94,
+          "false_accept_rate": 0.94,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 94,
+              "count": 14
+            },
+            {
+              "raw_class": 16,
+              "count": 9
+            },
+            {
+              "raw_class": 41,
+              "count": 6
+            },
+            {
+              "raw_class": 20,
+              "count": 6
+            },
+            {
+              "raw_class": 12,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 94,
+              "count": 25
+            },
+            {
+              "raw_class": 20,
+              "count": 13
+            },
+            {
+              "raw_class": 25,
+              "count": 12
+            },
+            {
+              "raw_class": 16,
+              "count": 11
+            },
+            {
+              "raw_class": 76,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 90,
+          "count": 100,
+          "false_accept_count": 94,
+          "false_accept_rate": 0.94,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 81,
+              "count": 28
+            },
+            {
+              "raw_class": 89,
+              "count": 9
+            },
+            {
+              "raw_class": 17,
+              "count": 6
+            },
+            {
+              "raw_class": 37,
+              "count": 6
+            },
+            {
+              "raw_class": 1,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 81,
+              "count": 27
+            },
+            {
+              "raw_class": 17,
+              "count": 9
+            },
+            {
+              "raw_class": 76,
+              "count": 7
+            },
+            {
+              "raw_class": 37,
+              "count": 6
+            },
+            {
+              "raw_class": 36,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 39,
+          "count": 100,
+          "false_accept_count": 93,
+          "false_accept_rate": 0.93,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 99,
+              "count": 8
+            },
+            {
+              "raw_class": 5,
+              "count": 7
+            },
+            {
+              "raw_class": 20,
+              "count": 6
+            },
+            {
+              "raw_class": 73,
+              "count": 6
+            },
+            {
+              "raw_class": 12,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 25,
+              "count": 13
+            },
+            {
+              "raw_class": 57,
+              "count": 11
+            },
+            {
+              "raw_class": 20,
+              "count": 7
+            },
+            {
+              "raw_class": 94,
+              "count": 6
+            },
+            {
+              "raw_class": 37,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 40,
+          "count": 100,
+          "false_accept_count": 93,
+          "false_accept_rate": 0.93,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 28,
+              "count": 14
+            },
+            {
+              "raw_class": 84,
+              "count": 8
+            },
+            {
+              "raw_class": 57,
+              "count": 6
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            },
+            {
+              "raw_class": 16,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 84,
+              "count": 12
+            },
+            {
+              "raw_class": 28,
+              "count": 12
+            },
+            {
+              "raw_class": 51,
+              "count": 11
+            },
+            {
+              "raw_class": 25,
+              "count": 8
+            },
+            {
+              "raw_class": 57,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 64,
+          "count": 100,
+          "false_accept_count": 93,
+          "false_accept_rate": 0.93,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 36,
+              "count": 14
+            },
+            {
+              "raw_class": 65,
+              "count": 12
+            },
+            {
+              "raw_class": 50,
+              "count": 12
+            },
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 35,
+              "count": 7
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 36
+            },
+            {
+              "raw_class": 2,
+              "count": 10
+            },
+            {
+              "raw_class": 98,
+              "count": 9
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 30,
+          "count": 100,
+          "false_accept_count": 92,
+          "false_accept_rate": 0.92,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 41
+            },
+            {
+              "raw_class": 76,
+              "count": 9
+            },
+            {
+              "raw_class": 67,
+              "count": 9
+            },
+            {
+              "raw_class": 99,
+              "count": 5
+            },
+            {
+              "raw_class": 91,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 38
+            },
+            {
+              "raw_class": 76,
+              "count": 18
+            },
+            {
+              "raw_class": 67,
+              "count": 11
+            },
+            {
+              "raw_class": 91,
+              "count": 7
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 43,
+          "count": 100,
+          "false_accept_count": 91,
+          "false_accept_rate": 0.91,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 36,
+              "count": 16
+            },
+            {
+              "raw_class": 50,
+              "count": 12
+            },
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 35,
+              "count": 8
+            },
+            {
+              "raw_class": 46,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 24
+            },
+            {
+              "raw_class": 53,
+              "count": 12
+            },
+            {
+              "raw_class": 57,
+              "count": 8
+            },
+            {
+              "raw_class": 98,
+              "count": 7
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 95,
+          "count": 100,
+          "false_accept_count": 91,
+          "false_accept_rate": 0.91,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 25
+            },
+            {
+              "raw_class": 67,
+              "count": 21
+            },
+            {
+              "raw_class": 91,
+              "count": 6
+            },
+            {
+              "raw_class": 69,
+              "count": 5
+            },
+            {
+              "raw_class": 32,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 30
+            },
+            {
+              "raw_class": 76,
+              "count": 15
+            },
+            {
+              "raw_class": 67,
+              "count": 10
+            },
+            {
+              "raw_class": 25,
+              "count": 8
+            },
+            {
+              "raw_class": 91,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 38,
+          "count": 100,
+          "false_accept_count": 89,
+          "false_accept_rate": 0.89,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 14
+            },
+            {
+              "raw_class": 65,
+              "count": 13
+            },
+            {
+              "raw_class": 36,
+              "count": 5
+            },
+            {
+              "raw_class": 74,
+              "count": 4
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 51,
+              "count": 16
+            },
+            {
+              "raw_class": 50,
+              "count": 10
+            },
+            {
+              "raw_class": 36,
+              "count": 10
+            },
+            {
+              "raw_class": 98,
+              "count": 8
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 97,
+          "count": 100,
+          "false_accept_count": 89,
+          "false_accept_rate": 0.89,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 50,
+              "count": 19
+            },
+            {
+              "raw_class": 65,
+              "count": 10
+            },
+            {
+              "raw_class": 36,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 11,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 43
+            },
+            {
+              "raw_class": 50,
+              "count": 10
+            },
+            {
+              "raw_class": 51,
+              "count": 8
+            },
+            {
+              "raw_class": 98,
+              "count": 5
+            },
+            {
+              "raw_class": 0,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 71,
+          "count": 100,
+          "false_accept_count": 88,
+          "false_accept_rate": 0.88,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 68,
+              "count": 16
+            },
+            {
+              "raw_class": 12,
+              "count": 11
+            },
+            {
+              "raw_class": 25,
+              "count": 8
+            },
+            {
+              "raw_class": 69,
+              "count": 7
+            },
+            {
+              "raw_class": 67,
+              "count": 7
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 76,
+              "count": 26
+            },
+            {
+              "raw_class": 94,
+              "count": 12
+            },
+            {
+              "raw_class": 68,
+              "count": 11
+            },
+            {
+              "raw_class": 73,
+              "count": 8
+            },
+            {
+              "raw_class": 25,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 93,
+          "count": 100,
+          "false_accept_count": 88,
+          "false_accept_rate": 0.88,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 12
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 67,
+              "count": 5
+            },
+            {
+              "raw_class": 10,
+              "count": 5
+            },
+            {
+              "raw_class": 26,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 11
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 67,
+              "count": 7
+            },
+            {
+              "raw_class": 10,
+              "count": 5
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 15,
+          "count": 100,
+          "false_accept_count": 86,
+          "false_accept_rate": 0.86,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 20,
+              "count": 9
+            },
+            {
+              "raw_class": 14,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 51,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 25,
+              "count": 14
+            },
+            {
+              "raw_class": 51,
+              "count": 12
+            },
+            {
+              "raw_class": 57,
+              "count": 8
+            },
+            {
+              "raw_class": 84,
+              "count": 7
+            },
+            {
+              "raw_class": 36,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 21,
+          "count": 100,
+          "false_accept_count": 86,
+          "false_accept_rate": 0.86,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 98,
+              "count": 13
+            },
+            {
+              "raw_class": 46,
+              "count": 13
+            },
+            {
+              "raw_class": 35,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 16,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 98,
+              "count": 23
+            },
+            {
+              "raw_class": 35,
+              "count": 9
+            },
+            {
+              "raw_class": 46,
+              "count": 8
+            },
+            {
+              "raw_class": 57,
+              "count": 4
+            },
+            {
+              "raw_class": 25,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 34,
+          "count": 100,
+          "false_accept_count": 86,
+          "false_accept_rate": 0.86,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 12
+            },
+            {
+              "raw_class": 36,
+              "count": 11
+            },
+            {
+              "raw_class": 1,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 26
+            },
+            {
+              "raw_class": 92,
+              "count": 12
+            },
+            {
+              "raw_class": 1,
+              "count": 11
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 25,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 88,
+          "count": 100,
+          "false_accept_count": 85,
+          "false_accept_rate": 0.85,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 13
+            },
+            {
+              "raw_class": 50,
+              "count": 10
+            },
+            {
+              "raw_class": 45,
+              "count": 8
+            },
+            {
+              "raw_class": 6,
+              "count": 7
+            },
+            {
+              "raw_class": 26,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 17
+            },
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 6,
+              "count": 5
+            },
+            {
+              "raw_class": 94,
+              "count": 5
+            },
+            {
+              "raw_class": 1,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 8,
+          "count": 100,
+          "false_accept_count": 84,
+          "false_accept_rate": 0.84,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 89,
+              "count": 9
+            },
+            {
+              "raw_class": 20,
+              "count": 6
+            },
+            {
+              "raw_class": 12,
+              "count": 5
+            },
+            {
+              "raw_class": 79,
+              "count": 5
+            },
+            {
+              "raw_class": 26,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 84,
+              "count": 22
+            },
+            {
+              "raw_class": 24,
+              "count": 7
+            },
+            {
+              "raw_class": 89,
+              "count": 6
+            },
+            {
+              "raw_class": 20,
+              "count": 5
+            },
+            {
+              "raw_class": 98,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 33,
+          "count": 100,
+          "false_accept_count": 84,
+          "false_accept_rate": 0.84,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 94,
+              "count": 12
+            },
+            {
+              "raw_class": 96,
+              "count": 10
+            },
+            {
+              "raw_class": 59,
+              "count": 7
+            },
+            {
+              "raw_class": 81,
+              "count": 6
+            },
+            {
+              "raw_class": 47,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 94,
+              "count": 28
+            },
+            {
+              "raw_class": 96,
+              "count": 12
+            },
+            {
+              "raw_class": 25,
+              "count": 9
+            },
+            {
+              "raw_class": 59,
+              "count": 5
+            },
+            {
+              "raw_class": 47,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 55,
+          "count": 100,
+          "false_accept_count": 84,
+          "false_accept_rate": 0.84,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 73,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 6
+            },
+            {
+              "raw_class": 91,
+              "count": 6
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            },
+            {
+              "raw_class": 25,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 63,
+          "count": 100,
+          "false_accept_count": 84,
+          "false_accept_rate": 0.84,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 13
+            },
+            {
+              "raw_class": 50,
+              "count": 9
+            },
+            {
+              "raw_class": 65,
+              "count": 8
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 2,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 2,
+              "count": 9
+            },
+            {
+              "raw_class": 51,
+              "count": 9
+            },
+            {
+              "raw_class": 36,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 6
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 78,
+          "count": 100,
+          "false_accept_count": 84,
+          "false_accept_rate": 0.84,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 99,
+              "count": 22
+            },
+            {
+              "raw_class": 77,
+              "count": 5
+            },
+            {
+              "raw_class": 18,
+              "count": 4
+            },
+            {
+              "raw_class": 45,
+              "count": 4
+            },
+            {
+              "raw_class": 79,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 99,
+              "count": 28
+            },
+            {
+              "raw_class": 51,
+              "count": 5
+            },
+            {
+              "raw_class": 36,
+              "count": 5
+            },
+            {
+              "raw_class": 91,
+              "count": 4
+            },
+            {
+              "raw_class": 18,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 27,
+          "count": 100,
+          "false_accept_count": 83,
+          "false_accept_rate": 0.83,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 91,
+              "count": 13
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 73,
+              "count": 5
+            },
+            {
+              "raw_class": 77,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 91,
+              "count": 18
+            },
+            {
+              "raw_class": 36,
+              "count": 9
+            },
+            {
+              "raw_class": 25,
+              "count": 6
+            },
+            {
+              "raw_class": 85,
+              "count": 4
+            },
+            {
+              "raw_class": 18,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 60,
+          "count": 100,
+          "false_accept_count": 83,
+          "false_accept_rate": 0.83,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 68,
+              "count": 32
+            },
+            {
+              "raw_class": 17,
+              "count": 11
+            },
+            {
+              "raw_class": 12,
+              "count": 6
+            },
+            {
+              "raw_class": 96,
+              "count": 4
+            },
+            {
+              "raw_class": 89,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 17,
+              "count": 17
+            },
+            {
+              "raw_class": 76,
+              "count": 14
+            },
+            {
+              "raw_class": 68,
+              "count": 13
+            },
+            {
+              "raw_class": 96,
+              "count": 9
+            },
+            {
+              "raw_class": 94,
+              "count": 8
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 72,
+          "count": 100,
+          "false_accept_count": 83,
+          "false_accept_rate": 0.83,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 77,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 98,
+              "count": 6
+            },
+            {
+              "raw_class": 73,
+              "count": 6
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 57,
+              "count": 10
+            },
+            {
+              "raw_class": 76,
+              "count": 7
+            },
+            {
+              "raw_class": 36,
+              "count": 7
+            },
+            {
+              "raw_class": 98,
+              "count": 6
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 29,
+          "count": 100,
+          "false_accept_count": 82,
+          "false_accept_rate": 0.82,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 51,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 1,
+              "count": 6
+            },
+            {
+              "raw_class": 91,
+              "count": 4
+            },
+            {
+              "raw_class": 12,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 51,
+              "count": 16
+            },
+            {
+              "raw_class": 1,
+              "count": 7
+            },
+            {
+              "raw_class": 91,
+              "count": 6
+            },
+            {
+              "raw_class": 84,
+              "count": 5
+            },
+            {
+              "raw_class": 20,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 66,
+          "count": 100,
+          "false_accept_count": 82,
+          "false_accept_rate": 0.82,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 65,
+              "count": 12
+            },
+            {
+              "raw_class": 80,
+              "count": 12
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 46,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 98,
+              "count": 13
+            },
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 51,
+              "count": 9
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 19,
+          "count": 100,
+          "false_accept_count": 81,
+          "false_accept_rate": 0.81,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 32,
+              "count": 7
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            },
+            {
+              "raw_class": 84,
+              "count": 5
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 25,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 84,
+              "count": 15
+            },
+            {
+              "raw_class": 51,
+              "count": 12
+            },
+            {
+              "raw_class": 25,
+              "count": 12
+            },
+            {
+              "raw_class": 92,
+              "count": 6
+            },
+            {
+              "raw_class": 20,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 31,
+          "count": 100,
+          "false_accept_count": 80,
+          "false_accept_rate": 0.8,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 51,
+              "count": 8
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 99,
+              "count": 5
+            },
+            {
+              "raw_class": 69,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 51,
+              "count": 20
+            },
+            {
+              "raw_class": 94,
+              "count": 8
+            },
+            {
+              "raw_class": 76,
+              "count": 7
+            },
+            {
+              "raw_class": 98,
+              "count": 6
+            },
+            {
+              "raw_class": 80,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 44,
+          "count": 100,
+          "false_accept_count": 80,
+          "false_accept_rate": 0.8,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 91,
+              "count": 6
+            },
+            {
+              "raw_class": 99,
+              "count": 5
+            },
+            {
+              "raw_class": 98,
+              "count": 4
+            },
+            {
+              "raw_class": 32,
+              "count": 4
+            },
+            {
+              "raw_class": 18,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 91,
+              "count": 8
+            },
+            {
+              "raw_class": 84,
+              "count": 6
+            },
+            {
+              "raw_class": 69,
+              "count": 6
+            },
+            {
+              "raw_class": 53,
+              "count": 5
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 75,
+          "count": 100,
+          "false_accept_count": 79,
+          "false_accept_rate": 0.79,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 9
+            },
+            {
+              "raw_class": 99,
+              "count": 7
+            },
+            {
+              "raw_class": 73,
+              "count": 5
+            },
+            {
+              "raw_class": 98,
+              "count": 4
+            },
+            {
+              "raw_class": 91,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 91,
+              "count": 12
+            },
+            {
+              "raw_class": 51,
+              "count": 12
+            },
+            {
+              "raw_class": 99,
+              "count": 9
+            },
+            {
+              "raw_class": 73,
+              "count": 7
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 48,
+          "count": 100,
+          "false_accept_count": 77,
+          "false_accept_rate": 0.77,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 89,
+              "count": 14
+            },
+            {
+              "raw_class": 41,
+              "count": 10
+            },
+            {
+              "raw_class": 37,
+              "count": 5
+            },
+            {
+              "raw_class": 45,
+              "count": 4
+            },
+            {
+              "raw_class": 26,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 1,
+              "count": 11
+            },
+            {
+              "raw_class": 89,
+              "count": 9
+            },
+            {
+              "raw_class": 92,
+              "count": 8
+            },
+            {
+              "raw_class": 53,
+              "count": 5
+            },
+            {
+              "raw_class": 41,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 3,
+          "count": 100,
+          "false_accept_count": 76,
+          "false_accept_rate": 0.76,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 98,
+              "count": 8
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 6,
+              "count": 5
+            },
+            {
+              "raw_class": 35,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 98,
+              "count": 11
+            },
+            {
+              "raw_class": 51,
+              "count": 10
+            },
+            {
+              "raw_class": 36,
+              "count": 6
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            },
+            {
+              "raw_class": 28,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 42,
+          "count": 100,
+          "false_accept_count": 73,
+          "false_accept_rate": 0.73,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 8
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 51,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 6,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 13
+            },
+            {
+              "raw_class": 51,
+              "count": 12
+            },
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 47,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 4,
+          "count": 100,
+          "false_accept_count": 71,
+          "false_accept_rate": 0.71,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 50,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 32,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 36,
+              "count": 9
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 98,
+              "count": 4
+            },
+            {
+              "raw_class": 2,
+              "count": 4
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "ten_epoch": {
+    "checkpoint": ".\\runs\\unweighted_nnpu_10epoch_s123\\student.pt",
+    "detector_detail": "runs\\unweighted_nnpu_10epoch_s123_discover\\discovery_detail.json",
+    "protocol": {
+      "dataset": "cifar100",
+      "split_path": ".\\splits_cifar100_protocols\\cifar100_60_40_semantic_isolated.json",
+      "seed": 123,
+      "known_train_count": 21600,
+      "test_count": 10000,
+      "k": 10,
+      "discovery_pool_mode": "mixed",
+      "matched_pool_size": 5400,
+      "matched_known_prior": 0.2,
+      "mixed_known_pool_ratio": 0.2,
+      "threshold": 3.1514224767684915,
+      "threshold_source": "existing validation-calibrated discovery_report; not refit",
+      "note": "test labels are used only for post-hoc cohort summaries"
+    },
+    "cohorts": {
+      "known_correct_accepted": {
+        "count": 3085,
+        "mean_nearest_cosine_distance": 0.051151275634765625,
+        "median_nearest_cosine_distance": 0.04426276683807373,
+        "top1_neighbor_matches_predicted_class": 0.8223662884927067,
+        "mean_topk_purity_for_predicted_class": 0.7875202593192868,
+        "mean_topk_neighbor_class_entropy": 0.4752719603401104,
+        "mean_topk_neighbor_class_entropy_normalized": 0.20640798977905106
+      },
+      "known_wrong_accepted": {
+        "count": 2619,
+        "mean_nearest_cosine_distance": 0.07935497164726257,
+        "median_nearest_cosine_distance": 0.07784843444824219,
+        "top1_neighbor_matches_predicted_class": 0.3142420771286751,
+        "mean_topk_purity_for_predicted_class": 0.33547155402825507,
+        "mean_topk_neighbor_class_entropy": 1.1567879724426322,
+        "mean_topk_neighbor_class_entropy_normalized": 0.5023866331638861
+      },
+      "known_correct_rejected": {
+        "count": 43,
+        "mean_nearest_cosine_distance": 0.13100619614124298,
+        "median_nearest_cosine_distance": 0.1351410150527954,
+        "top1_neighbor_matches_predicted_class": 0.4186046511627907,
+        "mean_topk_purity_for_predicted_class": 0.3441860465116279,
+        "mean_topk_neighbor_class_entropy": 1.4538132589660626,
+        "mean_topk_neighbor_class_entropy_normalized": 0.6313830760867442
+      },
+      "known_wrong_rejected": {
+        "count": 253,
+        "mean_nearest_cosine_distance": 0.13695938885211945,
+        "median_nearest_cosine_distance": 0.13659536838531494,
+        "top1_neighbor_matches_predicted_class": 0.13043478260869565,
+        "mean_topk_purity_for_predicted_class": 0.12608695652173915,
+        "mean_topk_neighbor_class_entropy": 1.69042578385008,
+        "mean_topk_neighbor_class_entropy_normalized": 0.7341425899930688
+      },
+      "unknown_false_accept": {
+        "count": 3456,
+        "mean_nearest_cosine_distance": 0.0935654267668724,
+        "median_nearest_cosine_distance": 0.09441041946411133,
+        "top1_neighbor_matches_predicted_class": 0.40219907407407407,
+        "mean_topk_purity_for_predicted_class": 0.3964699074074074,
+        "mean_topk_neighbor_class_entropy": 1.229085307003878,
+        "mean_topk_neighbor_class_entropy_normalized": 0.5337849666201484
+      },
+      "unknown_rejected": {
+        "count": 544,
+        "mean_nearest_cosine_distance": 0.1366877555847168,
+        "median_nearest_cosine_distance": 0.1376749873161316,
+        "top1_neighbor_matches_predicted_class": 0.1323529411764706,
+        "mean_topk_purity_for_predicted_class": 0.13345588235294117,
+        "mean_topk_neighbor_class_entropy": 1.7539002798915533,
+        "mean_topk_neighbor_class_entropy_normalized": 0.7617092133654705
+      }
+    },
+    "unknown_false_accept_local_support": {
+      "count": 3456,
+      "mean_topk_neighbor_support_for_predicted_class": 0.3964699074074074,
+      "unknown_class_breakdown": [
+        {
+          "raw_unknown_class": 58,
+          "count": 100,
+          "false_accept_count": 98,
+          "false_accept_rate": 0.98,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 89,
+              "count": 32
+            },
+            {
+              "raw_class": 41,
+              "count": 10
+            },
+            {
+              "raw_class": 25,
+              "count": 9
+            },
+            {
+              "raw_class": 85,
+              "count": 9
+            },
+            {
+              "raw_class": 5,
+              "count": 7
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 25,
+              "count": 44
+            },
+            {
+              "raw_class": 81,
+              "count": 20
+            },
+            {
+              "raw_class": 89,
+              "count": 7
+            },
+            {
+              "raw_class": 37,
+              "count": 4
+            },
+            {
+              "raw_class": 83,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 30,
+          "count": 100,
+          "false_accept_count": 96,
+          "false_accept_rate": 0.96,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 39
+            },
+            {
+              "raw_class": 67,
+              "count": 11
+            },
+            {
+              "raw_class": 76,
+              "count": 5
+            },
+            {
+              "raw_class": 91,
+              "count": 5
+            },
+            {
+              "raw_class": 12,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 52
+            },
+            {
+              "raw_class": 76,
+              "count": 11
+            },
+            {
+              "raw_class": 12,
+              "count": 5
+            },
+            {
+              "raw_class": 99,
+              "count": 4
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 86,
+          "count": 100,
+          "false_accept_count": 96,
+          "false_accept_rate": 0.96,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 16,
+              "count": 16
+            },
+            {
+              "raw_class": 76,
+              "count": 9
+            },
+            {
+              "raw_class": 94,
+              "count": 9
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            },
+            {
+              "raw_class": 20,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 94,
+              "count": 21
+            },
+            {
+              "raw_class": 16,
+              "count": 17
+            },
+            {
+              "raw_class": 25,
+              "count": 13
+            },
+            {
+              "raw_class": 20,
+              "count": 6
+            },
+            {
+              "raw_class": 9,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 13,
+          "count": 100,
+          "false_accept_count": 95,
+          "false_accept_rate": 0.95,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 81,
+              "count": 47
+            },
+            {
+              "raw_class": 89,
+              "count": 11
+            },
+            {
+              "raw_class": 25,
+              "count": 7
+            },
+            {
+              "raw_class": 12,
+              "count": 6
+            },
+            {
+              "raw_class": 37,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 81,
+              "count": 41
+            },
+            {
+              "raw_class": 25,
+              "count": 12
+            },
+            {
+              "raw_class": 37,
+              "count": 11
+            },
+            {
+              "raw_class": 12,
+              "count": 6
+            },
+            {
+              "raw_class": 9,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 40,
+          "count": 100,
+          "false_accept_count": 94,
+          "false_accept_rate": 0.94,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 28,
+              "count": 15
+            },
+            {
+              "raw_class": 84,
+              "count": 7
+            },
+            {
+              "raw_class": 9,
+              "count": 7
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            },
+            {
+              "raw_class": 16,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 84,
+              "count": 12
+            },
+            {
+              "raw_class": 51,
+              "count": 12
+            },
+            {
+              "raw_class": 9,
+              "count": 12
+            },
+            {
+              "raw_class": 57,
+              "count": 9
+            },
+            {
+              "raw_class": 28,
+              "count": 7
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 95,
+          "count": 100,
+          "false_accept_count": 94,
+          "false_accept_rate": 0.94,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 30
+            },
+            {
+              "raw_class": 67,
+              "count": 14
+            },
+            {
+              "raw_class": 12,
+              "count": 8
+            },
+            {
+              "raw_class": 69,
+              "count": 5
+            },
+            {
+              "raw_class": 76,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 33
+            },
+            {
+              "raw_class": 76,
+              "count": 13
+            },
+            {
+              "raw_class": 12,
+              "count": 11
+            },
+            {
+              "raw_class": 99,
+              "count": 9
+            },
+            {
+              "raw_class": 67,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 21,
+          "count": 100,
+          "false_accept_count": 93,
+          "false_accept_rate": 0.93,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 46,
+              "count": 21
+            },
+            {
+              "raw_class": 35,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 11,
+              "count": 8
+            },
+            {
+              "raw_class": 98,
+              "count": 7
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 46,
+              "count": 20
+            },
+            {
+              "raw_class": 98,
+              "count": 15
+            },
+            {
+              "raw_class": 35,
+              "count": 15
+            },
+            {
+              "raw_class": 16,
+              "count": 11
+            },
+            {
+              "raw_class": 83,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 43,
+          "count": 100,
+          "false_accept_count": 93,
+          "false_accept_rate": 0.93,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 36,
+              "count": 14
+            },
+            {
+              "raw_class": 50,
+              "count": 11
+            },
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 35,
+              "count": 8
+            },
+            {
+              "raw_class": 11,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 20
+            },
+            {
+              "raw_class": 35,
+              "count": 17
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 2,
+              "count": 5
+            },
+            {
+              "raw_class": 57,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 87,
+          "count": 100,
+          "false_accept_count": 93,
+          "false_accept_rate": 0.93,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 25,
+              "count": 13
+            },
+            {
+              "raw_class": 94,
+              "count": 12
+            },
+            {
+              "raw_class": 16,
+              "count": 9
+            },
+            {
+              "raw_class": 84,
+              "count": 7
+            },
+            {
+              "raw_class": 5,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 94,
+              "count": 23
+            },
+            {
+              "raw_class": 16,
+              "count": 12
+            },
+            {
+              "raw_class": 25,
+              "count": 11
+            },
+            {
+              "raw_class": 84,
+              "count": 9
+            },
+            {
+              "raw_class": 9,
+              "count": 8
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 22,
+          "count": 100,
+          "false_accept_count": 92,
+          "false_accept_rate": 0.92,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 61,
+              "count": 27
+            },
+            {
+              "raw_class": 10,
+              "count": 11
+            },
+            {
+              "raw_class": 99,
+              "count": 6
+            },
+            {
+              "raw_class": 25,
+              "count": 4
+            },
+            {
+              "raw_class": 35,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 61,
+              "count": 33
+            },
+            {
+              "raw_class": 53,
+              "count": 5
+            },
+            {
+              "raw_class": 16,
+              "count": 5
+            },
+            {
+              "raw_class": 84,
+              "count": 4
+            },
+            {
+              "raw_class": 94,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 39,
+          "count": 100,
+          "false_accept_count": 92,
+          "false_accept_rate": 0.92,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 25,
+              "count": 11
+            },
+            {
+              "raw_class": 5,
+              "count": 7
+            },
+            {
+              "raw_class": 73,
+              "count": 5
+            },
+            {
+              "raw_class": 20,
+              "count": 5
+            },
+            {
+              "raw_class": 16,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 25,
+              "count": 16
+            },
+            {
+              "raw_class": 73,
+              "count": 10
+            },
+            {
+              "raw_class": 99,
+              "count": 9
+            },
+            {
+              "raw_class": 57,
+              "count": 8
+            },
+            {
+              "raw_class": 84,
+              "count": 7
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 49,
+          "count": 100,
+          "false_accept_count": 92,
+          "false_accept_rate": 0.92,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 76,
+              "count": 16
+            },
+            {
+              "raw_class": 37,
+              "count": 12
+            },
+            {
+              "raw_class": 67,
+              "count": 9
+            },
+            {
+              "raw_class": 68,
+              "count": 9
+            },
+            {
+              "raw_class": 17,
+              "count": 9
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 76,
+              "count": 28
+            },
+            {
+              "raw_class": 17,
+              "count": 14
+            },
+            {
+              "raw_class": 12,
+              "count": 9
+            },
+            {
+              "raw_class": 37,
+              "count": 8
+            },
+            {
+              "raw_class": 67,
+              "count": 7
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 90,
+          "count": 100,
+          "false_accept_count": 91,
+          "false_accept_rate": 0.91,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 81,
+              "count": 30
+            },
+            {
+              "raw_class": 37,
+              "count": 8
+            },
+            {
+              "raw_class": 12,
+              "count": 8
+            },
+            {
+              "raw_class": 89,
+              "count": 6
+            },
+            {
+              "raw_class": 17,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 81,
+              "count": 40
+            },
+            {
+              "raw_class": 37,
+              "count": 8
+            },
+            {
+              "raw_class": 25,
+              "count": 8
+            },
+            {
+              "raw_class": 12,
+              "count": 7
+            },
+            {
+              "raw_class": 83,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 64,
+          "count": 100,
+          "false_accept_count": 90,
+          "false_accept_rate": 0.9,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 36,
+              "count": 17
+            },
+            {
+              "raw_class": 50,
+              "count": 13
+            },
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 35,
+              "count": 7
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 31
+            },
+            {
+              "raw_class": 35,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 57,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 93,
+          "count": 100,
+          "false_accept_count": 89,
+          "false_accept_rate": 0.89,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 12
+            },
+            {
+              "raw_class": 67,
+              "count": 9
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 1,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 18
+            },
+            {
+              "raw_class": 32,
+              "count": 7
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 15,
+          "count": 100,
+          "false_accept_count": 88,
+          "false_accept_rate": 0.88,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 51,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 98,
+              "count": 5
+            },
+            {
+              "raw_class": 17,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 51,
+              "count": 9
+            },
+            {
+              "raw_class": 84,
+              "count": 7
+            },
+            {
+              "raw_class": 35,
+              "count": 6
+            },
+            {
+              "raw_class": 9,
+              "count": 6
+            },
+            {
+              "raw_class": 2,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 23,
+          "count": 100,
+          "false_accept_count": 88,
+          "false_accept_rate": 0.88,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 67,
+              "count": 25
+            },
+            {
+              "raw_class": 73,
+              "count": 13
+            },
+            {
+              "raw_class": 69,
+              "count": 13
+            },
+            {
+              "raw_class": 76,
+              "count": 6
+            },
+            {
+              "raw_class": 10,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 18
+            },
+            {
+              "raw_class": 69,
+              "count": 17
+            },
+            {
+              "raw_class": 67,
+              "count": 17
+            },
+            {
+              "raw_class": 76,
+              "count": 9
+            },
+            {
+              "raw_class": 28,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 78,
+          "count": 100,
+          "false_accept_count": 88,
+          "false_accept_rate": 0.88,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 99,
+              "count": 25
+            },
+            {
+              "raw_class": 18,
+              "count": 9
+            },
+            {
+              "raw_class": 91,
+              "count": 3
+            },
+            {
+              "raw_class": 98,
+              "count": 3
+            },
+            {
+              "raw_class": 45,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 99,
+              "count": 30
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            },
+            {
+              "raw_class": 18,
+              "count": 6
+            },
+            {
+              "raw_class": 45,
+              "count": 5
+            },
+            {
+              "raw_class": 61,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 33,
+          "count": 100,
+          "false_accept_count": 87,
+          "false_accept_rate": 0.87,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 96,
+              "count": 17
+            },
+            {
+              "raw_class": 94,
+              "count": 7
+            },
+            {
+              "raw_class": 59,
+              "count": 7
+            },
+            {
+              "raw_class": 47,
+              "count": 5
+            },
+            {
+              "raw_class": 68,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 94,
+              "count": 14
+            },
+            {
+              "raw_class": 96,
+              "count": 10
+            },
+            {
+              "raw_class": 83,
+              "count": 7
+            },
+            {
+              "raw_class": 82,
+              "count": 6
+            },
+            {
+              "raw_class": 18,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 38,
+          "count": 100,
+          "false_accept_count": 86,
+          "false_accept_rate": 0.86,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 65,
+              "count": 15
+            },
+            {
+              "raw_class": 80,
+              "count": 15
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 51,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 65,
+              "count": 18
+            },
+            {
+              "raw_class": 51,
+              "count": 12
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 37,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 63,
+          "count": 100,
+          "false_accept_count": 86,
+          "false_accept_rate": 0.86,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 15
+            },
+            {
+              "raw_class": 50,
+              "count": 10
+            },
+            {
+              "raw_class": 65,
+              "count": 7
+            },
+            {
+              "raw_class": 77,
+              "count": 5
+            },
+            {
+              "raw_class": 80,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 12
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 36,
+              "count": 6
+            },
+            {
+              "raw_class": 14,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 3,
+          "count": 100,
+          "false_accept_count": 85,
+          "false_accept_rate": 0.85,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 46,
+              "count": 9
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 9,
+              "count": 8
+            },
+            {
+              "raw_class": 51,
+              "count": 7
+            },
+            {
+              "raw_class": 46,
+              "count": 6
+            },
+            {
+              "raw_class": 14,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 27,
+          "count": 100,
+          "false_accept_count": 85,
+          "false_accept_rate": 0.85,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 11
+            },
+            {
+              "raw_class": 91,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 91,
+              "count": 7
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 73,
+              "count": 6
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 97,
+          "count": 100,
+          "false_accept_count": 85,
+          "false_accept_rate": 0.85,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 50,
+              "count": 18
+            },
+            {
+              "raw_class": 36,
+              "count": 12
+            },
+            {
+              "raw_class": 98,
+              "count": 5
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 19
+            },
+            {
+              "raw_class": 35,
+              "count": 13
+            },
+            {
+              "raw_class": 65,
+              "count": 8
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 2,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 55,
+          "count": 100,
+          "false_accept_count": 84,
+          "false_accept_rate": 0.84,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 9
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 77,
+              "count": 5
+            },
+            {
+              "raw_class": 32,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 12
+            },
+            {
+              "raw_class": 57,
+              "count": 10
+            },
+            {
+              "raw_class": 51,
+              "count": 5
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            },
+            {
+              "raw_class": 35,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 71,
+          "count": 100,
+          "false_accept_count": 84,
+          "false_accept_rate": 0.84,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 12,
+              "count": 19
+            },
+            {
+              "raw_class": 68,
+              "count": 15
+            },
+            {
+              "raw_class": 67,
+              "count": 12
+            },
+            {
+              "raw_class": 73,
+              "count": 8
+            },
+            {
+              "raw_class": 28,
+              "count": 7
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 24
+            },
+            {
+              "raw_class": 68,
+              "count": 16
+            },
+            {
+              "raw_class": 69,
+              "count": 11
+            },
+            {
+              "raw_class": 12,
+              "count": 7
+            },
+            {
+              "raw_class": 56,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 4,
+          "count": 100,
+          "false_accept_count": 83,
+          "false_accept_rate": 0.83,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 13
+            },
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 32,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 9
+            },
+            {
+              "raw_class": 35,
+              "count": 8
+            },
+            {
+              "raw_class": 2,
+              "count": 8
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 57,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 34,
+          "count": 100,
+          "false_accept_count": 83,
+          "false_accept_rate": 0.83,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 15
+            },
+            {
+              "raw_class": 36,
+              "count": 12
+            },
+            {
+              "raw_class": 65,
+              "count": 9
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            },
+            {
+              "raw_class": 74,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 18
+            },
+            {
+              "raw_class": 80,
+              "count": 17
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            },
+            {
+              "raw_class": 54,
+              "count": 5
+            },
+            {
+              "raw_class": 1,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 19,
+          "count": 100,
+          "false_accept_count": 82,
+          "false_accept_rate": 0.82,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 85,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 84,
+              "count": 13
+            },
+            {
+              "raw_class": 65,
+              "count": 8
+            },
+            {
+              "raw_class": 51,
+              "count": 7
+            },
+            {
+              "raw_class": 92,
+              "count": 6
+            },
+            {
+              "raw_class": 9,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 29,
+          "count": 100,
+          "false_accept_count": 82,
+          "false_accept_rate": 0.82,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 51,
+              "count": 9
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 91,
+              "count": 5
+            },
+            {
+              "raw_class": 80,
+              "count": 4
+            },
+            {
+              "raw_class": 24,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 51,
+              "count": 14
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 84,
+              "count": 5
+            },
+            {
+              "raw_class": 37,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 48,
+          "count": 100,
+          "false_accept_count": 82,
+          "false_accept_rate": 0.82,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 41,
+              "count": 16
+            },
+            {
+              "raw_class": 89,
+              "count": 12
+            },
+            {
+              "raw_class": 85,
+              "count": 7
+            },
+            {
+              "raw_class": 46,
+              "count": 6
+            },
+            {
+              "raw_class": 11,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 89,
+              "count": 12
+            },
+            {
+              "raw_class": 46,
+              "count": 8
+            },
+            {
+              "raw_class": 41,
+              "count": 7
+            },
+            {
+              "raw_class": 32,
+              "count": 7
+            },
+            {
+              "raw_class": 11,
+              "count": 7
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 66,
+          "count": 100,
+          "false_accept_count": 82,
+          "false_accept_rate": 0.82,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 65,
+              "count": 7
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 46,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 65,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 16,
+              "count": 8
+            },
+            {
+              "raw_class": 35,
+              "count": 5
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 60,
+          "count": 100,
+          "false_accept_count": 81,
+          "false_accept_rate": 0.81,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 68,
+              "count": 40
+            },
+            {
+              "raw_class": 12,
+              "count": 10
+            },
+            {
+              "raw_class": 17,
+              "count": 4
+            },
+            {
+              "raw_class": 67,
+              "count": 3
+            },
+            {
+              "raw_class": 85,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 68,
+              "count": 33
+            },
+            {
+              "raw_class": 17,
+              "count": 12
+            },
+            {
+              "raw_class": 12,
+              "count": 7
+            },
+            {
+              "raw_class": 82,
+              "count": 6
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 42,
+          "count": 100,
+          "false_accept_count": 80,
+          "false_accept_rate": 0.8,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 50,
+              "count": 9
+            },
+            {
+              "raw_class": 74,
+              "count": 8
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 17,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 7
+            },
+            {
+              "raw_class": 84,
+              "count": 6
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 31,
+          "count": 100,
+          "false_accept_count": 79,
+          "false_accept_rate": 0.79,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 96,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 65,
+              "count": 7
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 51,
+              "count": 13
+            },
+            {
+              "raw_class": 46,
+              "count": 9
+            },
+            {
+              "raw_class": 76,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 72,
+          "count": 100,
+          "false_accept_count": 79,
+          "false_accept_rate": 0.79,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 36,
+              "count": 7
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 73,
+              "count": 5
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 11
+            },
+            {
+              "raw_class": 73,
+              "count": 7
+            },
+            {
+              "raw_class": 57,
+              "count": 6
+            },
+            {
+              "raw_class": 76,
+              "count": 6
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 8,
+          "count": 100,
+          "false_accept_count": 78,
+          "false_accept_rate": 0.78,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 85,
+              "count": 8
+            },
+            {
+              "raw_class": 84,
+              "count": 7
+            },
+            {
+              "raw_class": 89,
+              "count": 6
+            },
+            {
+              "raw_class": 20,
+              "count": 6
+            },
+            {
+              "raw_class": 41,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 12,
+              "count": 14
+            },
+            {
+              "raw_class": 84,
+              "count": 12
+            },
+            {
+              "raw_class": 20,
+              "count": 5
+            },
+            {
+              "raw_class": 89,
+              "count": 4
+            },
+            {
+              "raw_class": 46,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 75,
+          "count": 100,
+          "false_accept_count": 77,
+          "false_accept_rate": 0.77,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 7
+            },
+            {
+              "raw_class": 99,
+              "count": 5
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 77,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 99,
+              "count": 13
+            },
+            {
+              "raw_class": 65,
+              "count": 8
+            },
+            {
+              "raw_class": 51,
+              "count": 7
+            },
+            {
+              "raw_class": 91,
+              "count": 4
+            },
+            {
+              "raw_class": 25,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 88,
+          "count": 100,
+          "false_accept_count": 73,
+          "false_accept_rate": 0.73,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 89,
+              "count": 5
+            },
+            {
+              "raw_class": 79,
+              "count": 4
+            },
+            {
+              "raw_class": 16,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 18
+            },
+            {
+              "raw_class": 36,
+              "count": 7
+            },
+            {
+              "raw_class": 16,
+              "count": 7
+            },
+            {
+              "raw_class": 94,
+              "count": 4
+            },
+            {
+              "raw_class": 37,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 44,
+          "count": 100,
+          "false_accept_count": 71,
+          "false_accept_rate": 0.71,
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 18,
+              "count": 6
+            },
+            {
+              "raw_class": 91,
+              "count": 5
+            },
+            {
+              "raw_class": 79,
+              "count": 4
+            },
+            {
+              "raw_class": 99,
+              "count": 4
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 99,
+              "count": 5
+            },
+            {
+              "raw_class": 84,
+              "count": 5
+            },
+            {
+              "raw_class": 18,
+              "count": 5
+            },
+            {
+              "raw_class": 91,
+              "count": 4
+            },
+            {
+              "raw_class": 25,
+              "count": 4
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

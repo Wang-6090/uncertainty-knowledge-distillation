@@ -52,6 +52,7 @@ from .losses import (
     pu_unknown_feature_margin_loss,
     unknown_feature_separation_loss,
     unknown_feature_boundary_loss,
+    pu_unknown_feature_boundary_loss,
     knn_support_boundary_loss,
     objectosphere_loss,
     uncertainty_separation_loss,
@@ -564,6 +565,150 @@ def compute_discovery_candidate_weights(
 
 
 @torch.no_grad()
+def compute_uncertainty_pu_unlabeled_weights(
+    logits: torch.Tensor,
+    uncertainty: torch.Tensor | None = None,
+    features: torch.Tensor | None = None,
+    prototypes: torch.Tensor | None = None,
+    mode: str = "none",
+    temperature: float = 0.5,
+    power: float = 1.0,
+    support_bank: dict | None = None,
+) -> torch.Tensor | None:
+    """Estimate soft likely-unknown weights for mixed-pool PU training.
+
+    The weights are not labels. They only emphasize unlabeled samples that look
+    farther from the known classifier by prototype distance, local known
+    support, entropy, MSP, or a consensus of these signals. The nnPU loss
+    normalizes them to mean 1.
+    """
+    if mode == "none":
+        return None
+    if logits.size(0) == 0:
+        return logits.new_empty((0,))
+    if temperature <= 0.0:
+        raise ValueError("uncertainty PU weight temperature must be positive")
+    probs = logits.detach().softmax(dim=-1)
+    entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=-1)
+    max_softmax_risk = 1.0 - probs.max(dim=-1).values
+    prototype_risk = None
+    if mode in {
+        "prototype_distance",
+        "distance_consensus",
+        "support_consensus",
+        "support_blended",
+    }:
+        if features is None or prototypes is None:
+            raise ValueError(
+                f"{mode} uncertainty PU weighting requires features and prototypes"
+            )
+        normalized_features = F.normalize(features.detach(), dim=-1)
+        normalized_prototypes = F.normalize(prototypes.detach(), dim=-1)
+        prototype_risk = 1.0 - (
+            normalized_features @ normalized_prototypes.T
+        ).max(dim=-1).values
+    support_risk = None
+    if mode in {"known_support", "support_consensus", "support_blended"}:
+        if features is None or support_bank is None:
+            raise ValueError(
+                f"{mode} uncertainty PU weighting requires features and a known support bank"
+            )
+        normalized_features = F.normalize(features.detach().float(), dim=-1)
+        radii = support_bank["radii"].to(normalized_features)
+        relative_distances = []
+        for class_id, bank in enumerate(support_bank["features_by_class"]):
+            # A singleton cannot provide a leave-one-out support radius.
+            if bank.size(0) < 2 or not torch.isfinite(radii[class_id]) or radii[class_id] <= 0:
+                continue
+            class_features = F.normalize(
+                bank.to(device=normalized_features.device, dtype=normalized_features.dtype),
+                dim=-1,
+            )
+            # Match the leave-one-out radius statistic: mean k-neighbour
+            # cosine distance, not distance to the centroid.
+            k = min(int(support_bank.get("k", 5)), class_features.size(0) - 1)
+            if k <= 0:
+                raise ValueError("known support bank k must be positive")
+            similarity = normalized_features @ class_features.T
+            distance = (1.0 - similarity.topk(k, dim=-1).values.mean(dim=-1)).clamp_min(0.0)
+            relative_distances.append(distance / radii[class_id].clamp_min(1e-6))
+        if not relative_distances:
+            raise ValueError("known support bank has no classes with valid support radii")
+        support_risk = torch.stack(relative_distances, dim=-1).min(dim=-1).values
+    if mode == "prototype_distance":
+        risk = prototype_risk
+    elif mode == "known_support":
+        risk = support_risk
+    elif mode == "msp":
+        risk = max_softmax_risk
+    elif mode == "entropy":
+        risk = entropy
+    elif mode == "distance_consensus":
+        components = [
+            _rank_normalize(prototype_risk),
+            _rank_normalize(entropy),
+            _rank_normalize(max_softmax_risk),
+        ]
+        if uncertainty is not None:
+            components.append(_rank_normalize(uncertainty.detach()))
+        risk = torch.stack(components, dim=0).mean(dim=0)
+    elif mode == "support_consensus":
+        components = [
+            _rank_normalize(support_risk),
+            _rank_normalize(prototype_risk),
+            _rank_normalize(entropy),
+            _rank_normalize(max_softmax_risk),
+        ]
+        if uncertainty is not None:
+            components.append(_rank_normalize(uncertainty.detach()))
+        risk = torch.stack(components, dim=0).mean(dim=0)
+    elif mode == "support_blended":
+        base_components = [
+            _rank_normalize(prototype_risk),
+            _rank_normalize(entropy),
+            _rank_normalize(max_softmax_risk),
+        ]
+        if uncertainty is not None:
+            base_components.append(_rank_normalize(uncertainty.detach()))
+        base_risk = torch.stack(base_components, dim=0).mean(dim=0)
+        # Keep the established consensus dominant; use local support as a
+        # small geometric correction rather than a competing detector.
+        risk = 0.75 * base_risk + 0.25 * _rank_normalize(support_risk)
+    else:
+        raise ValueError(f"Unsupported uncertainty PU weight source: {mode}")
+    ranked = _rank_normalize(risk)
+    centered = ranked - ranked.mean()
+    soft = torch.sigmoid(centered / max(float(temperature), 1e-6))
+    return power_novelty_weights(soft, power)
+
+
+def uncertainty_pu_predictions(
+    model,
+    known_output: dict,
+    unlabeled_outputs: tuple[dict, ...],
+    *,
+    detach_features: bool = False,
+):
+    """Return uncertainty predictions used by the mixed-pool PU objective.
+
+    Detaching the encoder features isolates the PU gradient to the uncertainty
+    (and optional rejection) head while leaving the other training losses free
+    to update the shared representation.
+    """
+    if not detach_features:
+        return (
+            known_output["uncertainty"],
+            torch.cat([output["uncertainty"] for output in unlabeled_outputs]),
+        )
+    known_uncertainty = model.rejection_forward(known_output["features"].detach())[2]
+    unlabeled_uncertainty = [
+        model.rejection_forward(output["features"].detach())[2]
+        for output in unlabeled_outputs
+    ]
+    return known_uncertainty, torch.cat(unlabeled_uncertainty)
+
+
+@torch.no_grad()
 def compute_joint_candidate_weights(
     logits: torch.Tensor,
     uncertainty: torch.Tensor | None = None,
@@ -937,6 +1082,10 @@ def train_one_epoch_student(
     discovery_cross_view_gating: bool = False,
     discovery_pool_mode: str = "unknown",
     alpha_discovery_boundary: float = 0.0,
+    discovery_boundary_mode: str = "pure",
+    discovery_boundary_known_prior: float = 0.2,
+    discovery_boundary_pu_risk: str = "hard_nnpu",
+    discovery_boundary_pu_softness: float = 0.05,
     discovery_boundary_margin: float = 0.2,
     discovery_boundary_prototype_weight: float = 0.5,
     discovery_boundary_temperature: float = 0.1,
@@ -951,6 +1100,10 @@ def train_one_epoch_student(
     alpha_discovery_uncertainty_pu: float = 0.0,
     discovery_uncertainty_known_prior: float = 0.2,
     discovery_uncertainty_pu_risk: str = "legacy",
+    discovery_uncertainty_pu_weight_source: str = "none",
+    discovery_uncertainty_pu_weight_temperature: float = 0.5,
+    discovery_uncertainty_pu_weight_power: float = 1.0,
+    discovery_uncertainty_pu_detach_features: bool = False,
     alpha_discovery_selective_unknown: float = 0.0,
     alpha_discovery_selective_energy: float = 0.0,
     alpha_angular: float = 0.0,
@@ -975,6 +1128,15 @@ def train_one_epoch_student(
     discovery_selection_model=None,
     discovery_selection_model_updates_ema: bool = True,
     discovery_ema_decay: float = 0.99,
+    alpha_discovery_known_consistency: float = 0.0,
+    discovery_known_consistency_confidence: float = 0.8,
+    discovery_known_consistency_target: str = "ema",
+    discovery_known_consistency_gate: str = "confidence",
+    discovery_known_consistency_support=None,
+    discovery_known_consistency_support_multiplier: float = 1.0,
+    discovery_known_consistency_uncertainty_max: float | None = None,
+    discovery_known_consistency_uncertainty_source: str = "head",
+    discovery_known_consistency_uncertainty_mc_samples: int = 4,
     discovery_neighbor_filter: bool = False,
     discovery_neighbor_k: int = 5,
     discovery_neighbor_min_votes: int = 2,
@@ -1093,6 +1255,7 @@ def train_one_epoch_student(
     discovery_knn_boundary_meter = AverageMeter()
     discovery_uncertainty_separation_meter = AverageMeter()
     discovery_uncertainty_pu_meter = AverageMeter()
+    discovery_uncertainty_pu_weight_meter = AverageMeter()
     discovery_rejection_pu_feature_margin_meter = AverageMeter()
     discovery_selective_unknown_meter = AverageMeter()
     discovery_selective_energy_meter = AverageMeter()
@@ -1105,6 +1268,9 @@ def train_one_epoch_student(
     discovery_raw_selected_meter = AverageMeter()
     discovery_neighbor_agreement_meter = AverageMeter()
     discovery_weight_mean_meter = AverageMeter()
+    discovery_known_consistency_meter = AverageMeter()
+    discovery_known_anchor_ratio_meter = AverageMeter()
+    discovery_known_anchor_known_fraction_meter = AverageMeter()
     feature_candidate_ratio_meter = AverageMeter()
     feature_candidate_weight_mean_meter = AverageMeter()
     joint_meter = AverageMeter()
@@ -1334,6 +1500,7 @@ def train_one_epoch_student(
         joint_proto_repulsion = s_out["logits"].new_tensor(0.0)
         loss_joint_known_ce = s_out["logits"].new_tensor(0.0)
         loss_joint_known_consistency = s_out["logits"].new_tensor(0.0)
+        loss_discovery_known_consistency = s_out["logits"].new_tensor(0.0)
         loss_joint_novel_margin = s_out["logits"].new_tensor(0.0)
         joint_candidate_ratio_value = 0.0
         joint_residual_weight_value = 0.0
@@ -1419,12 +1586,14 @@ def train_one_epoch_student(
                 )
                 loss_joint_known_ce = classification_loss(unified_logits, labels)
         discovery_selected_ratio = 0.0
+        discovery_known_anchor_ratio = 0.0
         discovery_raw_selected_ratio = 0.0
         discovery_neighbor_agreement = 0.0
         discovery_weight_mean = 0.0
         feature_candidate_ratio = 0.0
         feature_candidate_weight_mean = 0.0
         discovery_uncertainty_feature_margin_weight_mean = 0.0
+        discovery_uncertainty_pu_weight_mean = 0.0
         if discovery_iter is not None and (
             alpha_discovery > 0.0
             or alpha_discovery_unknown > 0.0
@@ -1446,6 +1615,7 @@ def train_one_epoch_student(
             or alpha_discovery_rejection_pu_feature_margin > 0.0
             or alpha_discovery_selective_unknown > 0.0
             or alpha_discovery_selective_energy > 0.0
+            or alpha_discovery_known_consistency > 0.0
             or alpha_reciprocal > 0.0
             or alpha_joint_discovery > 0.0
         ):
@@ -1454,11 +1624,152 @@ def train_one_epoch_student(
             except StopIteration:
                 discovery_iter = iter(discovery_loader)
                 discovery_images = next(discovery_iter)
-            first_view, second_view = discovery_images
+            discovery_is_known = None
+            if len(discovery_images) == 2:
+                first_view, second_view = discovery_images
+            else:
+                first_view, second_view, _, _, discovery_is_known = discovery_images
             first_view = first_view.to(device)
             second_view = second_view.to(device)
             first_out = student(first_view)
             second_out = student(second_view)
+            if alpha_discovery_known_consistency > 0.0:
+                if discovery_pool_mode != "mixed":
+                    raise ValueError(
+                        "alpha_discovery_known_consistency requires "
+                        "discovery_pool_mode='mixed'"
+                    )
+                if discovery_known_consistency_uncertainty_source not in {
+                    "head",
+                    "mc_epistemic",
+                    "mc_predictive_entropy",
+                }:
+                    raise ValueError(
+                        "discovery_known_consistency_uncertainty_source must be "
+                        "head, mc_epistemic, or mc_predictive_entropy"
+                    )
+                if (
+                    discovery_known_consistency_uncertainty_source != "head"
+                    and int(discovery_known_consistency_uncertainty_mc_samples) < 2
+                ):
+                    raise ValueError(
+                        "MC known-anchor uncertainty requires at least 2 samples"
+                    )
+                if discovery_known_consistency_target == "teacher":
+                    with torch.no_grad():
+                        if discovery_known_consistency_uncertainty_source == "head":
+                            first_target = teacher(first_view)
+                            second_target = teacher(second_view)
+                            first_target_logits = first_target["logits"]
+                            second_target_logits = second_target["logits"]
+                            first_target_uncertainty = first_target["uncertainty"]
+                            second_target_uncertainty = second_target["uncertainty"]
+                        else:
+                            (
+                                first_target,
+                                first_target_logits,
+                                first_target_uncertainty,
+                            ) = teacher_kd_uncertainty(
+                                teacher,
+                                first_view,
+                                source=discovery_known_consistency_uncertainty_source,
+                                mc_samples=discovery_known_consistency_uncertainty_mc_samples,
+                            )
+                            (
+                                second_target,
+                                second_target_logits,
+                                second_target_uncertainty,
+                            ) = teacher_kd_uncertainty(
+                                teacher,
+                                second_view,
+                                source=discovery_known_consistency_uncertainty_source,
+                                mc_samples=discovery_known_consistency_uncertainty_mc_samples,
+                            )
+                elif discovery_known_consistency_target == "ema":
+                    if discovery_selection_model is None:
+                        raise ValueError(
+                            "EMA known consistency requires "
+                            "discovery_selection_model='ema'"
+                        )
+                    with torch.no_grad():
+                        first_target = discovery_selection_model(first_view)
+                        second_target = discovery_selection_model(second_view)
+                    first_target_logits = first_target["logits"]
+                    second_target_logits = second_target["logits"]
+                    first_target_uncertainty = first_target["uncertainty"]
+                    second_target_uncertainty = second_target["uncertainty"]
+                else:
+                    raise ValueError(
+                        "discovery_known_consistency_target must be 'ema' or 'teacher'"
+                    )
+                first_target_probs = first_target_logits.detach().softmax(dim=-1)
+                second_target_probs = second_target_logits.detach().softmax(dim=-1)
+                first_target_labels = first_target_probs.argmax(dim=-1)
+                second_target_labels = second_target_probs.argmax(dim=-1)
+                target_confidence = 0.5 * (
+                    first_target_probs.max(dim=-1).values
+                    + second_target_probs.max(dim=-1).values
+                )
+                known_anchor_mask = (
+                    (first_target_labels == second_target_labels)
+                    & (target_confidence >= float(discovery_known_consistency_confidence))
+                )
+                gate = str(discovery_known_consistency_gate).strip().lower()
+                if gate not in {"confidence", "prototype", "support", "prototype_support"}:
+                    raise ValueError(
+                        "discovery_known_consistency_gate must be one of "
+                        "confidence, prototype, support, prototype_support"
+                    )
+                if gate != "confidence":
+                    if discovery_known_consistency_support is None:
+                        raise ValueError(
+                            "prototype/support known-anchor gates require a known support bank"
+                        )
+                    first_support = known_anchor_support_mask(
+                        first_out["features"],
+                        first_target_labels,
+                        discovery_known_consistency_support,
+                        multiplier=discovery_known_consistency_support_multiplier,
+                        use_prototype=gate in {"prototype", "prototype_support"},
+                        use_knn=gate in {"support", "prototype_support"},
+                    )
+                    second_support = known_anchor_support_mask(
+                        second_out["features"],
+                        second_target_labels,
+                        discovery_known_consistency_support,
+                        multiplier=discovery_known_consistency_support_multiplier,
+                        use_prototype=gate in {"prototype", "prototype_support"},
+                        use_knn=gate in {"support", "prototype_support"},
+                    )
+                    known_anchor_mask = known_anchor_mask & first_support & second_support
+                if discovery_known_consistency_uncertainty_max is not None:
+                    target_uncertainty = 0.5 * (
+                        first_target_uncertainty.detach()
+                        + second_target_uncertainty.detach()
+                    )
+                    known_anchor_mask = known_anchor_mask & (
+                        target_uncertainty <= float(discovery_known_consistency_uncertainty_max)
+                    )
+                discovery_known_anchor_ratio = known_anchor_mask.float().mean().item()
+                if discovery_is_known is not None:
+                    anchor_count = known_anchor_mask.sum()
+                    if anchor_count > 0:
+                        anchor_known_fraction = (
+                            discovery_is_known.to(device).bool()[known_anchor_mask]
+                            .float()
+                            .mean()
+                            .item()
+                        )
+                    else:
+                        anchor_known_fraction = 0.0
+                else:
+                    anchor_known_fraction = 0.0
+                loss_discovery_known_consistency = known_pseudo_label_consistency_loss(
+                    first_out["logits"],
+                    second_out["logits"],
+                    first_target_labels,
+                    mask=known_anchor_mask,
+                )
             if alpha_discovery_feature_consistency > 0.0:
                 # Keep the backbone representation stable across augmentations
                 # without assigning pseudo labels to the mixed pool. This is
@@ -1966,7 +2277,7 @@ def train_one_epoch_student(
                     first_soft_mask, first_soft_weights, _ = compute_discovery_candidate_weights(
                         first_feature_selection["logits"],
                         first_feature_selection["uncertainty"],
-                        features=first_feature_selection["proj"],
+                        features=first_feature_selection["features"],
                         student_logits=first_out["logits"],
                         student_uncertainty=first_out["uncertainty"],
                         prototypes=student.classifier.weight,
@@ -1978,7 +2289,7 @@ def train_one_epoch_student(
                     second_soft_mask, second_soft_weights, _ = compute_discovery_candidate_weights(
                         second_feature_selection["logits"],
                         second_feature_selection["uncertainty"],
-                        features=second_feature_selection["proj"],
+                        features=second_feature_selection["features"],
                         student_logits=second_out["logits"],
                         student_uncertainty=second_out["uncertainty"],
                         prototypes=student.classifier.weight,
@@ -2189,6 +2500,19 @@ def train_one_epoch_student(
                         # A conservative agreement gate: both signals must
                         # indicate novelty to receive a large feature penalty.
                         weight = uncertainty * confidence_novelty
+                    elif discovery_feature_margin_weight_source in {
+                        "prototype_distance",
+                        "distance_consensus",
+                    }:
+                        weight = compute_uncertainty_pu_unlabeled_weights(
+                            output["logits"],
+                            uncertainty,
+                            features=output["features"],
+                            prototypes=student.classifier.weight,
+                            mode=discovery_feature_margin_weight_source,
+                            temperature=0.5,
+                            power=1.0,
+                        )
                     elif discovery_feature_margin_weight_source == "cross_view_min_uncertainty":
                         other_output = (
                             second_out if output is first_out else first_out
@@ -2319,31 +2643,57 @@ def train_one_epoch_student(
                     )
                 )
             if alpha_discovery_boundary > 0.0:
+                if discovery_boundary_mode not in {"pure", "pu"}:
+                    raise ValueError("discovery_boundary_mode must be 'pure' or 'pu'")
+                if discovery_boundary_mode == "pu" and discovery_pool_mode != "mixed":
+                    raise ValueError("PU boundary mode requires discovery_pool_mode='mixed'")
                 first_feature_values = first_out["features"]
                 second_feature_values = second_out["features"]
                 if feature_candidate_masks is not None:
                     first_feature_values = first_feature_values[feature_candidate_masks[0]]
                     second_feature_values = second_feature_values[feature_candidate_masks[1]]
-                loss_discovery_boundary = 0.5 * (
-                    unknown_feature_boundary_loss(
-                        s_out["features"],
-                        labels,
-                        first_feature_values,
-                        student.classifier.weight,
-                        similarity_margin=discovery_boundary_margin,
-                        prototype_weight=discovery_boundary_prototype_weight,
-                        temperature=discovery_boundary_temperature,
+                if discovery_boundary_mode == "pu":
+                    boundary_loss = pu_unknown_feature_boundary_loss
+                    boundary_kwargs = {
+                        "known_prior": discovery_boundary_known_prior,
+                        "risk_mode": discovery_boundary_pu_risk,
+                        "softness": discovery_boundary_pu_softness,
+                    }
+                    loss_discovery_boundary = 0.5 * (
+                        boundary_loss(
+                            s_out["features"], labels, first_feature_values,
+                            student.classifier.weight,
+                            similarity_margin=discovery_boundary_margin,
+                            prototype_weight=discovery_boundary_prototype_weight,
+                            temperature=discovery_boundary_temperature,
+                            **boundary_kwargs,
+                        )
+                        + boundary_loss(
+                            s_out["features"], labels, second_feature_values,
+                            student.classifier.weight,
+                            similarity_margin=discovery_boundary_margin,
+                            prototype_weight=discovery_boundary_prototype_weight,
+                            temperature=discovery_boundary_temperature,
+                            **boundary_kwargs,
+                        )
                     )
-                    + unknown_feature_boundary_loss(
-                        s_out["features"],
-                        labels,
-                        second_feature_values,
-                        student.classifier.weight,
-                        similarity_margin=discovery_boundary_margin,
-                        prototype_weight=discovery_boundary_prototype_weight,
-                        temperature=discovery_boundary_temperature,
+                else:
+                    loss_discovery_boundary = 0.5 * (
+                        unknown_feature_boundary_loss(
+                            s_out["features"], labels, first_feature_values,
+                            student.classifier.weight,
+                            similarity_margin=discovery_boundary_margin,
+                            prototype_weight=discovery_boundary_prototype_weight,
+                            temperature=discovery_boundary_temperature,
+                        )
+                        + unknown_feature_boundary_loss(
+                            s_out["features"], labels, second_feature_values,
+                            student.classifier.weight,
+                            similarity_margin=discovery_boundary_margin,
+                            prototype_weight=discovery_boundary_prototype_weight,
+                            temperature=discovery_boundary_temperature,
+                        )
                     )
-                )
             if alpha_discovery_knn_boundary > 0.0:
                 if discovery_knn_support is None:
                     raise ValueError(
@@ -2395,14 +2745,50 @@ def train_one_epoch_student(
                     raise ValueError(
                         "discovery_uncertainty_known_prior must be in (0, 1)"
                     )
-                unlabeled_uncertainty = 0.5 * (
-                    first_out["uncertainty"] + second_out["uncertainty"]
+                known_pu_uncertainty, unlabeled_pu_uncertainty = (
+                    uncertainty_pu_predictions(
+                        student,
+                        s_out,
+                        (first_out, second_out),
+                        detach_features=discovery_uncertainty_pu_detach_features,
+                    )
                 )
+                unlabeled_uncertainty = 0.5 * (
+                    unlabeled_pu_uncertainty[: first_out["uncertainty"].size(0)]
+                    + unlabeled_pu_uncertainty[first_out["uncertainty"].size(0) :]
+                )
+                first_pu_weight = compute_uncertainty_pu_unlabeled_weights(
+                    first_out["logits"],
+                    first_out["uncertainty"],
+                    features=first_out["features"],
+                    prototypes=student.classifier.weight,
+                    support_bank=discovery_knn_support,
+                    mode=discovery_uncertainty_pu_weight_source,
+                    temperature=discovery_uncertainty_pu_weight_temperature,
+                    power=discovery_uncertainty_pu_weight_power,
+                )
+                second_pu_weight = compute_uncertainty_pu_unlabeled_weights(
+                    second_out["logits"],
+                    second_out["uncertainty"],
+                    features=second_out["features"],
+                    prototypes=student.classifier.weight,
+                    support_bank=discovery_knn_support,
+                    mode=discovery_uncertainty_pu_weight_source,
+                    temperature=discovery_uncertainty_pu_weight_temperature,
+                    power=discovery_uncertainty_pu_weight_power,
+                )
+                unlabeled_pu_weight = None
+                if first_pu_weight is not None and second_pu_weight is not None:
+                    unlabeled_pu_weight = 0.5 * (first_pu_weight + second_pu_weight)
+                    discovery_uncertainty_pu_weight_mean = (
+                        unlabeled_pu_weight.mean().item()
+                    )
                 loss_discovery_uncertainty_pu = nnpu_known_uncertainty_loss(
-                    s_out["uncertainty"],
+                    known_pu_uncertainty,
                     unlabeled_uncertainty,
                     known_prior=discovery_uncertainty_known_prior,
                     risk_mode=discovery_uncertainty_pu_risk,
+                    unlabeled_weight=unlabeled_pu_weight,
                 )
             if alpha_discovery_rejection_pu_feature_margin > 0.0:
                 if s_out.get("rejection_logits") is None:
@@ -2599,6 +2985,7 @@ def train_one_epoch_student(
             * loss_discovery_rejection_pu_feature_margin
             + alpha_discovery_selective_unknown * loss_discovery_selective_unknown
             + alpha_discovery_selective_energy * loss_discovery_selective_energy
+            + alpha_discovery_known_consistency * loss_discovery_known_consistency
             + alpha_angular * loss_angular
             + alpha_proxy_anchor * loss_proxy_anchor
             + alpha_hard_proxy_margin * loss_hard_proxy_margin
@@ -2752,6 +3139,9 @@ def train_one_epoch_student(
         discovery_uncertainty_pu_meter.update(
             loss_discovery_uncertainty_pu.item(), images.size(0)
         )
+        discovery_uncertainty_pu_weight_meter.update(
+            discovery_uncertainty_pu_weight_mean, images.size(0)
+        )
         discovery_rejection_pu_feature_margin_meter.update(
             loss_discovery_rejection_pu_feature_margin.item(), images.size(0)
         )
@@ -2765,6 +3155,16 @@ def train_one_epoch_student(
         discovery_raw_selected_meter.update(discovery_raw_selected_ratio, images.size(0))
         discovery_neighbor_agreement_meter.update(discovery_neighbor_agreement, images.size(0))
         discovery_weight_mean_meter.update(discovery_weight_mean, images.size(0))
+        discovery_known_consistency_meter.update(
+            loss_discovery_known_consistency.item(), images.size(0)
+        )
+        discovery_known_anchor_ratio_meter.update(
+            discovery_known_anchor_ratio, images.size(0)
+        )
+        discovery_known_anchor_known_fraction_meter.update(
+            anchor_known_fraction if alpha_discovery_known_consistency > 0.0 else 0.0,
+            images.size(0),
+        )
         feature_candidate_ratio_meter.update(feature_candidate_ratio, images.size(0))
         feature_candidate_weight_mean_meter.update(
             feature_candidate_weight_mean, images.size(0)
@@ -2860,6 +3260,9 @@ def train_one_epoch_student(
         "discovery_knn_boundary": discovery_knn_boundary_meter.avg,
         "discovery_uncertainty_separation": discovery_uncertainty_separation_meter.avg,
         "discovery_uncertainty_pu": discovery_uncertainty_pu_meter.avg,
+        "discovery_uncertainty_pu_weight_mean": (
+            discovery_uncertainty_pu_weight_meter.avg
+        ),
         "discovery_rejection_pu_feature_margin": (
             discovery_rejection_pu_feature_margin_meter.avg
         ),
@@ -2874,6 +3277,11 @@ def train_one_epoch_student(
         "discovery_raw_selected_ratio": discovery_raw_selected_meter.avg,
         "discovery_neighbor_agreement": discovery_neighbor_agreement_meter.avg,
         "discovery_weight_mean": discovery_weight_mean_meter.avg,
+        "discovery_known_consistency": discovery_known_consistency_meter.avg,
+        "discovery_known_anchor_ratio": discovery_known_anchor_ratio_meter.avg,
+        "discovery_known_anchor_known_fraction": (
+            discovery_known_anchor_known_fraction_meter.avg
+        ),
         "feature_candidate_ratio": feature_candidate_ratio_meter.avg,
         "feature_candidate_weight_mean": feature_candidate_weight_mean_meter.avg,
         "joint_discovery": joint_meter.avg,
@@ -3039,14 +3447,23 @@ def collect_classwise_knn_support(
     was_training = model.training
     model.eval()
     feature_chunks = [[] for _ in range(int(num_classes))]
+    # Building an evaluation-only bank must not perturb the training RNG.
+    # Otherwise a paired A/B run changes augmentation and minibatch randomness
+    # merely because a support-based weighting source was enabled.
+    rng_devices = []
+    if device.type == "cuda":
+        rng_devices = [
+            device.index if device.index is not None else torch.cuda.current_device()
+        ]
     try:
-        for batch in tqdm(loader, desc="known-knn-bank", leave=False):
-            images, labels = batch[0].to(device), batch[1].to(device)
-            features = F.normalize(model(images)["features"].float(), dim=-1)
-            valid = (labels >= 0) & (labels < int(num_classes))
-            for cls in torch.unique(labels[valid]).tolist():
-                mask = labels == int(cls)
-                feature_chunks[int(cls)].append(features[mask].detach())
+        with torch.random.fork_rng(devices=rng_devices):
+            for batch in tqdm(loader, desc="known-knn-bank", leave=False):
+                images, labels = batch[0].to(device), batch[1].to(device)
+                features = F.normalize(model(images)["features"].float(), dim=-1)
+                valid = (labels >= 0) & (labels < int(num_classes))
+                for cls in torch.unique(labels[valid]).tolist():
+                    mask = labels == int(cls)
+                    feature_chunks[int(cls)].append(features[mask].detach())
     finally:
         model.train(was_training)
 
@@ -3070,7 +3487,62 @@ def collect_classwise_knn_support(
         radii[cls] = torch.quantile(distances.clamp_min(0.0), float(quantile))
     if not counts.any():
         raise ValueError("Known training loader produced no class features")
-    return {"features_by_class": banks, "radii": radii, "counts": counts}
+    return {
+        "features_by_class": banks,
+        "radii": radii,
+        "counts": counts,
+        "k": int(k),
+        "quantile": float(quantile),
+    }
+
+
+@torch.no_grad()
+def known_anchor_support_mask(
+    features: torch.Tensor,
+    predicted_labels: torch.Tensor,
+    support_bank: dict,
+    multiplier: float = 1.0,
+    use_prototype: bool = True,
+    use_knn: bool = True,
+) -> torch.Tensor:
+    """Return a conservative known-support mask for pseudo known anchors.
+
+    The bank is built only from labelled known training images.  A candidate
+    must lie inside the class-conditional support radius of its target class.
+    ``use_prototype`` checks distance to the class centroid, while ``use_knn``
+    checks the mean distance to the closest known neighbours.  Requiring both
+    is intentionally stricter than a confidence-only pseudo-label rule and is
+    designed to reduce unknown samples entering the known-consistency loss.
+    """
+    features = F.normalize(features.float(), dim=-1)
+    labels = predicted_labels.long().reshape(-1)
+    if features.size(0) != labels.size(0):
+        raise ValueError("features and predicted_labels must have matching lengths")
+    if not float(multiplier) > 0.0:
+        raise ValueError("support multiplier must be positive")
+    result = torch.zeros(labels.size(0), dtype=torch.bool, device=features.device)
+    radii = support_bank["radii"].to(features.device).float()
+    banks = support_bank["features_by_class"]
+    k = max(int(support_bank.get("k", 1)), 1)
+    for cls in torch.unique(labels).tolist():
+        cls = int(cls)
+        if cls < 0 or cls >= len(banks) or banks[cls].numel() == 0:
+            continue
+        mask = labels == cls
+        bank = F.normalize(banks[cls].to(features.device).float(), dim=-1)
+        distances = 1.0 - features[mask] @ bank.T
+        radius = radii[cls].clamp_min(1e-4) * float(multiplier)
+        accepted = torch.ones(mask.sum(), dtype=torch.bool, device=features.device)
+        if use_prototype:
+            prototype = F.normalize(bank.mean(dim=0, keepdim=True), dim=-1)
+            prototype_distance = 1.0 - features[mask] @ prototype.T
+            accepted = accepted & (prototype_distance[:, 0] <= radius)
+        if use_knn:
+            neighbor_count = min(k, bank.size(0))
+            knn_distance = (-distances).topk(neighbor_count, dim=-1).values.neg().mean(dim=-1)
+            accepted = accepted & (knn_distance <= radius)
+        result[mask] = accepted
+    return result
 
 
 def _odin_batch_score(
@@ -4561,9 +5033,14 @@ def compute_open_score(
         "normalized_entropy_classwise_mahalanobis",
         "relative_mahalanobis",
         "normalized_entropy_relative_mahalanobis",
+        "normalized_entropy_proto_relative_mahalanobis",
     }
     if gaussian_stats is not None and score_mode in mahalanobis_score_modes:
-        if score_mode in {"relative_mahalanobis", "normalized_entropy_relative_mahalanobis"}:
+        if score_mode in {
+            "relative_mahalanobis",
+            "normalized_entropy_relative_mahalanobis",
+            "normalized_entropy_proto_relative_mahalanobis",
+        }:
             mahalanobis = compute_relative_mahalanobis_distance(
                 outputs["features"], gaussian_stats
             )
@@ -4863,6 +5340,20 @@ def compute_open_score(
             (entropy - normalization["entropy"]["mean"]) / normalization["entropy"]["std"]
             + (mahalanobis - normalization["relative_mahalanobis"]["mean"])
             / normalization["relative_mahalanobis"]["std"]
+        )
+    elif score_mode == "normalized_entropy_proto_relative_mahalanobis":
+        if proto_dist is None or mahalanobis is None or normalization is None:
+            raise ValueError(
+                "normalized_entropy_proto_relative_mahalanobis requires "
+                "prototypes, relative Mahalanobis statistics, and normalization"
+            )
+        score = (
+            (entropy - normalization["entropy"]["mean"])
+            / max(float(normalization["entropy"]["std"]), 1e-6)
+            + (proto_dist - normalization["proto_dist"]["mean"])
+            / max(float(normalization["proto_dist"]["std"]), 1e-6)
+            + (mahalanobis - normalization["relative_mahalanobis"]["mean"])
+            / max(float(normalization["relative_mahalanobis"]["std"]), 1e-6)
         )
     elif score_mode == "classwise_mahalanobis":
         if mahalanobis is None:
@@ -5208,6 +5699,99 @@ def calibrate_coverage_threshold(
         "target_known_coverage": target,
         "known_accept_rate": known_acceptance,
     }
+
+
+def score_distribution_overlap(
+    score: np.ndarray,
+    known_mask: np.ndarray,
+    threshold: float | np.ndarray | None = None,
+) -> dict:
+    """Summarize known/unknown open-score overlap without changing decisions.
+
+    Larger open-set scores indicate more unknown-like samples. This diagnostic
+    helps separate genuine distribution separation from a lucky threshold.
+    """
+    score = np.asarray(score, dtype=float)
+    known_mask = np.asarray(known_mask, dtype=bool)
+    if score.ndim != 1 or score.shape != known_mask.shape:
+        raise ValueError("score and known_mask must be matching 1-D arrays")
+    known_scores = score[known_mask]
+    unknown_scores = score[~known_mask]
+
+    def summary(values: np.ndarray) -> dict:
+        if values.size == 0:
+            return {
+                "count": 0,
+                "mean": None,
+                "std": None,
+                "q05": None,
+                "q25": None,
+                "median": None,
+                "q75": None,
+                "q95": None,
+            }
+        return {
+            "count": int(values.size),
+            "mean": float(values.mean()),
+            "std": float(values.std()),
+            "q05": float(np.quantile(values, 0.05)),
+            "q25": float(np.quantile(values, 0.25)),
+            "median": float(np.quantile(values, 0.50)),
+            "q75": float(np.quantile(values, 0.75)),
+            "q95": float(np.quantile(values, 0.95)),
+        }
+
+    result = {"known": summary(known_scores), "unknown": summary(unknown_scores)}
+    if known_scores.size and unknown_scores.size:
+        known_sorted = np.sort(known_scores)
+        unknown_sorted = np.sort(unknown_scores)
+        values = np.sort(np.unique(np.concatenate([known_sorted, unknown_sorted])))
+        known_cdf = np.searchsorted(known_sorted, values, side="right") / known_sorted.size
+        unknown_cdf = np.searchsorted(unknown_sorted, values, side="right") / unknown_sorted.size
+        result.update(
+            {
+                "mean_gap_unknown_minus_known": float(unknown_scores.mean() - known_scores.mean()),
+                "median_gap_unknown_minus_known": float(
+                    np.median(unknown_scores) - np.median(known_scores)
+                ),
+                "ks_distance": float(np.max(np.abs(known_cdf - unknown_cdf))),
+                "overlap_unknown_below_known_q95": float(
+                    np.mean(unknown_scores <= np.quantile(known_scores, 0.95))
+                ),
+                "overlap_known_above_unknown_q05": float(
+                    np.mean(known_scores >= np.quantile(unknown_scores, 0.05))
+                ),
+            }
+        )
+    else:
+        result.update(
+            {
+                "mean_gap_unknown_minus_known": None,
+                "median_gap_unknown_minus_known": None,
+                "ks_distance": None,
+                "overlap_unknown_below_known_q95": None,
+                "overlap_known_above_unknown_q05": None,
+            }
+        )
+    if threshold is not None:
+        threshold_values = np.asarray(threshold)
+        if threshold_values.ndim == 0:
+            known_threshold = np.full_like(known_scores, float(threshold_values), dtype=float)
+            unknown_threshold = np.full_like(unknown_scores, float(threshold_values), dtype=float)
+        else:
+            # Class-conditional thresholds are handled at the caller level; the
+            # per-sample operating metrics are already in open_set_confusion.
+            known_threshold = None
+            unknown_threshold = None
+        if known_threshold is not None:
+            result["threshold"] = float(threshold_values)
+            result["known_above_threshold"] = float(
+                np.mean(known_scores > known_threshold) if known_scores.size else 0.0
+            )
+            result["unknown_above_threshold"] = float(
+                np.mean(unknown_scores > unknown_threshold) if unknown_scores.size else 0.0
+            )
+    return result
 
 
 def calibrate_open_threshold(
@@ -5679,6 +6263,9 @@ def run_discovery(
         # fraction of all known samples that are both accepted and correct.
         "accepted_correct_fraction_of_all_known": float(known_class_correct / max(known_total, 1)),
         "threshold_type": threshold_type,
+        "score_distribution": score_distribution_overlap(
+            score, known_mask, threshold if threshold_values.ndim == 0 else None
+        ),
     }
     result.update(open_confusion)
     if not enable_clustering:
