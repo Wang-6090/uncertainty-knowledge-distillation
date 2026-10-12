@@ -1,0 +1,99 @@
+{
+  "protocol": {
+    "seed": 123,
+    "score_mode": "normalized_entropy_min_class_knn",
+    "mc_samples": 4,
+    "open_val_ratio": 0.1,
+    "calibration_ratio": 0.25,
+    "calibration_vs_open_val_index_overlap": 0,
+    "test_used_for_selection": false,
+    "device": "cuda"
+  },
+  "epochs": {
+    "1": {
+      "open_val": {
+        "auroc": 0.75943,
+        "aupr": 0.9434396609720855,
+        "fpr95": 0.6933333333333334,
+        "known_accuracy": 0.5033333333333333,
+        "known_score_mean": -0.16339147925409633,
+        "unknown_score_mean": 1.6229131645784678,
+        "score_ks": 0.4156666666666667,
+        "unknown_below_known_q95": 0.8225
+      }
+    },
+    "2": {
+      "open_val": {
+        "auroc": 0.7589233333333334,
+        "aupr": 0.9435069861929642,
+        "fpr95": 0.6866666666666666,
+        "known_accuracy": 0.5533333333333333,
+        "known_score_mean": -0.04968281944066474,
+        "unknown_score_mean": 1.762805718001084,
+        "score_ks": 0.4093333333333333,
+        "unknown_below_known_q95": 0.8095
+      }
+    },
+    "3": {
+      "open_val": {
+        "auroc": 0.77945,
+        "aupr": 0.9530531148975769,
+        "fpr95": 0.6633333333333333,
+        "known_accuracy": 0.58,
+        "known_score_mean": -0.2203115686954825,
+        "unknown_score_mean": 1.7510366569267717,
+        "score_ks": 0.43633333333333335,
+        "unknown_below_known_q95": 0.75
+      }
+    },
+    "4": {
+      "open_val": {
+        "auroc": 0.79687,
+        "aupr": 0.9500366879626232,
+        "fpr95": 0.6033333333333334,
+        "known_accuracy": 0.5966666666666667,
+        "known_score_mean": -0.18954756092577385,
+        "unknown_score_mean": 1.9125760352114411,
+        "score_ks": 0.4806666666666667,
+        "unknown_below_known_q95": 0.7855
+      }
+    },
+    "5": {
+      "open_val": {
+        "auroc": 0.7871733333333333,
+        "aupr": 0.9511387728065908,
+        "fpr95": 0.6233333333333333,
+        "known_accuracy": 0.5666666666666667,
+        "known_score_mean": -0.16752255782365413,
+        "unknown_score_mean": 1.8423720538001707,
+        "score_ks": 0.45166666666666666,
+        "unknown_below_known_q95": 0.7705
+      }
+    }
+  },
+  "selection": {
+    "known_accuracy_best_epoch": 4,
+    "open_val_auroc_best_epoch": 4,
+    "known_accuracy_best_open_val": {
+      "auroc": 0.79687,
+      "aupr": 0.9500366879626232,
+      "fpr95": 0.6033333333333334,
+      "known_accuracy": 0.5966666666666667,
+      "known_score_mean": -0.18954756092577385,
+      "unknown_score_mean": 1.9125760352114411,
+      "score_ks": 0.4806666666666667,
+      "unknown_below_known_q95": 0.7855
+    },
+    "open_val_auroc_best_open_val": {
+      "auroc": 0.79687,
+      "aupr": 0.9500366879626232,
+      "fpr95": 0.6033333333333334,
+      "known_accuracy": 0.5966666666666667,
+      "known_score_mean": -0.18954756092577385,
+      "unknown_score_mean": 1.9125760352114411,
+      "score_ks": 0.4806666666666667,
+      "unknown_below_known_q95": 0.7855
+    },
+    "caveat": "Open-validation metrics are used only for this checkpoint-selection audit. Official test summaries are read from the separately run discover reports, not used for selecting the epoch. This exploratory test inspection means the selected epoch needs confirmation on a fresh seed."
+  }
+}

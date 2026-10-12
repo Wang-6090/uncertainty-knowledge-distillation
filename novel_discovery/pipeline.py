@@ -80,6 +80,69 @@ from .utils import AverageMeter
 from .models import freeze_batchnorm_stats
 
 
+def compute_encoder_gradient_diagnostics(losses, encoder_parameters):
+    """Return raw-loss encoder gradient norms and pairwise cosine similarities.
+
+    This is an opt-in audit helper. It deliberately uses ``autograd.grad``
+    without changing parameter gradients, so the normal combined backward pass
+    remains the only update. Zero/constant losses are reported with zero norm.
+    """
+    parameters = [p for p in encoder_parameters if p.requires_grad]
+    vectors = {}
+    diagnostics = {}
+    for name, loss in losses.items():
+        if loss is None or not loss.requires_grad or not parameters:
+            vectors[name] = None
+            diagnostics[f"grad_norm_{name}"] = 0.0
+            continue
+        gradients = torch.autograd.grad(
+            loss,
+            parameters,
+            retain_graph=True,
+            allow_unused=True,
+        )
+        # Keep one flattened block per parameter.  ``autograd.grad`` returns
+        # ``None`` for parameters not used by a particular loss; dropping
+        # those blocks would make vectors from different losses have
+        # different lengths and make their cosine comparison invalid.
+        vector_parts = [
+            (gradient.detach() if gradient is not None else torch.zeros_like(parameter))
+            .reshape(-1)
+            for gradient, parameter in zip(gradients, parameters)
+        ]
+        if not vector_parts:
+            vectors[name] = None
+            diagnostics[f"grad_norm_{name}"] = 0.0
+            continue
+        vector = torch.cat(vector_parts)
+        vectors[name] = vector
+        diagnostics[f"grad_norm_{name}"] = float(vector.norm().item())
+    for left, right in (
+        ("ce", "kd"),
+        ("ce", "supcon"),
+        ("ce", "discovery_uncertainty_pu"),
+        ("kd", "discovery_uncertainty_pu"),
+        ("supcon", "discovery_uncertainty_pu"),
+        ("ce", "discovery_feature_margin"),
+            ("ce", "discovery_uncertainty_feature_margin"),
+    ):
+        left_vector = vectors.get(left)
+        right_vector = vectors.get(right)
+        key = f"grad_cos_{left}_{right}"
+        if left_vector is None or right_vector is None:
+            diagnostics[key] = 0.0
+            continue
+        denominator = left_vector.norm() * right_vector.norm()
+        diagnostics[key] = float(
+            torch.where(
+                denominator > 0,
+                torch.dot(left_vector, right_vector) / denominator.clamp_min(1e-12),
+                denominator.new_tensor(0.0),
+            ).item()
+        )
+    return diagnostics
+
+
 def power_novelty_weights(weights: torch.Tensor, power: float = 1.0) -> torch.Tensor:
     """Sharpen bounded soft-novelty weights without changing their ordering."""
     power = float(power)
@@ -942,7 +1005,7 @@ def train_one_epoch_teacher(
         proxy_anchor_meter.update(loss_proxy_anchor.item(), images.size(0))
         hard_proxy_margin_meter.update(loss_hard_proxy_margin.item(), images.size(0))
         reciprocal_meter.update(loss_reciprocal.item(), images.size(0))
-    return {
+    stats = {
         "ce": ce_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,
@@ -962,6 +1025,7 @@ def train_one_epoch_teacher(
         "hard_proxy_margin": hard_proxy_margin_meter.avg,
         "reciprocal": reciprocal_meter.avg,
     }
+    return stats
 
 
 @torch.no_grad()
@@ -1049,6 +1113,7 @@ def train_one_epoch_student(
     uncertainty_weight_mode: str = "raw",
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
+    audit_loss_gradients: bool = False,
     discovery_loader=None,
     alpha_discovery: float = 0.0,
     alpha_discovery_unknown: float = 0.0,
@@ -1094,6 +1159,8 @@ def train_one_epoch_student(
     discovery_knn_k: int = 5,
     discovery_knn_margin: float = 0.02,
     discovery_knn_soft_weighting: bool = False,
+    discovery_knn_aggregation: str = "max",
+    discovery_knn_temperature: float = 0.1,
     alpha_discovery_uncertainty_separation: float = 0.0,
     discovery_uncertainty_loss: str = "bce",
     discovery_uncertainty_margin: float = 0.1,
@@ -1162,6 +1229,7 @@ def train_one_epoch_student(
     joint_mixed_residual: bool = False,
     joint_residual_temperature: float = 1.0,
     joint_residual_floor: float = 0.0,
+    joint_residual_view_agreement: bool = False,
     joint_novel_mass: bool = False,
     joint_novel_weight_floor: float = 0.0,
     joint_novel_neighbor_support: bool = False,
@@ -1181,6 +1249,7 @@ def train_one_epoch_student(
     joint_pseudo_target_model=None,
     joint_pseudo_target_novel_head=None,
     joint_pseudo_target_decay: float = 0.99,
+    joint_known_class_prior: float | None = None,
     alpha_joint_novel_margin: float = 0.0,
     joint_novel_margin: float = 0.2,
     joint_candidate_gating: bool = False,
@@ -1302,6 +1371,9 @@ def train_one_epoch_student(
     outlier_feature_margin_meter = AverageMeter()
     outlier_rejection_feature_margin_meter = AverageMeter()
     outlier_rejection_uniform_meter = AverageMeter()
+    gradient_audit_sums = {}
+    gradient_audit_batches = 0
+    encoder_parameters = list(student.encoder.parameters()) if audit_loss_gradients else []
     discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     if joint_memory_bank is None:
         joint_memory_bank = {}
@@ -2005,9 +2077,20 @@ def train_one_epoch_student(
                     if joint_sample_weights is not None:
                         joint_sample_weights = joint_sample_weights[joint_mask]
                     if joint_mixed_residual:
+                        first_residual_masked = first_residual[joint_mask]
+                        second_residual_masked = second_residual[joint_mask]
                         residual_weights = 0.5 * (
-                            first_residual[joint_mask] + second_residual[joint_mask]
+                            first_residual_masked + second_residual_masked
                         )
+                        if joint_residual_view_agreement:
+                            residual_agreement = 1.0 - (
+                                first_residual_masked - second_residual_masked
+                            ).abs()
+                            residual_weights = bounded_novel_mass_weights(
+                                residual_weights,
+                                residual_agreement,
+                                floor=joint_residual_floor,
+                            )
                     if joint_novel_mass:
                         novel_mass_weights_value = 0.5 * (
                             first_novel_mass[joint_mask] + second_novel_mass[joint_mask]
@@ -2027,6 +2110,15 @@ def train_one_epoch_student(
                     second_known_logits = second_out["logits"]
                     if joint_mixed_residual:
                         residual_weights = 0.5 * (first_residual + second_residual)
+                        if joint_residual_view_agreement:
+                            residual_agreement = 1.0 - (
+                                first_residual - second_residual
+                            ).abs()
+                            residual_weights = bounded_novel_mass_weights(
+                                residual_weights,
+                                residual_agreement,
+                                floor=joint_residual_floor,
+                            )
                     if joint_novel_mass:
                         novel_mass_weights_value = 0.5 * (
                             first_novel_mass + second_novel_mass
@@ -2171,6 +2263,7 @@ def train_one_epoch_student(
                         if second_target_joint_logits is not None and joint_mask is not None
                         else second_target_joint_logits
                     ),
+                    known_class_prior=joint_known_class_prior,
                 )
                 loss_joint_discovery = joint_losses["total"]
                 joint_consistency = joint_losses["consistency"]
@@ -2716,6 +2809,8 @@ def train_one_epoch_student(
                         k=discovery_knn_k,
                         margin=discovery_knn_margin,
                         sample_weights=first_knn_weights,
+                        aggregation=discovery_knn_aggregation,
+                        temperature=discovery_knn_temperature,
                     )
                     + knn_support_boundary_loss(
                         second_knn_values,
@@ -2724,6 +2819,8 @@ def train_one_epoch_student(
                         k=discovery_knn_k,
                         margin=discovery_knn_margin,
                         sample_weights=second_knn_weights,
+                        aggregation=discovery_knn_aggregation,
+                        temperature=discovery_knn_temperature,
                     )
                 )
             if alpha_discovery_uncertainty_separation > 0.0:
@@ -3004,6 +3101,24 @@ def train_one_epoch_student(
             * loss_outlier_rejection_feature_margin
             + alpha_outlier_rejection_uniform * loss_outlier_rejection_uniform
         )
+        if audit_loss_gradients:
+            gradient_diagnostics = compute_encoder_gradient_diagnostics(
+                {
+                    "ce": loss_ce,
+                    "kd": loss_kd,
+                    "supcon": loss_supcon,
+                    "unc": loss_unc,
+                    "discovery_uncertainty_pu": loss_discovery_uncertainty_pu,
+                    "discovery_feature_margin": loss_discovery_feature_margin,
+                    "discovery_uncertainty_feature_margin": (
+                        loss_discovery_uncertainty_feature_margin
+                    ),
+                },
+                encoder_parameters,
+            )
+            gradient_audit_batches += 1
+            for name, value in gradient_diagnostics.items():
+                gradient_audit_sums[name] = gradient_audit_sums.get(name, 0.0) + value
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -3219,7 +3334,7 @@ def train_one_epoch_student(
         outlier_rejection_uniform_meter.update(
             loss_outlier_rejection_uniform.item(), images.size(0)
         )
-    return {
+    stats = {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
         "feat_kd": feat_kd_meter.avg,
@@ -3314,6 +3429,11 @@ def train_one_epoch_student(
         "outlier_rejection_feature_margin": outlier_rejection_feature_margin_meter.avg,
         "outlier_rejection_uniform": outlier_rejection_uniform_meter.avg,
     }
+    if audit_loss_gradients:
+        stats["gradient_audit_batches"] = gradient_audit_batches
+        for name, total in gradient_audit_sums.items():
+            stats[f"gradient_audit_{name}"] = total / max(gradient_audit_batches, 1)
+    return stats
 
 
 @torch.no_grad()
@@ -5005,6 +5125,7 @@ def compute_open_score(
     gaussian_stats: Dict[str, np.ndarray] | None = None,
     fusion_base_score: str = "normalized_entropy_min_class_knn",
     fusion_rejector_weight: float = 0.5,
+    uncertainty_score_weight: float = 0.5,
 ):
     entropy = outputs["entropy"]
     epistemic = outputs["epistemic"]
@@ -5278,9 +5399,9 @@ def compute_open_score(
             np.asarray(outputs["head_uncertainty"], dtype=float)
             - uncertainty_stats["mean"]
         ) / max(float(uncertainty_stats["std"]), 1e-6)
-        # Keep uncertainty as a correction instead of letting a noisy head
-        # overwhelm the two independently useful geometry signals.
-        score = entropy_z + distance_z + 0.5 * uncertainty_z
+        # Keep uncertainty as a configurable correction instead of letting a
+        # noisy head overwhelm the two independently useful geometry signals.
+        score = entropy_z + distance_z + float(uncertainty_score_weight) * uncertainty_z
     elif score_mode == "normalized_entropy_knn_conflict":
         if "knn_predicted_class_support" not in outputs or normalization is None:
             raise ValueError(
@@ -6171,6 +6292,7 @@ def run_discovery(
     gaussian_stats: Dict[str, np.ndarray] | None = None,
     fusion_base_score: str = "normalized_entropy_min_class_knn",
     fusion_rejector_weight: float = 0.5,
+    uncertainty_score_weight: float = 0.5,
     cluster_k: int | str = "oracle",
     cluster_method: str = "kmeans",
     cluster_feature: str = "projection",
@@ -6196,6 +6318,7 @@ def run_discovery(
         gaussian_stats=gaussian_stats,
         fusion_base_score=fusion_base_score,
         fusion_rejector_weight=fusion_rejector_weight,
+        uncertainty_score_weight=uncertainty_score_weight,
     )
     proto_dist = np.zeros_like(score) if proto_dist is None else proto_dist
     mahalanobis_score_modes = {

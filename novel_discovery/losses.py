@@ -403,7 +403,11 @@ def unknown_feature_margin_loss(
     per_sample = F.relu(nearest_similarity - float(similarity_margin))
     if sample_weight is None:
         return per_sample.mean()
-    weight = sample_weight.reshape(-1).to(per_sample).clamp_min(0.0)
+    # A sample weight controls which examples influence the objective; it is
+    # not itself a prediction target. Detaching here prevents the model from
+    # reducing the margin loss by learning to suppress the weights of hard
+    # samples.
+    weight = sample_weight.reshape(-1).to(per_sample).clamp_min(0.0).detach()
     if weight.numel() != per_sample.numel():
         raise ValueError("sample_weight must match the feature batch size.")
     denominator = weight.sum()
@@ -676,6 +680,8 @@ def knn_support_boundary_loss(
     k: int = 5,
     margin: float = 0.02,
     sample_weights: torch.Tensor | None = None,
+    aggregation: str = "max",
+    temperature: float = 0.1,
 ) -> torch.Tensor:
     """Push pure-unknown features outside known class-conditional kNN support.
 
@@ -690,6 +696,10 @@ def knn_support_boundary_loss(
         raise ValueError("support_radii must contain one radius per class bank")
     if int(k) <= 0 or float(margin) < 0.0:
         raise ValueError("k must be positive and margin non-negative")
+    if aggregation not in {"max", "smoothmax"}:
+        raise ValueError("aggregation must be 'max' or 'smoothmax'")
+    if float(temperature) <= 0.0:
+        raise ValueError("temperature must be positive")
 
     unknown = F.normalize(unknown_features, dim=-1)
     radii = support_radii.detach().to(device=unknown.device, dtype=unknown.dtype)
@@ -710,7 +720,21 @@ def knn_support_boundary_loss(
     # A sample is penalized when it remains inside at least one known class
     # support region. Optional weights let reliable candidates contribute more
     # without changing the default hard-gated behavior.
-    violations = torch.stack(class_violations, dim=1).max(dim=1).values
+    class_scores = torch.stack(class_violations, dim=1)
+    if aggregation == "max":
+        violations = class_scores.max(dim=1).values
+    else:
+        # A smooth maximum gives nearby class supports a non-zero gradient,
+        # instead of routing every update through only the single most
+        # violating class.  Subtract log(C) to keep the scale comparable as
+        # the number of observed classes changes, then retain the boundary's
+        # non-negative penalty semantics.
+        tau = float(temperature)
+        violations = tau * (
+            torch.logsumexp(class_scores / tau, dim=1)
+            - torch.log(class_scores.new_tensor(float(class_scores.size(1))))
+        )
+        violations = violations.clamp_min(0.0)
     if sample_weights is None:
         return violations.mean()
     weights = sample_weights.to(device=violations.device, dtype=violations.dtype).flatten()

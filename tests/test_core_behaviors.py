@@ -109,6 +109,7 @@ from novel_discovery.pipeline import (
     cross_view_min_uncertainty,
     uncertainty_pu_predictions,
     score_distribution_overlap,
+    compute_encoder_gradient_diagnostics,
 )
 from train import (
     build_encoder_optimizer_groups,
@@ -119,6 +120,7 @@ from train import (
     save_checkpoint,
     save_command_config,
     validate_rejector_configuration,
+    discovery_training_requirements,
 )
 from novel_discovery.models import build_model, freeze_batchnorm_stats
 
@@ -137,6 +139,59 @@ class ClasswiseThresholdAuditTest(unittest.TestCase):
     def test_class_threshold_clips_out_of_range_prediction(self):
         actual = _threshold_by_sample(np.array([1.0, 2.0]), np.array([-1, 4]), 2)
         np.testing.assert_array_equal(actual, np.array([1.0, 2.0]))
+
+
+class EncoderGradientDiagnosticsTest(unittest.TestCase):
+    def test_reports_norms_and_cosines_without_changing_gradients(self):
+        first = torch.tensor([1.0, 2.0], requires_grad=True)
+        second = torch.tensor([2.0, -1.0], requires_grad=True)
+        losses = {
+            "ce": (first ** 2).sum(),
+            "kd": (first * second).sum(),
+            "supcon": (second ** 2).sum(),
+        }
+        diagnostics = compute_encoder_gradient_diagnostics(
+            losses, [first, second]
+        )
+
+        self.assertAlmostEqual(
+            diagnostics["grad_norm_ce"], 2.0 * math.sqrt(5.0), places=6
+        )
+        self.assertAlmostEqual(
+            diagnostics["grad_norm_kd"], math.sqrt(10.0), places=6
+        )
+        self.assertAlmostEqual(
+            diagnostics["grad_norm_supcon"], 2.0 * math.sqrt(5.0), places=6
+        )
+        self.assertIn("grad_cos_ce_kd", diagnostics)
+        self.assertIn("grad_cos_ce_supcon", diagnostics)
+        self.assertIn("grad_cos_ce_discovery_uncertainty_feature_margin", diagnostics)
+        self.assertIsNone(first.grad)
+        self.assertIsNone(second.grad)
+
+    def test_unconnected_and_zero_losses_are_reported_as_zero(self):
+        feature = torch.tensor([1.0, -2.0], requires_grad=True)
+        unrelated = torch.tensor(3.0, requires_grad=True)
+        diagnostics = compute_encoder_gradient_diagnostics(
+            {
+                "ce": (feature ** 2).sum(),
+                "kd": unrelated,
+                "supcon": torch.zeros((), requires_grad=True),
+            },
+            [feature],
+        )
+
+        self.assertGreater(diagnostics["grad_norm_ce"], 0.0)
+        self.assertEqual(diagnostics["grad_norm_kd"], 0.0)
+        self.assertEqual(diagnostics["grad_norm_supcon"], 0.0)
+        self.assertEqual(diagnostics["grad_cos_ce_kd"], 0.0)
+        self.assertEqual(diagnostics["grad_cos_ce_supcon"], 0.0)
+
+    def test_empty_parameter_list_returns_zero_diagnostics(self):
+        loss = torch.tensor(1.0, requires_grad=True)
+        diagnostics = compute_encoder_gradient_diagnostics({"ce": loss}, [])
+        self.assertEqual(diagnostics["grad_norm_ce"], 0.0)
+        self.assertEqual(diagnostics["grad_cos_ce_kd"], 0.0)
 
 
 class ErrorNeighborhoodAuditTest(unittest.TestCase):
@@ -162,6 +217,76 @@ class ErrorNeighborhoodAuditTest(unittest.TestCase):
 
 
 class CommandLineTest(unittest.TestCase):
+    def test_energy_pu_requires_discovery_pool_and_mixed_pu_protocol(self):
+        args = parse_args([
+            "train_student", "--alpha-discovery-energy-pu", "0.1",
+            "--discovery-pool",
+        ])
+        needs_discovery, needs_mixed_pu = discovery_training_requirements(args)
+        self.assertTrue(needs_discovery)
+        self.assertTrue(needs_mixed_pu)
+
+        args.discovery_pool = False
+        needs_discovery, needs_mixed_pu = discovery_training_requirements(args)
+        self.assertTrue(needs_discovery)
+        self.assertTrue(needs_mixed_pu)
+
+    def test_disabled_energy_pu_does_not_require_discovery_pool(self):
+        args = parse_args(["train_student"])
+        needs_discovery, needs_mixed_pu = discovery_training_requirements(args)
+        self.assertFalse(needs_discovery)
+        self.assertFalse(needs_mixed_pu)
+
+    def test_every_discovery_objective_requests_discovery_batches(self):
+        objectives = [
+            ["--alpha-discovery", "0.1"],
+            ["--alpha-discovery-feature-consistency", "0.1"],
+            ["--alpha-discovery-projection-consistency", "0.1"],
+            ["--alpha-discovery-unknown", "0.1"],
+            ["--alpha-discovery-energy", "0.1"],
+            ["--alpha-discovery-energy-pu", "0.1"],
+            ["--alpha-discovery-uniform", "0.1"],
+            ["--alpha-discovery-feature-margin", "0.1"],
+            ["--alpha-discovery-rejection-feature-margin", "0.1"],
+            ["--alpha-discovery-rejection-feature-separation", "0.1"],
+            ["--alpha-discovery-uncertainty-feature-margin", "0.1"],
+            ["--alpha-discovery-objectosphere", "0.1"],
+            ["--alpha-discovery-feature-separation", "0.1"],
+            ["--alpha-discovery-boundary", "0.1"],
+            ["--alpha-discovery-knn-boundary", "0.1"],
+            ["--alpha-discovery-uncertainty-separation", "0.1"],
+            ["--alpha-discovery-uncertainty-pu", "0.1"],
+            ["--alpha-discovery-rejection-pu-feature-margin", "0.1"],
+            ["--alpha-discovery-selective-unknown", "0.1"],
+            ["--alpha-discovery-selective-energy", "0.1"],
+            ["--alpha-discovery-known-consistency", "0.1"],
+            ["--alpha-reciprocal", "0.1", "--reciprocal-points", "2"],
+            ["--joint-discovery"],
+        ]
+        for objective in objectives:
+            with self.subTest(objective=objective):
+                args = parse_args(["train_student", *objective])
+                needs_discovery, _ = discovery_training_requirements(args)
+                self.assertTrue(needs_discovery)
+
+    def test_pu_estimators_require_mixed_pool_protocol(self):
+        pu_objectives = [
+            ["--alpha-discovery-uncertainty-pu", "0.1"],
+            ["--alpha-discovery-energy-pu", "0.1"],
+            ["--alpha-discovery-rejection-pu-feature-margin", "0.1"],
+            ["--alpha-discovery-boundary", "0.1", "--discovery-boundary-mode", "pu"],
+            [
+                "--alpha-discovery-uncertainty-feature-margin", "0.1",
+                "--discovery-uncertainty-feature-margin-mode", "pu_corrected",
+            ],
+        ]
+        for objective in pu_objectives:
+            with self.subTest(objective=objective):
+                args = parse_args(["train_student", *objective])
+                needs_discovery, needs_mixed_pu = discovery_training_requirements(args)
+                self.assertTrue(needs_discovery)
+                self.assertTrue(needs_mixed_pu)
+
     def test_encoder_layerwise_lr_decay_preserves_default_and_orders_stages(self):
         model = build_model(3, backbone="resnet18", pretrained=False)
         base_lr = 0.01
@@ -570,6 +695,29 @@ class CommandLineTest(unittest.TestCase):
         self.assertGreater(float(loss), 0.0)
         loss.backward()
         self.assertIsNotNone(features.grad)
+
+    def test_knn_support_boundary_smoothmax_is_finite_and_not_default(self):
+        bank = [
+            torch.tensor([[1.0, 0.0], [0.98, 0.2]]),
+            torch.tensor([[0.0, 1.0], [0.2, 0.98]]),
+        ]
+        radii = torch.tensor([0.1, 0.1])
+        query = torch.tensor([[0.95, 0.25]], requires_grad=True)
+        hard = knn_support_boundary_loss(query, bank, radii, k=1, margin=0.05)
+        smooth = knn_support_boundary_loss(
+            query,
+            bank,
+            radii,
+            k=1,
+            margin=0.05,
+            aggregation="smoothmax",
+            temperature=0.1,
+        )
+        self.assertTrue(torch.isfinite(smooth))
+        self.assertGreaterEqual(float(smooth), 0.0)
+        self.assertNotAlmostEqual(float(hard), float(smooth), places=7)
+        smooth.backward()
+        self.assertIsNotNone(query.grad)
 
     def test_classwise_knn_support_bank_uses_known_labels_and_restores_mode(self):
         class IdentityFeatureModel(torch.nn.Module):
@@ -1703,6 +1851,20 @@ class UncertaintyKDTargetTest(unittest.TestCase):
         far_loss = unknown_feature_margin_loss(far_features, prototypes, similarity_margin=0.2)
         self.assertAlmostEqual(far_loss.item(), 0.0, places=6)
 
+    def test_unknown_feature_margin_detaches_selection_weights(self):
+        features = torch.tensor([[1.0, 0.1]], requires_grad=True)
+        prototypes = torch.tensor([[1.0, 0.0]])
+        sample_weight = torch.tensor([0.7], requires_grad=True)
+        loss = unknown_feature_margin_loss(
+            features,
+            prototypes,
+            similarity_margin=0.2,
+            sample_weight=sample_weight,
+        )
+        loss.backward()
+        self.assertIsNotNone(features.grad)
+        self.assertIsNone(sample_weight.grad)
+
     def test_pu_unknown_feature_margin_corrects_known_contamination(self):
         known = torch.tensor([[1.0, 0.0], [1.0, 0.0]], requires_grad=True)
         mixed = torch.tensor([[1.0, 0.0], [-1.0, 0.0]], requires_grad=True)
@@ -2648,6 +2810,48 @@ class ScoreBehaviorTest(unittest.TestCase):
         )
         self.assertTrue(np.isfinite(score).all())
 
+    def test_uncertainty_score_weight_is_zero_identity_and_linear(self):
+        outputs = {
+            "features": np.zeros((4, 2), dtype=np.float32),
+            "entropy": np.array([0.1, 0.3, 0.6, 0.9], dtype=np.float32),
+            "head_uncertainty": np.array([0.8, 0.2, 0.5, 0.1], dtype=np.float32),
+            "epistemic": np.zeros(4),
+            "aleatoric": np.zeros(4),
+            "knn_min_class_distance": np.array([1.0, 1.5, 2.0, 4.0]),
+        }
+        stats = fit_score_normalization(outputs, prototypes=None, gaussian_stats=None)
+        base, _ = compute_open_score(
+            outputs,
+            score_mode="normalized_entropy_min_class_knn",
+            normalization=stats,
+        )
+        zero, _ = compute_open_score(
+            outputs,
+            score_mode="normalized_entropy_uncertainty_min_class_knn",
+            normalization=stats,
+            uncertainty_score_weight=0.0,
+        )
+        quarter, _ = compute_open_score(
+            outputs,
+            score_mode="normalized_entropy_uncertainty_min_class_knn",
+            normalization=stats,
+            uncertainty_score_weight=0.25,
+        )
+        three_quarters, _ = compute_open_score(
+            outputs,
+            score_mode="normalized_entropy_uncertainty_min_class_knn",
+            normalization=stats,
+            uncertainty_score_weight=0.75,
+        )
+        uncertainty_z = (
+            outputs["head_uncertainty"] - stats["head_uncertainty"]["mean"]
+        ) / stats["head_uncertainty"]["std"]
+        np.testing.assert_allclose(zero, base, atol=1e-6)
+        np.testing.assert_allclose(quarter - base, 0.25 * uncertainty_z, atol=1e-6)
+        np.testing.assert_allclose(
+            three_quarters - base, 0.75 * uncertainty_z, atol=1e-6
+        )
+
     def test_classwise_predicted_knn_normalization_uses_known_validation_classes(self):
         outputs = {
             "features": np.zeros((4, 2), dtype=np.float32),
@@ -3040,7 +3244,11 @@ class PrototypeRefreshTest(unittest.TestCase):
         generator = torch.Generator().manual_seed(7)
         features = torch.randn(12, 2, generator=generator)
         loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(features, torch.zeros(12, dtype=torch.long)),
+            torch.utils.data.TensorDataset(
+                features,
+                torch.zeros(12, dtype=torch.long),
+                torch.arange(12, dtype=torch.long),
+            ),
             batch_size=4,
         )
         head = DummyHead()
