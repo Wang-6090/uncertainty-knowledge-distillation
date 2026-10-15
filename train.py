@@ -111,9 +111,11 @@ def discovery_training_requirements(args):
         or args.alpha_discovery_feature_separation > 0.0
         or args.alpha_discovery_boundary > 0.0
         or args.alpha_discovery_knn_boundary > 0.0
+        or args.alpha_discovery_rejection_knn_boundary > 0.0
         or args.alpha_discovery_uncertainty_separation > 0.0
         or args.alpha_discovery_uncertainty_pu > 0.0
         or args.alpha_discovery_rejection_pu_feature_margin > 0.0
+        or args.alpha_discovery_rejection_boundary > 0.0
         or (
             args.alpha_discovery_uncertainty_feature_margin > 0.0
             and args.discovery_uncertainty_feature_margin_mode == "pu_corrected"
@@ -128,6 +130,7 @@ def discovery_training_requirements(args):
         args.alpha_discovery_uncertainty_pu > 0.0
         or args.alpha_discovery_energy_pu > 0.0
         or args.alpha_discovery_rejection_pu_feature_margin > 0.0
+        or args.alpha_discovery_rejection_boundary > 0.0
         or (
             args.alpha_discovery_boundary > 0.0
             and args.discovery_boundary_mode == "pu"
@@ -433,6 +436,27 @@ def parse_args(argv=None):
         help="Known-class CE weight for the optional rejection branch.",
     )
     p.add_argument(
+        "--rejection-known-ce-decay-start-epoch",
+        type=int,
+        default=0,
+        help=(
+            "One-based epoch at which rejection known CE starts decaying; "
+            "0 keeps the coefficient static."
+        ),
+    )
+    p.add_argument(
+        "--rejection-known-ce-decay-epochs",
+        type=int,
+        default=0,
+        help="Number of epochs over which rejection known CE decays.",
+    )
+    p.add_argument(
+        "--rejection-known-ce-final-scale",
+        type=float,
+        default=1.0,
+        help="Final multiplier for rejection known CE after its optional decay.",
+    )
+    p.add_argument(
         "--alpha-rejection-supcon",
         type=float,
         default=0.0,
@@ -584,6 +608,27 @@ def parse_args(argv=None):
         help="Known-class CE weight for the optional rejection branch.",
     )
     p.add_argument(
+        "--rejection-known-ce-decay-start-epoch",
+        type=int,
+        default=0,
+        help=(
+            "One-based epoch at which rejection known CE starts decaying; "
+            "0 keeps the coefficient static."
+        ),
+    )
+    p.add_argument(
+        "--rejection-known-ce-decay-epochs",
+        type=int,
+        default=0,
+        help="Number of epochs over which rejection known CE decays.",
+    )
+    p.add_argument(
+        "--rejection-known-ce-final-scale",
+        type=float,
+        default=1.0,
+        help="Final multiplier for rejection known CE after its optional decay.",
+    )
+    p.add_argument(
         "--alpha-rejection-supcon",
         type=float,
         default=0.0,
@@ -639,6 +684,43 @@ def parse_args(argv=None):
         type=float,
         default=0.05,
         help="Temperature of the soft_nnpu surrogate; must be positive.",
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-boundary",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight a PU-corrected class-conditional boundary loss on the "
+            "independent rejection representation; requires a mixed pool, "
+            "--rejection-feature-dim > 0, and --discovery-boundary-mode pu."
+        ),
+    )
+    p.add_argument(
+        "--discovery-rejection-boundary-warmup-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Disable the rejection-boundary loss for the first N student "
+            "epochs while the rejection representation stabilizes."
+        ),
+    )
+    p.add_argument(
+        "--discovery-rejection-boundary-ramp-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Linearly ramp the rejection-boundary loss after warm-up; 0 "
+            "applies the full weight immediately."
+        ),
+    )
+    p.add_argument(
+        "--discovery-rejection-boundary-stop-epoch",
+        type=int,
+        default=0,
+        help=(
+            "Disable the rejection-boundary loss after this 1-based student "
+            "epoch; 0 keeps it active for all epochs."
+        ),
     )
     p.add_argument("--kd-mode", choices=["standard", "uncertainty"], default="uncertainty")
     p.add_argument("--alpha-supcon", type=float, default=0.1)
@@ -974,6 +1056,17 @@ def parse_args(argv=None):
         ),
     )
     p.add_argument(
+        "--discovery-feature-candidate-space",
+        choices=["shared", "rejection_support"],
+        default="shared",
+        help=(
+            "Representation used by mixed-pool feature candidate gating. "
+            "'shared' preserves the classifier/uncertainty gate; "
+            "'rejection_support' selects by distance outside the known "
+            "class-conditional rejection support bank."
+        ),
+    )
+    p.add_argument(
         "--alpha-discovery-boundary",
         type=float,
         default=0.0,
@@ -1020,6 +1113,16 @@ def parse_args(argv=None):
         type=float,
         default=0.0,
         help="Weight a class-conditional kNN support-boundary loss for a pure-unknown discovery pool.",
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-knn-boundary",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight a class-conditional kNN support-boundary loss in the "
+            "independent rejection representation; requires a rejection "
+            "feature dimension and uses only known training support."
+        ),
     )
     p.add_argument(
         "--discovery-knn-k",
@@ -1874,7 +1977,15 @@ def parse_args(argv=None):
     )
     p.add_argument("--knn-ood", action="store_true", help="Enable KNN distance OOD scoring from known training projections.")
     p.add_argument("--knn-k", type=int, default=10, help="Number of known training neighbors for KNN-OOD.")
-    p.add_argument("--knn-feature", choices=["features", "proj"], default="features", help="Embedding used by KNN-OOD: backbone feature or projection head.")
+    p.add_argument(
+        "--knn-feature",
+        choices=["features", "rejection_features", "proj"],
+        default="features",
+        help=(
+            "Embedding used by KNN-OOD: shared backbone feature, independent "
+            "rejection feature, or projection head."
+        ),
+    )
     p.add_argument("--knn-bank-size", type=int, default=0, help="Optional maximum known training vectors in the KNN bank; 0 uses all.")
     p.add_argument("--knn-support-quantile", type=float, default=0.95, help="Known-training leave-one-out quantile used for classwise kNN support radii.")
     p.add_argument("--vim-ood", action="store_true", help="Enable VIM-style principal-subspace residual scoring.")
@@ -2097,16 +2208,57 @@ def build_encoder_optimizer_groups(encoder, base_lr: float, layer_decay: float =
     ]
 
 
-def scheduled_weight(epoch: int, warmup_epochs: int = 0, ramp_epochs: int = 0) -> float:
-    """Return a loss multiplier using epoch-indexed warmup and linear ramp."""
+def scheduled_weight(
+    epoch: int,
+    warmup_epochs: int = 0,
+    ramp_epochs: int = 0,
+    stop_epoch: int = 0,
+) -> float:
+    """Return an epoch-indexed warmup/ramp multiplier with optional stopping.
+
+    ``epoch`` is zero-based internally, while ``stop_epoch`` is deliberately
+    one-based to match the epoch numbers printed in training logs.  A zero
+    stop value preserves the historical behavior and never disables the loss.
+    """
     warmup_epochs = max(int(warmup_epochs), 0)
     ramp_epochs = max(int(ramp_epochs), 0)
     epoch_number = int(epoch) + 1
+    stop_epoch = max(int(stop_epoch), 0)
+    if stop_epoch > 0 and epoch_number > stop_epoch:
+        return 0.0
     if epoch_number <= warmup_epochs:
         return 0.0
     if ramp_epochs <= 0:
         return 1.0
     return min(1.0, max(0.0, (epoch_number - warmup_epochs) / ramp_epochs))
+
+
+def scheduled_decay_scale(
+    epoch: int,
+    start_epoch: int = 0,
+    decay_epochs: int = 0,
+    final_scale: float = 1.0,
+) -> float:
+    """Keep scale 1, then linearly decay it to ``final_scale``.
+
+    Epochs are zero-based internally and ``start_epoch`` is one-based for
+    command-line readability.  A zero start or zero decay preserves a static
+    scale.  The default therefore has no effect on historical training.
+    """
+    start_epoch = max(int(start_epoch), 0)
+    decay_epochs = max(int(decay_epochs), 0)
+    final_scale = float(final_scale)
+    if not 0.0 <= final_scale <= 1.0:
+        raise ValueError("final_scale must be in [0, 1]")
+    if start_epoch <= 0:
+        return 1.0
+    epoch_number = int(epoch) + 1
+    if epoch_number < start_epoch:
+        return 1.0
+    if decay_epochs <= 0:
+        return final_scale
+    progress = min(1.0, max(0.0, (epoch_number - start_epoch + 1) / decay_epochs))
+    return 1.0 + (final_scale - 1.0) * progress
 
 
 def evaluate_open_checkpoint_selection(
@@ -2501,6 +2653,22 @@ def fit_student(args):
                 "EMA feature-margin weight sources require "
                 "--discovery-selection-model ema or teacher"
             )
+    if args.discovery_feature_candidate_space == "rejection_support":
+        if not args.discovery_feature_candidate_gating:
+            raise ValueError(
+                "--discovery-feature-candidate-space=rejection_support requires "
+                "--discovery-feature-candidate-gating"
+            )
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "rejection-support candidate gating requires "
+                "--discovery-pool-mode mixed"
+            )
+        if args.rejection_feature_dim <= 0:
+            raise ValueError(
+                "rejection-support candidate gating requires "
+                "--rejection-feature-dim > 0"
+            )
     if args.joint_mixed_known_consistency or args.alpha_joint_known_consistency > 0.0:
         if (
             not args.joint_discovery
@@ -2680,6 +2848,22 @@ def fit_student(args):
                 "Cannot infer the mixed-pool known prior; provide an explicit "
                 "--discovery-uncertainty-known-prior value."
             )
+    if args.alpha_discovery_rejection_boundary > 0.0:
+        if args.rejection_feature_dim <= 0:
+            raise ValueError(
+                "--alpha-discovery-rejection-boundary requires "
+                "--rejection-feature-dim > 0"
+            )
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "--alpha-discovery-rejection-boundary requires "
+                "--discovery-pool-mode mixed"
+            )
+        if args.discovery_boundary_mode != "pu":
+            raise ValueError(
+                "--alpha-discovery-rejection-boundary requires "
+                "--discovery-boundary-mode pu"
+            )
     resolved_discovery_uncertainty_known_prior = None
     if uses_mixed_pu:
         measured_prior = known_proportion(bundle.discovery_pool)
@@ -2716,6 +2900,10 @@ def fit_student(args):
             )
             or (
                 args.alpha_discovery_knn_boundary > 0.0
+                and not args.discovery_feature_candidate_gating
+            )
+            or (
+                args.alpha_discovery_rejection_knn_boundary > 0.0
                 and not args.discovery_feature_candidate_gating
             )
             or args.alpha_discovery_uncertainty_separation > 0.0
@@ -2773,6 +2961,11 @@ def fit_student(args):
     knn_support_loader = None
     needs_known_support_bank = (
         args.alpha_discovery_knn_boundary > 0.0
+        or args.alpha_discovery_rejection_knn_boundary > 0.0
+        or (
+            args.discovery_feature_candidate_gating
+            and args.discovery_feature_candidate_space == "rejection_support"
+        )
         or (
             args.alpha_discovery_known_consistency > 0.0
             and args.discovery_known_consistency_gate != "confidence"
@@ -2790,6 +2983,14 @@ def fit_student(args):
             raise ValueError("--discovery-knn-quantile must be in [0.5, 1.0)")
         if args.discovery_knn_margin < 0.0:
             raise ValueError("--discovery-knn-margin must be non-negative")
+        if (
+            args.alpha_discovery_rejection_knn_boundary > 0.0
+            and args.rejection_feature_dim <= 0
+        ):
+            raise ValueError(
+                "--alpha-discovery-rejection-knn-boundary requires "
+                "--rejection-feature-dim > 0"
+            )
         deterministic_known_train = clone_dataset_with_eval_transform(
             bundle.train, args.image_size, args.transform_profile
         )
@@ -2857,6 +3058,12 @@ def fit_student(args):
         raise ValueError("--encoder-lr-scale must be non-negative")
     if not 0.0 < args.encoder_lr_decay <= 1.0:
         raise ValueError("--encoder-lr-decay must be in (0, 1]")
+    if args.rejection_known_ce_decay_start_epoch < 0:
+        raise ValueError("--rejection-known-ce-decay-start-epoch must be non-negative")
+    if args.rejection_known_ce_decay_epochs < 0:
+        raise ValueError("--rejection-known-ce-decay-epochs must be non-negative")
+    if not 0.0 <= args.rejection_known_ce_final_scale <= 1.0:
+        raise ValueError("--rejection-known-ce-final-scale must be in [0, 1]")
     encoder_parameters = list(student.encoder.parameters())
     encoder_parameter_ids = {id(parameter) for parameter in encoder_parameters}
     head_parameters = [
@@ -2953,6 +3160,7 @@ def fit_student(args):
             ramp_epochs=args.discovery_knn_ramp_epochs,
         )
         discovery_knn_support = None
+        rejection_knn_support = None
         support_pu_active = (
             args.alpha_discovery_uncertainty_pu > 0.0
             and args.discovery_uncertainty_pu_weight_source
@@ -2961,6 +3169,7 @@ def fit_student(args):
         if (
             (
                 args.alpha_discovery_knn_boundary > 0.0
+                or args.alpha_discovery_rejection_knn_boundary > 0.0
                 or support_pu_active
                 or (
                     args.alpha_discovery_known_consistency > 0.0
@@ -2976,23 +3185,57 @@ def fit_student(args):
                 )
             )
         ):
-            discovery_knn_support = collect_classwise_knn_support(
-                student,
-                knn_support_loader,
-                device,
-                len(bundle.known_classes),
-                k=args.discovery_knn_k,
-                quantile=args.discovery_knn_quantile,
-            )
-            observed_radii = discovery_knn_support["radii"][
-                discovery_knn_support["counts"].to(device) > 0
-            ]
-            print(
-                "known kNN support bank: "
-                f"samples={int(discovery_knn_support['counts'].sum())}, "
-                f"classes={int((discovery_knn_support['counts'] > 0).sum())}, "
-                f"radius_median={observed_radii.median().item():.4f}"
-            )
+            if (
+                args.alpha_discovery_knn_boundary > 0.0
+                or support_pu_active
+                or (
+                    args.alpha_discovery_known_consistency > 0.0
+                    and args.discovery_known_consistency_gate != "confidence"
+                )
+            ):
+                discovery_knn_support = collect_classwise_knn_support(
+                    student,
+                    knn_support_loader,
+                    device,
+                    len(bundle.known_classes),
+                    k=args.discovery_knn_k,
+                    quantile=args.discovery_knn_quantile,
+                )
+            if (
+                args.alpha_discovery_rejection_knn_boundary > 0.0
+                or (
+                    args.discovery_feature_candidate_gating
+                    and args.discovery_feature_candidate_space == "rejection_support"
+                )
+            ):
+                rejection_knn_support = collect_classwise_knn_support(
+                    student,
+                    knn_support_loader,
+                    device,
+                    len(bundle.known_classes),
+                    k=args.discovery_knn_k,
+                    quantile=args.discovery_knn_quantile,
+                    feature_key="rejection_features",
+                )
+                rejection_observed_radii = rejection_knn_support["radii"][
+                    rejection_knn_support["counts"].to(device) > 0
+                ]
+                print(
+                    "known rejection kNN support bank: "
+                    f"samples={int(rejection_knn_support['counts'].sum())}, "
+                    f"classes={int((rejection_knn_support['counts'] > 0).sum())}, "
+                    f"radius_median={rejection_observed_radii.median().item():.4f}"
+                )
+            if discovery_knn_support is not None:
+                observed_radii = discovery_knn_support["radii"][
+                    discovery_knn_support["counts"].to(device) > 0
+                ]
+                print(
+                    "known kNN support bank: "
+                    f"samples={int(discovery_knn_support['counts'].sum())}, "
+                    f"classes={int((discovery_knn_support['counts'] > 0).sum())}, "
+                    f"radius_median={observed_radii.median().item():.4f}"
+                )
         selective_weight = scheduled_weight(
             epoch,
             warmup_epochs=args.discovery_selective_warmup_epochs,
@@ -3018,10 +3261,22 @@ def fit_student(args):
             warmup_epochs=args.discovery_uncertainty_feature_margin_warmup_epochs,
             ramp_epochs=args.discovery_uncertainty_feature_margin_ramp_epochs,
         )
+        discovery_rejection_boundary_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.discovery_rejection_boundary_warmup_epochs,
+            ramp_epochs=args.discovery_rejection_boundary_ramp_epochs,
+            stop_epoch=args.discovery_rejection_boundary_stop_epoch,
+        )
         angular_weight = scheduled_weight(
             epoch,
             warmup_epochs=args.angular_warmup_epochs,
             ramp_epochs=args.angular_ramp_epochs,
+        )
+        rejection_known_ce_scale = scheduled_decay_scale(
+            epoch,
+            start_epoch=args.rejection_known_ce_decay_start_epoch,
+            decay_epochs=args.rejection_known_ce_decay_epochs,
+            final_scale=args.rejection_known_ce_final_scale,
         )
         stats = train_one_epoch_student(
             student,
@@ -3030,7 +3285,9 @@ def fit_student(args):
             optim,
             device,
             alpha_unc=args.alpha_unc,
-            alpha_rejection_known_ce=args.alpha_rejection_known_ce,
+            alpha_rejection_known_ce=(
+                args.alpha_rejection_known_ce * rejection_known_ce_scale
+            ),
             alpha_rejection_supcon=args.alpha_rejection_supcon,
             alpha_rejection_center=args.alpha_rejection_center,
             alpha_rejection_kd=args.alpha_rejection_kd,
@@ -3040,6 +3297,10 @@ def fit_student(args):
             ),
             discovery_rejection_pu_risk=args.discovery_rejection_pu_risk,
             discovery_rejection_pu_softness=args.discovery_rejection_pu_softness,
+            alpha_discovery_rejection_boundary=(
+                args.alpha_discovery_rejection_boundary
+                * discovery_rejection_boundary_weight
+            ),
             alpha_kd=args.alpha_kd,
             alpha_feat_kd=args.alpha_feat_kd,
             alpha_supcon=args.alpha_supcon,
@@ -3108,6 +3369,7 @@ def fit_student(args):
             discovery_feature_separation_temperature=args.discovery_feature_separation_temperature,
             discovery_feature_candidate_gating=args.discovery_feature_candidate_gating,
             discovery_cross_view_gating=args.discovery_cross_view_gating,
+             discovery_feature_candidate_space=args.discovery_feature_candidate_space,
             discovery_pool_mode=args.discovery_pool_mode,
             alpha_discovery_boundary=args.alpha_discovery_boundary,
             discovery_boundary_mode=args.discovery_boundary_mode,
@@ -3125,6 +3387,11 @@ def fit_student(args):
                 args.alpha_discovery_knn_boundary * discovery_knn_boundary_weight
             ),
             discovery_knn_support=discovery_knn_support,
+            alpha_discovery_rejection_knn_boundary=(
+                args.alpha_discovery_rejection_knn_boundary
+                * discovery_knn_boundary_weight
+            ),
+            rejection_knn_support=rejection_knn_support,
             discovery_knn_k=args.discovery_knn_k,
             discovery_knn_margin=args.discovery_knn_margin,
             discovery_knn_soft_weighting=args.discovery_knn_soft_weighting,
@@ -3289,7 +3556,11 @@ def fit_student(args):
         stats["discovery_uniform_weight"] = discovery_uniform_weight
         stats["uncertainty_feature_margin_weight"] = uncertainty_feature_margin_weight
         stats["angular_weight"] = angular_weight
+        stats["rejection_known_ce_scale"] = rejection_known_ce_scale
         stats["discovery_knn_boundary_weight"] = discovery_knn_boundary_weight
+        stats["discovery_rejection_boundary_weight"] = (
+            discovery_rejection_boundary_weight
+        )
         if (
             args.alpha_vos > 0.0
             and args.vos_mode == "gaussian"

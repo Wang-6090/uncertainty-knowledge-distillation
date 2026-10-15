@@ -16,17 +16,25 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 CIFAR100_MEAN = (0.5071, 0.4867, 0.4408)
 CIFAR100_STD = (0.2675, 0.2565, 0.2761)
+CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
+CIFAR10_STD = (0.2470, 0.2435, 0.2616)
 
 
 def build_transforms(
     image_size: int,
     train: bool,
     profile: str = "imagenet",
+    cifar_stats: str = "cifar100",
 ) -> transforms.Compose:
     if profile not in {"imagenet", "cifar"}:
         raise ValueError(f"Unsupported transform profile: {profile}")
     if profile == "cifar":
-        normalize = transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD)
+        if cifar_stats == "cifar100":
+            normalize = transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD)
+        elif cifar_stats == "cifar10":
+            normalize = transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD)
+        else:
+            raise ValueError(f"Unsupported CIFAR statistics: {cifar_stats}")
         if train:
             return transforms.Compose(
                 [
@@ -78,7 +86,16 @@ def build_outlier_dataset(
     collection of images from a disjoint source such as Tiny-ImageNet.
     """
     name = dataset_name.lower()
-    transform = build_transforms(image_size, train=True, profile=transform_profile)
+    # Auxiliary CIFAR-10 images must use their own statistics. Reusing
+    # CIFAR-100 normalization here silently shifts the OE input distribution
+    # and makes a boundary-loss experiment confound method with preprocessing.
+    cifar_stats = "cifar10" if name == "cifar10" else "cifar100"
+    transform = build_transforms(
+        image_size,
+        train=True,
+        profile=transform_profile,
+        cifar_stats=cifar_stats,
+    )
     if name == "cifar10":
         return datasets.CIFAR10(root=root, train=True, transform=transform, download=download)
     if name == "imagefolder":
@@ -399,6 +416,47 @@ def dataset_source_indices(dataset: Dataset) -> list[int]:
             offset += len(child_indices)
         return indices
     return list(range(len(dataset)))
+
+
+def dataset_source_keys(dataset: Dataset) -> list[tuple]:
+    """Return source identities that remain stable across dataset views.
+
+    ``dataset_source_indices`` is useful only when all views share one base
+    object.  Open-set CIFAR construction intentionally creates separate
+    dataset objects for train/validation/test and for deterministic versus
+    augmented transforms, so a plain positional index can collide across
+    genuinely different views.  This helper includes the source split and
+    the underlying dataset index, which makes overlap audits meaningful.
+    """
+    if isinstance(dataset, Subset):
+        parent_keys = dataset_source_keys(dataset.dataset)
+        return [parent_keys[int(index)] for index in dataset.indices]
+    if isinstance(dataset, ConcatDataset):
+        keys: list[tuple] = []
+        for child in dataset.datasets:
+            keys.extend(dataset_source_keys(child))
+        return keys
+    if isinstance(dataset, OpenSetCIFAR100):
+        source = (
+            "cifar100",
+            str(Path(dataset.base.root).resolve()),
+            bool(dataset.base.train),
+        )
+        return [source + (int(index),) for index in dataset.allowed_indices]
+    if isinstance(dataset, OpenSetImageFolder):
+        source = ("imagefolder", str(Path(dataset.base.root).resolve()))
+        return [source + (int(index),) for index in dataset.allowed_indices]
+    if isinstance(dataset, OpenSetFakeData):
+        source = (
+            "fakedata",
+            int(getattr(dataset.base, "random_offset", 0)),
+            int(getattr(dataset.base, "size", len(dataset.base))),
+        )
+        return [source + (int(index),) for index in dataset.allowed_indices]
+    # Generic datasets cannot expose a portable sample identity.  Keep the
+    # object identity explicit rather than silently claiming that positions in
+    # two unrelated datasets refer to the same sample.
+    return [("dataset_object", id(dataset), int(index)) for index in range(len(dataset))]
 
 
 def split_known_for_discovery(

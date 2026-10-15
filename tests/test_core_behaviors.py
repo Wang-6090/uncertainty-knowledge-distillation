@@ -44,8 +44,11 @@ from novel_discovery.losses import (
 )
 from scripts.analyze_classwise_open_errors import _threshold_by_sample
 from novel_discovery.data import (
+    build_outlier_dataset,
+    build_transforms,
     build_data_bundle,
     build_open_validation_and_discovery,
+    dataset_source_keys,
     dataset_source_indices,
     make_class_split,
     limit_dataset,
@@ -53,6 +56,7 @@ from novel_discovery.data import (
     split_known_for_discovery,
     split_validation_for_calibration,
     OpenSetImageFolder,
+    OpenSetCIFAR100,
     _known_labels,
     _known_flags,
     known_proportion,
@@ -85,6 +89,7 @@ from novel_discovery.pipeline import (
     candidate_purification_score,
     evaluate_candidate_purification,
     select_discovery_candidates,
+    select_support_distance_candidates,
     select_joint_candidates,
     compute_joint_candidate_weights,
     update_ema_model,
@@ -110,12 +115,14 @@ from novel_discovery.pipeline import (
     uncertainty_pu_predictions,
     score_distribution_overlap,
     compute_encoder_gradient_diagnostics,
+    compute_parameter_gradient_diagnostics,
 )
 from train import (
     build_encoder_optimizer_groups,
     initialize_novel_head_kmeans,
     load_checkpoint,
     parse_args,
+    scheduled_decay_scale,
     scheduled_weight,
     save_checkpoint,
     save_command_config,
@@ -142,6 +149,23 @@ class ClasswiseThresholdAuditTest(unittest.TestCase):
 
 
 class EncoderGradientDiagnosticsTest(unittest.TestCase):
+    def test_parameter_group_audit_isolated_and_coefficient_aware(self):
+        encoder = torch.tensor([1.0, 2.0], requires_grad=True)
+        rejection = torch.tensor([2.0, -1.0], requires_grad=True)
+        diagnostics = compute_parameter_gradient_diagnostics(
+            {
+                "active": (rejection ** 2).sum() * 0.5,
+                "disabled": (rejection ** 2).sum() * 0.0,
+                "encoder_only": (encoder ** 2).sum(),
+            },
+            [rejection],
+            prefix="rejection",
+        )
+        self.assertGreater(diagnostics["grad_norm_rejection_active"], 0.0)
+        self.assertEqual(diagnostics["grad_norm_rejection_disabled"], 0.0)
+        self.assertEqual(diagnostics["grad_norm_rejection_encoder_only"], 0.0)
+        self.assertIsNone(rejection.grad)
+
     def test_reports_norms_and_cosines_without_changing_gradients(self):
         first = torch.tensor([1.0, 2.0], requires_grad=True)
         second = torch.tensor([2.0, -1.0], requires_grad=True)
@@ -768,6 +792,40 @@ class CommandLineTest(unittest.TestCase):
         actual = torch.rand(8)
         torch.testing.assert_close(actual, expected)
 
+    def test_classwise_knn_support_can_use_independent_rejection_features(self):
+        class RejectionFeatureModel(torch.nn.Module):
+            def forward(self, images):
+                return {"features": images * 0.0, "rejection_features": images}
+
+        images = torch.tensor(
+            [[1.0, 0.0], [0.99, 0.1], [0.0, 1.0], [0.1, 0.99]]
+        )
+        labels = torch.tensor([0, 0, 1, 1])
+        metadata = torch.arange(len(labels))
+        loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(
+                images, labels, labels.clone(), torch.ones_like(labels), metadata
+            ),
+            batch_size=2,
+        )
+        bank = collect_classwise_knn_support(
+            RejectionFeatureModel(),
+            loader,
+            torch.device("cpu"),
+            num_classes=2,
+            k=1,
+            quantile=0.95,
+            feature_key="rejection_features",
+        )
+        self.assertEqual(bank["counts"].tolist(), [2, 2])
+        self.assertEqual(bank["features_by_class"][0].shape, (2, 2))
+
+        with self.assertRaisesRegex(ValueError, "feature_key"):
+            collect_classwise_knn_support(
+                RejectionFeatureModel(), loader, torch.device("cpu"),
+                num_classes=2, feature_key="unknown",
+            )
+
     def test_uncertainty_pu_support_weighting_uses_local_support_geometry(self):
         support_bank = {
             "features_by_class": [
@@ -1120,6 +1178,25 @@ class CommandLineTest(unittest.TestCase):
             [nested, torch.utils.data.Subset(base, [0, 2])]
         )
         self.assertEqual(dataset_source_indices(combined), [7, 11, 2, 4])
+
+    def test_dataset_source_keys_distinguish_cifar_train_and_test_views(self):
+        train = OpenSetCIFAR100(
+            root=str(PROJECT_ROOT / "data"),
+            known_classes=list(range(60)),
+            train=True,
+            transform=None,
+            download=False,
+            include_unknown=True,
+        )
+        test = OpenSetCIFAR100(
+            root=str(PROJECT_ROOT / "data"),
+            known_classes=list(range(60)),
+            train=False,
+            transform=None,
+            download=False,
+            include_unknown=True,
+        )
+        self.assertTrue(set(dataset_source_keys(train)).isdisjoint(dataset_source_keys(test)))
 
     def test_calibration_overlap_control_matches_size_and_selection(self):
         labels = torch.tensor([label for label in range(4) for _ in range(20)])
@@ -1525,20 +1602,38 @@ class CommandLineTest(unittest.TestCase):
     def test_knn_boundary_options_are_exposed_with_safe_defaults(self):
         defaults = parse_args(["train_student"])
         self.assertEqual(defaults.alpha_discovery_knn_boundary, 0.0)
+        self.assertEqual(defaults.alpha_discovery_rejection_knn_boundary, 0.0)
+        self.assertEqual(defaults.discovery_rejection_boundary_warmup_epochs, 0)
+        self.assertEqual(defaults.discovery_rejection_boundary_ramp_epochs, 0)
+        self.assertEqual(defaults.discovery_rejection_boundary_stop_epoch, 0)
         self.assertEqual(defaults.discovery_knn_k, 5)
         args = parse_args(
             [
                 "train_student",
                 "--alpha-discovery-knn-boundary", "0.1",
+                "--alpha-discovery-rejection-knn-boundary", "0.2",
                 "--discovery-knn-k", "3",
                 "--discovery-knn-quantile", "0.9",
                 "--discovery-knn-margin", "0.03",
             ]
         )
         self.assertAlmostEqual(args.alpha_discovery_knn_boundary, 0.1)
+        self.assertAlmostEqual(args.alpha_discovery_rejection_knn_boundary, 0.2)
         self.assertEqual(args.discovery_knn_k, 3)
         self.assertAlmostEqual(args.discovery_knn_quantile, 0.9)
         self.assertAlmostEqual(args.discovery_knn_margin, 0.03)
+
+        boundary_args = parse_args(
+            [
+                "train_student",
+                "--discovery-rejection-boundary-warmup-epochs", "1",
+                "--discovery-rejection-boundary-ramp-epochs", "2",
+                "--discovery-rejection-boundary-stop-epoch", "4",
+            ]
+        )
+        self.assertEqual(boundary_args.discovery_rejection_boundary_warmup_epochs, 1)
+        self.assertEqual(boundary_args.discovery_rejection_boundary_ramp_epochs, 2)
+        self.assertEqual(boundary_args.discovery_rejection_boundary_stop_epoch, 4)
 
     def test_knn_boundary_can_use_candidate_gate_on_mixed_pool(self):
         defaults = parse_args(["train_student"])
@@ -1581,6 +1676,50 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(scheduled_weight(2, warmup_epochs=1, ramp_epochs=2), 1.0)
         self.assertEqual(scheduled_weight(1, warmup_epochs=1, ramp_epochs=0), 1.0)
 
+    def test_weight_schedule_can_stop_after_a_one_based_epoch(self):
+        self.assertEqual(
+            scheduled_weight(0, warmup_epochs=1, ramp_epochs=1, stop_epoch=2),
+            0.0,
+        )
+        self.assertEqual(
+            scheduled_weight(1, warmup_epochs=1, ramp_epochs=1, stop_epoch=2),
+            1.0,
+        )
+        self.assertEqual(
+            scheduled_weight(2, warmup_epochs=1, ramp_epochs=1, stop_epoch=2),
+            0.0,
+        )
+        self.assertEqual(
+            scheduled_weight(4, warmup_epochs=0, ramp_epochs=0, stop_epoch=0),
+            1.0,
+        )
+
+    def test_rejection_ce_decay_schedule_preserves_static_default(self):
+        self.assertEqual(scheduled_decay_scale(0), 1.0)
+        self.assertEqual(scheduled_decay_scale(4, start_epoch=0, decay_epochs=3, final_scale=0.25), 1.0)
+
+    def test_rejection_ce_decay_schedule_reaches_final_scale(self):
+        self.assertEqual(
+            scheduled_decay_scale(0, start_epoch=2, decay_epochs=3, final_scale=0.25),
+            1.0,
+        )
+        self.assertAlmostEqual(
+            scheduled_decay_scale(1, start_epoch=2, decay_epochs=3, final_scale=0.25),
+            0.75,
+        )
+        self.assertAlmostEqual(
+            scheduled_decay_scale(2, start_epoch=2, decay_epochs=3, final_scale=0.25),
+            0.5,
+        )
+        self.assertAlmostEqual(
+            scheduled_decay_scale(3, start_epoch=2, decay_epochs=3, final_scale=0.25),
+            0.25,
+        )
+        self.assertAlmostEqual(
+            scheduled_decay_scale(8, start_epoch=2, decay_epochs=3, final_scale=0.25),
+            0.25,
+        )
+
     def test_uncertainty_separation_weight_schedule(self):
         self.assertEqual(scheduled_weight(0, warmup_epochs=1, ramp_epochs=2), 0.0)
         self.assertAlmostEqual(scheduled_weight(1, warmup_epochs=1, ramp_epochs=2), 0.5)
@@ -1595,6 +1734,20 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(scheduled_weight(0, warmup_epochs=1, ramp_epochs=2), 0.0)
         self.assertAlmostEqual(scheduled_weight(1, warmup_epochs=1, ramp_epochs=2), 0.5)
         self.assertEqual(scheduled_weight(2, warmup_epochs=1, ramp_epochs=2), 1.0)
+
+
+class OutlierTransformTest(unittest.TestCase):
+    def test_cifar10_outlier_transform_uses_cifar10_statistics(self):
+        transform = build_transforms(64, train=False, profile="cifar", cifar_stats="cifar10")
+        normalize = transform.transforms[-1]
+        self.assertEqual(tuple(normalize.mean), (0.4914, 0.4822, 0.4465))
+        self.assertEqual(tuple(normalize.std), (0.247, 0.2435, 0.2616))
+
+    def test_cifar100_transform_keeps_cifar100_statistics(self):
+        transform = build_transforms(64, train=False, profile="cifar")
+        normalize = transform.transforms[-1]
+        self.assertEqual(tuple(normalize.mean), (0.5071, 0.4867, 0.4408))
+        self.assertEqual(tuple(normalize.std), (0.2675, 0.2565, 0.2761))
 
 
 class LossBehaviorTest(unittest.TestCase):
@@ -2696,6 +2849,24 @@ class ScoreBehaviorTest(unittest.TestCase):
         score, _ = compute_open_score(outputs, score_mode="knn_distance")
         np.testing.assert_allclose(score, outputs["knn_distance"])
 
+    def test_knn_ood_can_use_independent_rejection_features(self):
+        outputs = {
+            "features": np.array([[0.0, 1.0]], dtype=np.float32),
+            "rejection_features": np.array([[1.0, 0.0]], dtype=np.float32),
+        }
+        bank = {
+            "features": np.array(
+                [[1.0, 0.0], [0.0, 1.0]], dtype=np.float32
+            ),
+            "labels": np.array([0, 1], dtype=np.int64),
+        }
+        attach_knn_distances(
+            outputs, bank, k=1, feature_key="rejection_features"
+        )
+        # The rejection branch is aligned with the first bank vector, while
+        # the shared feature is intentionally aligned with the second one.
+        self.assertAlmostEqual(float(outputs["knn_distance"][0]), 0.0, places=6)
+
     def test_knn_distance_can_be_conditioned_on_predicted_class(self):
         outputs = {
             "features": np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
@@ -3075,6 +3246,22 @@ class ScoreBehaviorTest(unittest.TestCase):
 
         self.assertEqual(mask.sum().item(), 2)
         self.assertTrue(mask[1].item())
+        self.assertTrue(mask[3].item())
+
+    def test_support_distance_candidates_use_all_class_supports(self):
+        bank = {
+            "features_by_class": [
+                torch.tensor([[1.0, 0.0], [0.98, 0.02]]),
+                torch.tensor([[-1.0, 0.0], [-0.98, 0.02]]),
+            ],
+            "radii": torch.tensor([0.05, 0.05]),
+        }
+        features = torch.tensor(
+            [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]]
+        )
+        mask = select_support_distance_candidates(features, bank, ratio=0.5, k=1)
+        self.assertEqual(mask.sum().item(), 2)
+        self.assertTrue(mask[2].item())
         self.assertTrue(mask[3].item())
 
     def test_joint_novel_mass_selection_prefers_novel_subspace(self):

@@ -11,7 +11,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from novel_discovery.data import build_data_bundle, dataset_source_indices
+from novel_discovery.data import build_data_bundle, dataset_source_keys
 from novel_discovery.metrics import compute_aupr, compute_auroc, compute_fpr95
 from novel_discovery.models import build_model
 from novel_discovery.pipeline import (
@@ -90,8 +90,8 @@ def main():
     train_loader = build_loader(train_eval, 64, False, 0)
     calibration_loader = build_loader(bundle.calibration, 64, False, 0)
     open_val_loader = build_loader(bundle.open_val, 64, False, 0)
-    calibration_indices = set(dataset_source_indices(bundle.calibration))
-    open_val_indices = set(dataset_source_indices(bundle.open_val))
+    calibration_indices = set(dataset_source_keys(bundle.calibration))
+    open_val_indices = set(dataset_source_keys(bundle.open_val))
     calibration_openval_overlap = len(calibration_indices & open_val_indices)
     if calibration_openval_overlap:
         raise RuntimeError(

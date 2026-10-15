@@ -1,5 +1,96 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 2026-10-15：soft-NNPU treatment 已完成与判断
+
+上轮中断的 `soft_nnpu` treatment 已在严格同协议下补完：服务器、数据划分、教师和学生、混合池、已知先验、4 epochs、检测器和校准方式均保持一致，唯一算法变量是 `hard_nnpu -> soft_nnpu`，边界权重为 `0.1`。训练和 discover 均已完成，完整审计见 [`analysis/rejection_boundary_soft_nnpu_audit_s44_20261015.md`](analysis/rejection_boundary_soft_nnpu_audit_s44_20261015.md)。
+
+soft-NNPU 相对 baseline 的排序指标小幅改善：AUROC `0.8959 -> 0.9000`，FPR95 `0.3667 -> 0.3578`，OSCR `0.6534 -> 0.6614`，已知准确率 `0.7088 -> 0.7155`；但报告阈值下未知拒绝率从 `0.5100` 降至 `0.4748`。严格 95% 已知覆盖率下，paired bootstrap 的 AUROC 差异 CI 为 `[-0.00043,+0.00857]`，未知拒绝率差异 CI 为 `[-3.15,+4.35]` 个百分点，因此不足以支持稳定的总体改进。结论：实现和 wiring 正确，但 soft-NNPU 不能作为已解决核心重叠问题的证据，默认仍保持 `hard_nnpu`，停止继续扫描 risk form。
+
+下一步回到共享 encoder 的类条件 support 几何：先用已知标签估计类内半径和边界，再只用高纯度未知候选施加局部边界约束；每次只改一个损失项，并同时检查 AUROC、FPR95、OSCR、KS、overlap、已知效用和固定覆盖率拒绝率。
+
+## 2026-10-14：soft-NNPU rejection-boundary 复核已暂停
+
+### 本次目的与唯一变化
+
+此前的 PU rejection-boundary loss 使用 `hard_nnpu`：当混合池校正后的风险为负时，直接用 `clamp_min(0)` 截断，可能使部分 batch 的边界损失没有有效梯度。本次只准备比较同一 PU 边界损失的两种风险形式：
+
+- `hard_nnpu`：非负风险硬截断，当前默认行为；
+- `soft_nnpu`：用 softplus 平滑硬截断，保留较小的连续梯度。
+
+实验脚本 [`scripts/run_rejection_boundary_epoch_control.py`](scripts/run_rejection_boundary_epoch_control.py) 新增了 `--risk-mode` 参数。除该参数外，计划固定 seed=44、CIFAR-100 semantic-isolated 60/40、相同 teacher、mixed discovery pool、known prior、4 epochs、boundary weight=0.1、相同 rejection 表征、检测器和验证校准协议。测试标签不参与训练、阈值或模型选择。
+
+### 当前状态与可用结论
+
+本轮在 soft-NNPU treatment 完成前被暂停：脚本只重新生成了一个 soft-NNPU 协议下的 baseline，目录为
+`runs/rejection_boundary_epoch_control_s44_e4_soft_nnpu_audit_baseline/`；该 baseline 不是新的算法处理组，不能与历史 hard-NNPU 结果直接拼接，也没有产生 soft-versus-hard 的有效实验结论。未完成的 treatment 运行目录和中间 checkpoint 仅作为中止记录保留，不能用于报告或调参。
+
+因此截至今日：
+
+1. 没有证据表明 `soft_nnpu` 比 `hard_nnpu` 更好；默认仍保持 `hard_nnpu`。
+2. 没有修改训练主流程的默认配置，也没有根据未完成实验修改 boundary 权重、阈值或 checkpoint 选择。
+3. 现有最可靠的方向仍是：PU boundary loss 在严格 4-epoch、两个 seed 上改善了 AUROC/FPR95/KS 和重叠代理，但 5-epoch 延长实验未稳定复现，未知拒绝率的跨 seed 置信区间仍不稳定。因此它是候选消融，不是已经解决核心问题的方法。
+4. 核心问题仍是已知/未知表征和分数分布重叠；单独提高拒绝率不能证明问题解决，必须同时观察 AUROC、FPR95、OSCR、已知准确率/接受率、KS 和 overlap。
+
+下一次继续实验时，应先补齐同协议的 soft-NNPU treatment，并与同一 soft 协议下的 baseline 比较；如果 soft 只提高未知拒绝率而损害 AUROC、FPR95、OSCR、KS 或已知效用，就停止该方向。若实验未补齐，不应把本节写成 soft-NNPU 的正面或负面算法结果。
+
+本次代码检查：实验脚本已通过 Python 语法检查；未改变默认训练行为。此前完整测试结果为 `236 passed`，当前新增参数只位于实验脚本，主程序默认参数仍保持兼容。
+
+## 2026-10-13：边界损失停止调度控制实验
+
+为检查 4 epoch 的边界损失收益是否因 5 epoch 后期继续优化而退化，新增
+`--discovery-rejection-boundary-stop-epoch`，并比较了 seed=44、5 epoch 下的
+baseline 与“前 4 轮使用 `alpha=0.05`、第 5 轮关闭”的版本。调度实际生效，
+训练历史记录的权重为 `1,1,1,1,0`，但结果没有改善：AUROC
+`0.9051→0.9024`、FPR95 `0.3395→0.3565`、OSCR `0.6649→0.6604`、已知准确率
+`0.7152→0.7105`。未知拒绝率虽为 `0.5408→0.5495`，但 KS 和分布重叠代理变差，
+因此不能把该调度作为默认方法，也不能把拒绝率的单点上升解读为核心问题已解决。
+完整记录见 [`analysis/rejection_boundary_stop_schedule_20261013.md`](analysis/rejection_boundary_stop_schedule_20261013.md)。
+
+本次负结果进一步说明，下一步应优先检查开放验证集上的 checkpoint 选择：当前训练
+可以建立 open validation，但历史协议主要按已知准确率保存模型。应在不使用测试标签的
+前提下，对比 `known_acc`、`open_auroc` 和 `open_ks` 选择规则，再决定边界损失是否
+值得继续深入；暂不继续堆叠新的分数融合或阈值调整。
+
+## 2026-10-13：PU rejection-boundary loss 的公平复核
+
+此前 boundary-loss pilot 的两组 checkpoint 轮数不同，不能直接把差异归因于方法。本轮重新固定两组均训练 4 个 epoch，seed=123 和 seed=44 分别使用相同的数据划分、teacher、mixed discovery pool、known prior、MC 和验证/校准协议；处理组唯一新增 `alpha_discovery_rejection_boundary=0.1`，测试标签只用于事后指标和 paired bootstrap。
+
+- seed=123：AUROC `0.8833→0.8910`，FPR95 `0.4362→0.4127`，OSCR `0.6292→0.6392`，已知准确率 `0.6938→0.6992`，KS `0.6038→0.6263`，重叠代理 `0.5245→0.5135`。
+- seed=44：AUROC `0.8822→0.8982`，FPR95 `0.4070→0.3797`，OSCR `0.6492→0.6576`，已知准确率 `0.7150→0.7112`，KS `0.6046→0.6493`，重叠代理 `0.5673→0.5320`。
+- 配对 bootstrap 的 AUROC 差异 CI 分别为 `[+0.00311,+0.01259]` 和 `[+0.01114,+0.02084]`；固定精确 95% 已知覆盖率下的未知拒绝率差异 CI 分别为 `[-2.05,+4.30]` 和 `[+0.57,+6.45]` 个百分点。
+
+这次是目前最有希望的训练期改动之一：两个 seed 的 AUROC、FPR95、KS 和重叠代理都同向改善，说明它不只是调整阈值。但 seed=123 的拒绝率区间仍跨 0，不能宣称已经稳定解决核心问题，也不能立即把它写成默认方法。实现的是混合池 PU 边界损失：用已知先验校正混合池风险，并在独立 rejection 表征上约束未知样本远离类条件已知 support 边界。下一步只做预先固定的权重敏感性 `0.05/0.2`，随后再考虑更长训练和多 seed；暂不叠加新的分数融合或用测试集调阈值。完整记录见 [`analysis/rejection_boundary_epoch_control_20261013.md`](analysis/rejection_boundary_epoch_control_20261013.md)。
+
+### boundary 权重敏感性补充
+
+为检查 `0.1` 是否只是偶然工作点，在相同 4-epoch 协议下又测试了 `0.05` 和 `0.2`。seed=44 上，`0.05` 的 AUROC 为 `0.9007`、FPR95 为 `0.3552`、OSCR 为 `0.6638`；相对同 seed baseline 的 paired bootstrap AUROC 差异为 `+0.01846`，95% CI `[+0.01413,+0.02310]`，固定 95% known coverage 下未知拒绝率差异为 `+3.77` 个百分点，CI `[+0.63,+6.80]`。`0.2` 仍有正向信号，但 AUROC 差异为 `+0.01318`，低于 `0.05`。
+
+seed=123 的 `0.05` 复核 AUROC 为 `0.8918`、FPR95 为 `0.4063`、OSCR 为 `0.6395`；paired bootstrap AUROC 差异为 `+0.00859`，95% CI `[+0.00344,+0.01415]`，但未知拒绝率差异 CI `[-2.87,+3.83]` 个百分点仍跨 0。因此当前结论是：`0.05` 是值得进一步研究的候选范围，且比 `0.1/0.2` 更有希望；但这些权重是用测试结果做事后比较，不能直接据此改生产默认值。下一步应在 open validation 上预先固定权重选择，或增加新的 seed 后再决定默认设置。对照产物见 `analysis/rejection_boundary_weight_s44_w005_vs_base_20261013.json`、`analysis/rejection_boundary_weight_s44_w02_vs_base_20261013.json` 和 `analysis/rejection_boundary_weight_s123_w005_vs_base_20261013.json`。
+
+随后在 seed=44 上把 baseline 和 `boundary=0.05` 同时延长到 5 epochs，检查短训练收益是否能保持。结果为：AUROC `0.8995→0.8970`，FPR95 `0.3832→0.3740`，OSCR `0.6558→0.6628`，已知准确率 `0.7095→0.7175`；固定精确 95% known coverage 的未知拒绝率 `49.50%→48.50%`，AUROC 配对 bootstrap CI `[-0.00653,+0.00142]`，拒绝率差异 CI `[-3.73,+1.80]` 个百分点。结论是该损失存在训练预算敏感性：4 epoch 的 AUROC 正向信号不能直接推广到 5 epoch。它继续保留为候选消融，不修改默认配置；后续必须使用验证集预先选定权重和 checkpoint，并增加 seed，不能根据测试集结果继续挑选 epoch 或权重。详见 [`analysis/rejection_boundary_epoch_control_s44_e5_20261013.md`](analysis/rejection_boundary_epoch_control_s44_e5_20261013.md)。
+
+## 2026-10-13：rejection detector 后续复核结论
+
+本日围绕“已知/未知特征与分数重叠”继续做了三组严格对照：外部 CIFAR-10 uniform OE、rejector 与 kNN/原型分数融合、线性 nnPU 与 MLP nnPU。所有比较固定 seed=123、学生 checkpoint、CIFAR-100 semantic-isolated 60/40、mixed pool、known prior、MC=4、open validation 和 95% known-coverage 校准；测试标签只用于事后指标和 paired bootstrap。
+
+- uniform OE 的 AUROC `0.87986→0.88071`、FPR95 `0.43817→0.43467`，但 OSCR `0.58793→0.57784`、已知准确率 `0.63833→0.62667`、KS/overlap 变差；配对 bootstrap 不支持稳定收益，保留为关闭状态消融。
+- kNN+rejector 的 `w=0.75` 在普通报告中达到 AUROC `0.88064`、FPR95 `0.41733`、OSCR `0.59619`，但严格精确 95% 已知覆盖率下未知拒绝率比 rejector-only 低 `2.40` 个百分点，AUROC CI 跨 0；这是校准/工作点变化，不进入默认流程。
+- MLP nnPU 的 AUROC `0.87249`、FPR95 `0.50533`，均不如 linear nnPU 的 `0.87986/0.43817`，停止增加 rejector 容量。
+
+详细数据和判断见 [`analysis/rejection_detector_followup_20261013.md`](analysis/rejection_detector_followup_20261013.md)。当前继续保留 independent rejection representation + linear `nu_corrected` nnPU 和 `encoder_lr_scale=0.1` 作为候选；下一步停止堆叠后处理检测器，回到直接改善共享 encoder 几何的单一训练目标，并继续同时报告 AUROC、FPR95、OSCR、已知效用、KS 和 overlap。
+
+本轮代码检查：`python -m pytest -q` 为 `228 passed`，`compileall` 和 `git diff --check` 均通过。融合脚本初次运行曾因漏传 `--knn-ood` 暴露配置错误，已修正并重新运行；该失败不是算法结果，脚本现已通过语法检查。
+
+补充的类别级诊断发现，未知类难度并不均匀：在 seed=123 rejection baseline 上，单个未知类的拒绝率约为 `12%--71%`，同时部分已知类也有较高误拒率。这支持下一步从类条件 support / 局部边界角度改善表征，而不是继续做全局阈值或全局 OE 调整。诊断时已确认开放集字段 `true_label=-1` 代表所有未知样本，真实类别必须读取 `raw_labels`；脚本和结果见 [`scripts/analyze_class_overlap.py`](scripts/analyze_class_overlap.py) 与 [`analysis/class_overlap_rejection_s123_20261013.json`](analysis/class_overlap_rejection_s123_20261013.json)。该诊断只用于事后分析，不参与训练或调参。
+
+# 2026-10-13：uncertainty score 融合权重的配对复核
+
+本轮固定学生 checkpoint、CIFAR-100 semantic-isolated 60/40 测试协议、kNN 特征库、MC=4 和验证拆分，仅比较检测分数中 head uncertainty 修正权重 `0.25 / 0.50 / 0.75`。seed 44、123 各自使用完整测试集；测试标签只用于事后指标与配对 bootstrap，不参与阈值或权重选择。
+
+结果不支持改动默认权重：0.25 在 seed 123 的 AUROC 仅增加 `0.00054`（配对 95% CI `[-0.00039, +0.00151]`），在 seed 44 则降低 `0.00141`（CI `[-0.00226, -0.00056]`）。0.75 的 AUROC 在两个 seed 都下降；固定精确 95% 已知覆盖率下的未知拒绝率差异，四个比较的 bootstrap 区间均跨 0。部分设置下拒绝率上升不等于分布分离改善，完整指标也显示 AUROC、FPR95、OSCR、KS 与重叠率并未一致变好。**保留当前默认权重 0.50，不宣称核心问题得到解决。**
+
+详细对照条件、六组完整测试指标、bootstrap 解释及后续方向见 [`analysis/uncertainty_score_weight_recheck_20261013.md`](analysis/uncertainty_score_weight_recheck_20261013.md)。本轮是检测器分数诊断，不改训练程序和默认算法；下一步应优先验证训练阶段对共享表征几何的改变，并继续采用新 seed、预先固定的验证协议，避免用测试集调参。
+
 ## 2026-10-12：开放验证集选 checkpoint 的严格同分数复核
 
 本轮验证“按 open-validation AUROC 选择学生 checkpoint”是否能改善未知检测。此前一次快速比较把 `max_softmax` 选模与 kNN 最终检测混在一起，不能用于判断该方法；该比较已作废。本轮固定 CIFAR-100 semantic-hard 60/40、seed=44、ResNet-34/18、完整已知训练划分、验证集 300、发现池 1200、测试集 1000、2 epochs、`open_val_ratio=0.2`、95% 已知覆盖率阈值和跳过聚类，只比较 checkpoint 选择规则，并让选模与最终测试都使用同一个 `max_softmax` 分数。
@@ -5401,3 +5492,219 @@ Final code verification for this update: `python -m pytest -q` reports
 `226 passed, 2 warnings`; `python -m compileall -q train.py novel_discovery
 tests` and `git diff --check` pass. The warnings are non-failing PyTorch test
 and Windows CPU-core detection warnings.
+
+### 2026-10-13: proxy-contrastive representation pilot
+
+To address the unresolved feature-space overlap, a controlled training-time
+pilot added the existing `proxy_contrastive_loss` to the student with
+`alpha_proxy=0.05`. This is a normalized-softmax/Proxy-NCA-style objective:
+features are pulled toward their labeled classifier-weight proxy and pushed
+away from other known proxies, without requiring same-class pairs in a batch.
+It changes representation learning, not the detector threshold.
+
+The experiment retrained baseline (`alpha_proxy=0`) and treatment on seeds 123
+and 44 from the same teacher, semantic-isolated split, five-epoch recipe,
+matched mixed discovery pool, kNN bank, MC=4 detector, and validation-only
+95%-known-coverage calibration. Results:
+
+| seed | arm | AUROC | FPR95 | OSCR | known acc | unknown reject | KS | unknown below known-q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 123 | baseline | 0.8167 | 0.5865 | 0.5560 | 61.88% | 28.58% | 0.4939 | 70.98% |
+| 123 | proxy 0.05 | 0.8200 | 0.5907 | 0.5628 | 62.32% | 26.78% | 0.5046 | 72.78% |
+| 44 | baseline | 0.8114 | 0.5827 | 0.5276 | 58.87% | 27.40% | 0.4868 | 73.60% |
+| 44 | proxy 0.05 | 0.8107 | 0.5873 | 0.5260 | 58.72% | 25.18% | 0.4885 | 73.90% |
+
+The paired bootstrap is retrospective test-label diagnosis only. Seed 123 has
+AUROC `+0.0033`, but unknown rejection at exact 95% known coverage decreases
+`1.84` percentage points (95% CI `[-3.43, -0.10]` pp). Seed 44 has AUROC
+difference `-0.0006` (95% CI `[-0.32, +0.19]` pp) and no reliable rejection
+change. Therefore this method is mixed/negative and does not solve the core
+known/unknown overlap. Keep the implementation as an ablation with default
+`alpha_proxy=0`; do not stack it into the main method. Full protocol and
+artifacts are in [`analysis/proxy_representation_pair_20261013.md`](analysis/proxy_representation_pair_20261013.md).
+
+### 2026-10-13: uncertainty-weighted feature-margin recheck
+
+The uncertainty-weighted feature-margin loss was rechecked with newly trained,
+matched baseline/treatment pairs on seeds 44 and 123. The baseline was the
+audited mixed-pool nnPU recipe (`alpha_discovery_uncertainty_pu=0.1`) with the
+margin coefficient set to zero; the treatment added weight `0.05` and cosine
+margin `0.2`. Initialization, teacher, semantic-isolated 60/40 split, five
+epochs, mixed-pool prior, MC=4 detector, kNN bank, and validation-only 95%
+known-coverage calibration were held fixed.
+
+The treatment was verified to be active: its final history contains non-zero
+`discovery_uncertainty_feature_margin` and uncertainty-weight means, while the
+baseline contains zero. It nevertheless did not consistently improve the
+target problem:
+
+| seed | arm | AUROC | FPR95 | OSCR | known acc | unknown reject | KS | unknown below known-q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 44 | baseline | 0.8120 | 0.5965 | 0.5214 | 57.90% | 29.85% | 0.4843 | 73.93% |
+| 44 | margin 0.05 | 0.8083 | 0.5943 | 0.5235 | 58.40% | 27.53% | 0.4869 | 74.68% |
+| 123 | baseline | 0.8183 | 0.5850 | 0.5626 | 62.33% | 25.60% | 0.4962 | 72.18% |
+| 123 | margin 0.05 | 0.8179 | 0.5850 | 0.5620 | 61.75% | 26.20% | 0.4971 | 70.45% |
+
+The paired bootstrap confirms the mixed outcome: seed 44 AUROC difference is
+`-0.00373` (95% CI `[-0.00620,-0.00124]`), while seed 123 difference is
+`-0.00045` (95% CI `[-0.00270,0.00177]`). Unknown rejection at exact 95%
+known coverage changes by `-0.00918` and `+0.01474`, respectively, with CIs
+crossing zero. Therefore the loss is implemented and active, but it is not a
+reliable solution to known/unknown overlap. Keep it as an ablation with
+default coefficient zero; do not stack it into the main recipe.
+
+This narrows the next direction: another local margin around known prototypes
+does not supply a reliable unknown boundary. The next experiment should add a
+separately routed boundary signal, such as a disjoint class-balanced open pool
+or carefully controlled outlier-exposure/objectosphere supervision, while
+keeping known CE/KD and the detector fixed. Candidate purity, active loss
+meters, and the matched data protocol must be audited before interpreting
+results. Full details and artifacts are in
+[`analysis/nnpu_uncertainty_margin_recheck_20261013.md`](analysis/nnpu_uncertainty_margin_recheck_20261013.md).
+
+### 2026-10-13: uniform Outlier Exposure pilot and preprocessing audit
+
+After the uncertainty-margin recheck, a different boundary signal was tested:
+an auxiliary CIFAR-10 stream with uniform predictive logits
+(`alpha_outlier_uniform=0.1`). The matched baselines were the same mixed-pool
+nnPU students on seeds 44 and 123; teacher, semantic-isolated 60/40 split,
+pretrained initialization, five epochs, detector, kNN bank, MC=4, and
+validation-only 95%-known-coverage calibration were fixed.
+
+The outlier loss was verified to be active (`outlier_uniform` about 4.53 and
+4.42 in the final epochs). During the audit, CIFAR-10 images were found to be
+using CIFAR-100 normalization under the CIFAR transform profile. This is now
+corrected in `build_outlier_dataset`, with regression tests for both CIFAR-10
+and CIFAR-100 statistics.
+
+| seed | arm | AUROC | FPR95 | OSCR | known acc | unknown reject | KS | unknown below known-q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 44 | nnPU baseline | 0.8120 | 0.5965 | 0.5214 | 57.90% | 29.85% | 0.4843 | 73.93% |
+| 44 | + uniform OE | 0.8144 | 0.5880 | 0.5498 | 61.50% | 30.05% | 0.4923 | 74.48% |
+| 123 | nnPU baseline | 0.8183 | 0.5850 | 0.5626 | 62.33% | 25.60% | 0.4962 | 72.18% |
+| 123 | + uniform OE | 0.8191 | 0.5908 | 0.5448 | 60.75% | 28.80% | 0.4976 | 72.15% |
+
+This is a mixed result: uniform OE is correctly implemented and gives a small
+ranking signal, but it does not consistently reduce score overlap and it
+reduces known utility/OSCR on seed 123. The exact-95%-known-coverage paired
+bootstrap changes in unknown rejection are `-0.45` and `+0.07` percentage
+points for seeds 44 and 123, respectively, with intervals crossing zero.
+Therefore keep uniform OE as an ablation, not as the default or a component to
+stack blindly. Full details are in
+[`analysis/nnpu_oe_uniform_pilot_s44_s123_20261013.md`](analysis/nnpu_oe_uniform_pilot_s44_s123_20261013.md).
+
+The next boundary experiment should use a genuinely disjoint, visually
+diverse outlier source or a class-held-out CIFAR-100 boundary protocol, and
+prefer routing the signal to the independent rejection representation. Input
+normalization, candidate purity, active loss meters, ranking/overlap, and
+known utility must all be audited before promotion.
+
+### 2026-10-13: open-validation checkpoint audit and split-identity correction
+
+本轮先审计 checkpoint 选择协议，没有修改默认算法。历史审计用相对位置判断 calibration 与 open-validation 是否重叠，这对 CIFAR-100 的独立 train/test 数据视图不够可靠。现在新增 dataset_source_keys()，同时记录数据源、train/test 视图和底层样本索引；修正后的真实交集为 0。该修正只影响审计证据，不改变训练和测试。
+
+在 seed=44 的已保存五轮 checkpoint 上，用当前正式检测分数 normalized_entropy_min_class_knn、MC=4 和每轮独立 kNN bank 回放 open validation：
+
+| epoch | open AUROC | FPR95 | known accuracy | KS | unknown below known-q95 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0.7677 | 0.6700 | 0.5767 | 0.4108 | 0.7485 |
+| 2 | 0.7882 | 0.6000 | 0.5767 | 0.4687 | 0.7860 |
+| 3 | 0.7872 | 0.5933 | 0.5333 | 0.4460 | 0.7425 |
+| 4 | 0.7926 | 0.6067 | 0.5733 | 0.4665 | 0.8205 |
+| 5 | 0.7984 | 0.6133 | 0.5500 | 0.4813 | 0.7385 |
+
+### 2026-10-13: rejection-space candidate gating and direct rejection-space scoring audit
+
+This round tested whether the independent rejection representation can reduce
+known/unknown score overlap. The paired training protocol fixed seed, CIFAR-100
+semantic-isolated 60/40 split, teacher, mixed discovery pool (5400 samples,
+known prior 0.2), rejection dimension 128, boundary-loss weight 0.1,
+cross-view gating, one epoch, and the 95% known-coverage evaluation rule.
+
+The first intervention changed only the candidate-selection space used by the
+rejection kNN boundary loss: `shared` versus `rejection_support`. It was not a
+stable improvement:
+
+| seed | candidate space | AUROC | FPR95 | OSCR | unknown reject |
+|---:|---|---:|---:|---:|---:|
+| 123 | shared | 0.7976 | 0.6275 | 0.5126 | 0.2128 |
+| 123 | rejection_support | 0.8002 | 0.6190 | 0.5120 | 0.2303 |
+| 44 | shared | 0.7901 | 0.6335 | 0.4946 | 0.2548 |
+| 44 | rejection_support | 0.7896 | 0.6422 | 0.4926 | 0.2560 |
+
+The direction changed across seeds, so `rejection_support` remains an ablation
+option and is not the default. The change also exposed an important audit
+point: changing the training loss space does not help if final detection still
+uses the shared feature space.
+
+The second intervention enabled `--knn-feature rejection_features` and used it
+directly in the same normalized entropy + classwise kNN detector. On the seed
+123 rejection-support checkpoint, direct rejection-space scoring reached
+AUROC 0.7892, FPR95 0.6517, OSCR 0.5066, and unknown reject 0.2240, versus
+shared-space scoring on the same checkpoint (AUROC 0.8002, FPR95 0.6190,
+OSCR 0.5120, unknown reject 0.2303). This does not support promoting the
+rejection branch as the detector yet: it currently receives training signals,
+but its geometry is not more separable than the shared representation.
+
+Code changes are limited and backward-compatible: KNN-OOD now accepts
+`--knn-feature rejection_features`; the default remains `features`.
+`py_compile` passed and all 232 tests passed. The next priority is therefore
+not another threshold or candidate-ratio sweep. We should audit and improve
+the rejection branch's actual known-vs-unknown supervision (including outlier
+semantic coverage and class-conditional boundary quality), then re-test with
+the same paired multi-seed protocol. These results are diagnostic and should
+not be reported as a solved core problem.
+
+因此当前检测器在 open validation 上选择 epoch 5，而历史 known_acc 选择 epoch 2。但这是单 seed、带已知/未知标签的验证诊断，不能证明它解决了核心的特征重叠问题，也不足以修改默认选择规则。当前仍保留 known_acc 默认值；后续若研究 open-set checkpoint selection，必须使用完全一致的最终检测器、预先规定规则，并在新 seed 和独立 test 上复核。
+
+详细记录见 analysis/checkpoint_selection_openval_reaudit_20261013.md。代码检查：191 passed、py_compile 和 git diff --check 通过。
+### 2026-10-13: rejection 分支梯度审计与已知 CE 配比实验
+
+为判断独立 rejection 分支是否确实收到有效的未知监督，新增了逐损失梯度审计。小规模 CIFAR-100 smoke 中，rejection 分支梯度范数约为：已知 rejection CE `1.9179`、混合池 uncertainty PU `0.0770`、外部 outlier uncertainty `0.1227`、outlier feature margin `0.0346`。这说明当前已知 CE 更新明显更强，但这只是机制证据，不等于性能提升。
+
+随后进行严格单因素实验：固定语义隔离 CIFAR-100 60/40 划分、teacher、预训练 ResNet、独立 rejection 表示、混合 discovery pool、5 epoch、detector、MC 和 validation-only calibration，只将 `alpha_rejection_known_ce` 从 `1.0` 降为 `0.25`。seed 123 和 seed 44 均完成了对照复核：
+
+| seed | arm | AUROC | FPR95 | OSCR | KS | unknown below known-q95 | known accept | unknown reject |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 123 | CE=1.0 | 0.8865 | 0.4380 | 0.6389 | 0.6202 | 54.30% | 95.08% | 45.30% |
+| 123 | CE=0.25 | 0.8895 | 0.4438 | 0.6463 | 0.6277 | 49.43% | 96.72% | 41.88% |
+| 44 | CE=1.0 | 0.8995 | 0.3832 | 0.6558 | 0.6453 | 50.45% | 93.90% | 54.50% |
+| 44 | CE=0.25 | 0.9033 | 0.3923 | 0.6609 | 0.6528 | 46.48% | 93.78% | 58.38% |
+
+结论：CE 降权在两个 seed 上都使 KS、AUROC、OSCR 和重叠代理略有改善；seed 44 的未知拒绝率也提高，而 seed 123 的未知拒绝率下降。FPR95 在两个 seed 上都略变差，收益幅度较小，且存在指标权衡。因此它是“有希望的损失配比候选”，不是已经解决未知检测的证据；默认配置仍不修改，`0.25` 只保留作消融。实验脚本为 `scripts/run_rejection_ce_balance_pilot.py`，结果目录为 `runs/rejection_ce_balance_s123_ce0p25` 和 `runs/rejection_ce_balance_s44_ce0p25`。
+
+下一步先检查中间权重 `0.5` 是否呈现稳定趋势；若 FPR95 和未知拒绝率仍无改善，则停止继续微调 CE，转向更直接的类条件未知边界监督，并继续使用多 seed、分数重叠和已知 utility 联合判断。任何仅提高未知拒绝率但增加已知误拒绝的方案都不作为改进。
+### 2026-10-14: rejection CE 分阶段衰减实验
+
+静态 rejection CE 权重在两个 seed 上显示了轻微但相互冲突的信号，因此新增了可选的分阶段调度：前期保持已知 rejection CE，后期线性衰减，让未知边界监督获得更大的相对影响。新增参数为 `--rejection-known-ce-decay-start-epoch`、`--rejection-known-ce-decay-epochs` 和 `--rejection-known-ce-final-scale`；默认参数下 scale 恒为 `1.0`，不会改变历史流程。
+
+本轮固定 seed=44 的语义隔离 CIFAR-100 60/40 划分、teacher、预训练 student、rejection 表示、混合池、5 epochs、detector、MC 和 validation-only calibration，只将 CE 从 epoch 3 开始由 `1.0` 衰减到 `0.25`，实际记录的 scale 为 `[1.0, 1.0, 0.625, 0.25, 0.25]`：
+
+| 方法 | AUROC | FPR95 | OSCR | KS | 未知低于已知 q95 | 已知接受率 | 未知拒绝率 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 静态 CE=1.0 | 0.8995 | 0.3832 | 0.6558 | 0.6453 | 50.45% | 93.90% | 54.50% |
+| 静态 CE=0.5 | 0.8966 | 0.3777 | 0.6599 | 0.6357 | 51.53% | 95.10% | 48.18% |
+| 静态 CE=0.25 | 0.9033 | 0.3923 | 0.6609 | 0.6528 | 46.48% | 93.78% | 58.38% |
+| 分阶段 1.0→0.25 | 0.8969 | 0.3968 | 0.6687 | 0.6475 | 52.63% | 94.98% | 47.45% |
+
+结论：分阶段方案虽然 OSCR 最高，但 FPR95、分数重叠和未知拒绝率均没有改善，不能作为默认方法，也不能说明核心问题已解决。CE 调度方向暂时停止，保留为消融功能。下一步回到更直接的类条件未知边界监督，重点审查 PU rejection-boundary loss 的权重、训练 epoch 和 checkpoint 选择是否共同影响结果。完整记录见 [`analysis/rejection_ce_schedule_pilot_20261014.md`](analysis/rejection_ce_schedule_pilot_20261014.md)。
+## 2026-10-15：候选空间实验的 wiring 审计与修正
+
+上一轮 `shared` 与 `rejection_support` 候选空间实验不能作为有效算法结论。审计训练历史发现，两组每个 epoch 的 `feature_candidate_ratio` 都是 `0.0`，但 `discovery_rejection_boundary` 非零。原因是实验脚本使用了 `alpha_discovery_rejection_boundary`（完整混合池的 PU boundary loss），而当前代码中真正读取 `feature_candidate_masks` 的 rejection 边界路径是 `alpha_discovery_rejection_knn_boundary`。因此旧实验只是保留作 wiring 审计记录，不能解释为候选空间方法有效或无效。
+
+已修正 [`scripts/run_rejection_boundary_candidate_space_control.py`](scripts/run_rejection_boundary_candidate_space_control.py)：现在只启用 `alpha_discovery_rejection_knn_boundary=0.1`，关闭独立的 PU boundary 项，并使用新的输出目录重新实验。下一次比较只改变 `discovery_feature_candidate_space`，固定 seed=44、4 epochs、CIFAR-100 semantic-isolated 60/40、matched mixed pool、known prior=0.2、teacher/student 初始化、检测器和 95% known-coverage 校准。实验必须先确认两组的 `feature_candidate_ratio` 与 `discovery_rejection_knn_boundary` 均非零，再比较 AUROC、FPR95、OSCR、已知效用、固定覆盖率未知拒绝率、KS 和 score overlap。
+
+详细审计见 [`analysis/candidate_space_wiring_audit_20261015.md`](analysis/candidate_space_wiring_audit_20261015.md)。本次检查说明：参数出现在配置文件中不等于对应损失实际生效；以后每个算法实验都要同时核对训练历史中的激活比例和损失值。
+
+### 2026-10-16：修正 wiring 后的候选空间配对实验
+
+修正后的候选空间实验已经完成。两组均实际启用了 `alpha_discovery_rejection_knn_boundary=0.1`，训练历史中的 `feature_candidate_ratio` 和 `discovery_rejection_knn_boundary` 均非零，因此这次结果可以用于判断 `shared` 与 `rejection_support`，不再属于上一轮的 wiring 失效实验。
+
+| 候选空间 | AUROC | FPR95 | OSCR | known accept | unknown reject | KS | unknown below known-q95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| shared | 0.89230 | 0.38083 | 0.65442 | 95.83% | 42.38% | 0.62450 | 52.75% |
+| rejection_support | 0.89266 | 0.39783 | 0.65808 | 94.57% | 47.80% | 0.63875 | 55.13% |
+
+`rejection_support` 虽然让报告阈值下未知拒绝率提高 5.43 个百分点，但已知接受率下降 1.27 个百分点；AUROC 几乎不变，FPR95 和 score overlap 变差，均值/中位数分数间隔缩小。因此不能把它判定为解决核心重叠问题的有效方法，也不修改默认候选空间。它最多说明 rejection-support 具有少量互补信号，后续若继续研究必须先固定独立验证集上的 support 半径和边界权重，并用多 seed 同时检查排序、分离、已知 utility 和固定覆盖率拒绝率。
+
+本轮结论和完整协议见 [`analysis/rejection_knn_candidate_space_control_s44_20261016.md`](analysis/rejection_knn_candidate_space_control_s44_20261016.md)。当前候选空间方向暂时停止继续扫描，下一步回到共享 encoder 的类条件局部 support 几何，重点分析 semantic-near unknown 的误接收和 support 半径是否可靠。

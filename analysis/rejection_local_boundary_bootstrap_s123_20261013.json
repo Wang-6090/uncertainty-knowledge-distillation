@@ -1,0 +1,41 @@
+{
+  "warning": "Retrospective test-label diagnostic only; not for model or hyperparameter selection.",
+  "baseline": {
+    "auroc": 0.8798630833333333,
+    "exact95_known_threshold": 4.27940559387207,
+    "known_acceptance": 0.9501666666666667,
+    "unknown_rejection_at_exact95_known_coverage": 0.4515,
+    "accepted_known_classification_accuracy": 0.6560252587265392,
+    "all_known_classification_accuracy": 0.6383333333333333
+  },
+  "treatment": {
+    "auroc": 0.8782672083333333,
+    "exact95_known_threshold": 4.0680060386657715,
+    "known_acceptance": 0.9501666666666667,
+    "unknown_rejection_at_exact95_known_coverage": 0.4165,
+    "accepted_known_classification_accuracy": 0.6474302753902824,
+    "all_known_classification_accuracy": 0.6318333333333334
+  },
+  "paired_bootstrap": {
+    "replicates": 2000,
+    "seed": 20261013,
+    "intervals": {
+      "auroc": {
+        "mean_difference_treatment_minus_baseline": -0.0016281478958333343,
+        "percentile_95_ci": [
+          -0.006010843750000055,
+          0.002547835416666621
+        ],
+        "fraction_bootstraps_treatment_better": 0.236
+      },
+      "unknown_rejection_at_exact95_known_coverage": {
+        "mean_difference_treatment_minus_baseline": -0.0311875,
+        "percentile_95_ci": [
+          -0.06024999999999997,
+          -0.0010000000000000009
+        ],
+        "fraction_bootstraps_treatment_better": 0.017
+      }
+    }
+  }
+}
