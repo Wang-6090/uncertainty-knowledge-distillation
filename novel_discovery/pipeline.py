@@ -48,12 +48,15 @@ from .losses import (
     supervised_contrastive_loss,
     uncertainty_alignment_loss,
     weighted_energy_margin_loss,
+    weighted_unknown_bce,
     unknown_feature_margin_loss,
     pu_unknown_feature_margin_loss,
     unknown_feature_separation_loss,
     unknown_feature_boundary_loss,
     pu_unknown_feature_boundary_loss,
     knn_support_boundary_loss,
+    pu_knn_support_boundary_loss,
+    selection_conditional_known_prior,
     objectosphere_loss,
     uncertainty_separation_loss,
     uncertainty_ranking_loss,
@@ -185,6 +188,10 @@ def compute_encoder_gradient_diagnostics(losses, encoder_parameters):
         ("ce", "discovery_uncertainty_pu"),
         ("kd", "discovery_uncertainty_pu"),
         ("supcon", "discovery_uncertainty_pu"),
+        ("ce", "discovery_knn_boundary"),
+        ("kd", "discovery_knn_boundary"),
+        ("supcon", "discovery_knn_boundary"),
+        ("discovery_uncertainty_pu", "discovery_knn_boundary"),
         ("ce", "discovery_feature_margin"),
         ("ce", "discovery_uncertainty_feature_margin"),
     ):
@@ -383,6 +390,79 @@ def synthesize_gaussian_virtual_outliers(
     return class_mean + float(tail_scale) * direction * class_std
 
 
+def synthesize_interclass_virtual_outliers(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    mix_low: float = 0.35,
+    mix_high: float = 0.65,
+    radial_scale: float = 1.0,
+    partner_strategy: str = "random",
+    detach_source: bool = True,
+) -> torch.Tensor:
+    """Create boundary-focused virtual outliers by mixing different classes.
+
+    The original VOS-style paths generate a tail from one known class. This
+    variant samples a partner from a different known class and places a
+    virtual feature between the two normalized embeddings. The generated
+    point has no class label and is trained by the existing energy/uniform
+    outlier objective. ``nearest_class`` selects the closest different class
+    centroid in the current batch, concentrating the synthetic points near
+    observed class boundaries instead of using unrelated random pairs.
+    """
+    if features.ndim != 2 or labels.ndim != 1 or labels.numel() != features.size(0):
+        raise ValueError("features and labels must be aligned 2-D/1-D tensors")
+    if features.size(0) == 0:
+        return features.new_empty(features.shape)
+    if float(mix_low) <= 0.0 or float(mix_high) >= 1.0 or mix_low > mix_high:
+        raise ValueError("mix range must satisfy 0 < mix_low <= mix_high < 1")
+    if float(radial_scale) <= 0.0:
+        raise ValueError("radial_scale must be positive")
+    partner_strategy = str(partner_strategy).strip().lower()
+    if partner_strategy not in {"random", "nearest_class"}:
+        raise ValueError("partner_strategy must be random or nearest_class")
+    if torch.unique(labels).numel() < 2:
+        raise ValueError("inter-class virtual outliers require at least two labels")
+
+    # The virtual point is an auxiliary target.  By default, do not let its
+    # construction backpropagate through real known features: otherwise the
+    # encoder can reduce VOS loss by moving the source representations rather
+    # than learning a boundary that transfers to real unknowns.  The legacy
+    # behavior remains available explicitly for ablations.
+    source_features = features.detach() if detach_source else features
+    normalized = F.normalize(source_features, dim=-1)
+    norms = source_features.norm(dim=-1, keepdim=True).clamp_min(1e-4)
+    if partner_strategy == "random":
+        partner_indices = []
+        for index in range(features.size(0)):
+            candidates = torch.nonzero(labels != labels[index], as_tuple=False).flatten()
+            choice = torch.randint(candidates.numel(), (1,), device=features.device)
+            partner_indices.append(candidates[choice].squeeze(0))
+        partner_indices = torch.stack(partner_indices)
+    else:
+        unique_labels = torch.unique(labels, sorted=True)
+        class_means = torch.stack(
+            [normalized[labels == class_label].mean(dim=0) for class_label in unique_labels]
+        )
+        class_means = F.normalize(class_means, dim=-1)
+        class_similarity = class_means @ class_means.T
+        class_similarity.fill_diagonal_(-float("inf"))
+        nearest_class_indices = class_similarity.argmax(dim=1)
+        source_class_indices = torch.searchsorted(unique_labels, labels)
+        partner_labels = unique_labels[nearest_class_indices[source_class_indices]]
+        partner_indices = []
+        for partner_label in partner_labels:
+            candidates = torch.nonzero(labels == partner_label, as_tuple=False).flatten()
+            choice = torch.randint(candidates.numel(), (1,), device=features.device)
+            partner_indices.append(candidates[choice].squeeze(0))
+        partner_indices = torch.stack(partner_indices)
+    partner = normalized[partner_indices]
+    mix = torch.empty(features.size(0), 1, device=features.device, dtype=features.dtype)
+    mix.uniform_(float(mix_low), float(mix_high))
+    direction = F.normalize((1.0 - mix) * normalized + mix * partner, dim=-1)
+    target_norm = 0.5 * (norms + norms[partner_indices])
+    return direction * target_norm * float(radial_scale)
+
+
 def _rank_normalize(score: torch.Tensor) -> torch.Tensor:
     """Map a 1D score to [0, 1] ranks while preserving high-risk ordering."""
     if score.numel() <= 1:
@@ -526,6 +606,264 @@ def select_support_distance_candidates(
     mask = torch.zeros(batch_size, dtype=torch.bool, device=features.device)
     mask[indices] = True
     return mask
+
+
+@torch.no_grad()
+def select_support_boundary_candidates(
+    features: torch.Tensor,
+    support_bank: dict,
+    ratio: float = 0.25,
+    k: int = 5,
+) -> torch.Tensor:
+    """Select samples closest to the estimated known-support boundary.
+
+    The distance selector above deliberately chooses samples far outside all
+    known supports.  This selector instead targets semantic-near samples by
+    ranking the absolute distance from the nearest class support radius and
+    slightly preferring points just outside that boundary.
+    """
+    batch_size = int(features.size(0))
+    if batch_size == 0 or ratio <= 0.0:
+        return torch.zeros(batch_size, dtype=torch.bool, device=features.device)
+    boundary_score = support_boundary_candidate_scores(features, support_bank, k=k)
+    count = max(1, min(batch_size, int(np.ceil(batch_size * float(ratio)))))
+    indices = torch.topk(boundary_score, k=count, largest=True).indices
+    mask = torch.zeros(batch_size, dtype=torch.bool, device=features.device)
+    mask[indices] = True
+    return mask
+
+
+@torch.no_grad()
+def support_boundary_candidate_scores(
+    features: torch.Tensor,
+    support_bank: dict,
+    k: int = 5,
+) -> torch.Tensor:
+    """Return the deterministic support-boundary ranking used for mining.
+
+    Keeping the ranking separate lets a cross-view union use the same score
+    to enforce a fixed candidate budget. This remains label-free: the bank
+    contains only labelled-known support features.
+    """
+    batch_size = int(features.size(0))
+    if batch_size == 0:
+        return torch.empty(0, device=features.device, dtype=torch.float32)
+    if not support_bank or "features_by_class" not in support_bank:
+        raise ValueError("support-boundary candidate selection requires a support bank")
+    banks = support_bank["features_by_class"]
+    radii = support_bank.get("radii")
+    if radii is None or len(banks) != int(radii.numel()):
+        raise ValueError("support bank must contain one radius per class bank")
+    query = F.normalize(features.detach().float(), dim=-1)
+    relative_distances = []
+    for class_index, bank in enumerate(banks):
+        if bank.numel() == 0:
+            continue
+        normalized_bank = F.normalize(bank.detach().to(query), dim=-1)
+        similarities = query @ normalized_bank.T
+        neighbor_count = min(max(int(k), 1), normalized_bank.size(0))
+        distance = 1.0 - similarities.topk(neighbor_count, dim=-1).values.mean(dim=-1)
+        radius = radii[class_index].detach().to(query).clamp_min(1e-4)
+        relative_distances.append(distance / radius)
+    if not relative_distances:
+        raise ValueError("support bank contains no non-empty class feature bank")
+    nearest_relative_distance = torch.stack(relative_distances, dim=1).min(dim=1).values
+    # Boundary proximity is primary.  The tiny signed term breaks ties in
+    # favour of points just outside the support.
+    boundary_score = -torch.abs(nearest_relative_distance - 1.0)
+    return boundary_score + 1e-3 * (nearest_relative_distance - 1.0)
+
+
+@torch.no_grad()
+def select_single_view_discovery_candidates(
+    output: dict,
+    *,
+    candidate_space: str,
+    ratio: float,
+    mode: str,
+    prototypes: torch.Tensor,
+    support_bank: dict | None = None,
+    k: int = 5,
+) -> torch.Tensor:
+    """Apply one exact candidate-selection rule to one model output.
+
+    The selection-conditional PU ablation uses a single view on both the
+    mixed and known sides. Cross-view intersection is intentionally handled
+    by the caller and is not silently approximated here.
+    """
+    if candidate_space == "shared":
+        return select_discovery_candidates(
+            output["logits"],
+            output.get("uncertainty"),
+            ratio=ratio,
+            mode=mode,
+            features=output.get("features"),
+            prototypes=prototypes,
+        )
+    if candidate_space == "rejection_support":
+        if support_bank is None or output.get("rejection_features") is None:
+            raise ValueError(
+                "rejection-support single-view selection requires a rejection "
+                "feature and support bank"
+            )
+        return select_support_distance_candidates(
+            output["rejection_features"], support_bank, ratio=ratio, k=k
+        )
+    if candidate_space in {
+        "shared_boundary",
+        "shared_boundary_consensus",
+        "shared_boundary_soft_consensus",
+    }:
+        if support_bank is None:
+            raise ValueError(
+                "shared-boundary single-view selection requires a support bank"
+            )
+        mask = select_support_boundary_candidates(
+            output["features"], support_bank, ratio=ratio, k=k
+        )
+        if candidate_space == "shared_boundary_consensus":
+            mask = mask & select_discovery_candidates(
+                output["logits"],
+                output.get("uncertainty"),
+                ratio=ratio,
+                mode=mode,
+                features=output.get("features"),
+                prototypes=prototypes,
+            )
+        return mask
+    raise ValueError(f"Unsupported discovery feature candidate space: {candidate_space}")
+
+
+@torch.no_grad()
+def select_prototype_boundary_candidates(
+    features: torch.Tensor,
+    prototypes: torch.Tensor,
+    radii: torch.Tensor,
+    ratio: float = 0.25,
+) -> torch.Tensor:
+    """Select unlabeled samples close to a known prototype support boundary.
+
+    This is a lightweight boundary-mining selector for rejector ablations. It
+    uses only known-class prototype centers and radii estimated from known
+    samples. Unlike entropy selection, it deliberately targets semantic-near
+    points that may still receive confident known-class predictions.
+    """
+    batch_size = int(features.size(0))
+    if batch_size == 0 or ratio <= 0.0:
+        return torch.zeros(batch_size, dtype=torch.bool, device=features.device)
+    if prototypes.ndim != 2 or radii.ndim != 1 or prototypes.size(0) != radii.numel():
+        raise ValueError("prototype boundary centers and radii must be aligned")
+    query = F.normalize(features.detach().float(), dim=-1)
+    centers = F.normalize(prototypes.detach().to(query), dim=-1)
+    class_distances = 1.0 - query @ centers.T
+    relative = class_distances / radii.detach().to(query).clamp_min(1e-4)
+    nearest_relative = relative.min(dim=1).values
+    score = -torch.abs(nearest_relative - 1.0)
+    score = score + 1e-3 * (nearest_relative - 1.0)
+    count = max(1, min(batch_size, int(np.ceil(batch_size * float(ratio)))))
+    indices = torch.topk(score, k=count, largest=True).indices
+    mask = torch.zeros(batch_size, dtype=torch.bool, device=features.device)
+    mask[indices] = True
+    return mask
+
+
+@torch.no_grad()
+def select_confident_boundary_candidates(
+    features: torch.Tensor,
+    logits: torch.Tensor,
+    prototypes: torch.Tensor,
+    radii: torch.Tensor,
+    ratio: float = 0.25,
+    confidence_weight: float = 0.5,
+) -> torch.Tensor:
+    """Mine confident samples close to their predicted known-class boundary.
+
+    Semantic-near unknowns can receive a confident known prediction, so an
+    entropy-only gate tends to miss exactly the difficult cases of interest.
+    This selector combines the predicted-class relative support distance with
+    the prediction confidence.  It is a candidate mining heuristic only: the
+    selected samples remain unlabeled and must not be interpreted as unknown
+    labels.
+    """
+    batch_size = int(features.size(0))
+    if batch_size == 0 or ratio <= 0.0:
+        return torch.zeros(batch_size, dtype=torch.bool, device=features.device)
+    if logits.ndim != 2 or logits.size(0) != batch_size:
+        raise ValueError("confident-boundary logits must align with features")
+    if prototypes.ndim != 2 or radii.ndim != 1:
+        raise ValueError("prototype boundary centers and radii must be aligned")
+    if prototypes.size(0) != radii.numel() or logits.size(1) != prototypes.size(0):
+        raise ValueError("confident-boundary class dimensions must be aligned")
+    if not 0.0 <= float(confidence_weight) <= 1.0:
+        raise ValueError("confidence_weight must be in [0, 1]")
+
+    query = F.normalize(features.detach().float(), dim=-1)
+    centers = F.normalize(prototypes.detach().to(query), dim=-1)
+    class_distances = 1.0 - query @ centers.T
+    predicted_class = logits.detach().argmax(dim=-1)
+    predicted_distance = class_distances.gather(1, predicted_class[:, None]).squeeze(1)
+    predicted_relative = predicted_distance / radii.detach().to(query)[predicted_class].clamp_min(1e-4)
+
+    # Use bounded scores so exact/near ties at the boundary do not acquire
+    # arbitrary ordering from argsort. The boundary term peaks at relative
+    # distance 1; confidence selects among otherwise similarly placed points.
+    boundary_score = torch.reciprocal(1.0 + torch.abs(predicted_relative - 1.0))
+    confidence_score = logits.detach().softmax(dim=-1).max(dim=-1).values
+    score = (
+        (1.0 - float(confidence_weight)) * boundary_score
+        + float(confidence_weight) * confidence_score
+    )
+    count = max(1, min(batch_size, int(np.ceil(batch_size * float(ratio)))))
+    indices = torch.topk(score, k=count, largest=True).indices
+    mask = torch.zeros(batch_size, dtype=torch.bool, device=features.device)
+    mask[indices] = True
+    return mask
+
+
+def aggregate_cross_view_candidate_masks(
+    first_mask: torch.Tensor,
+    second_mask: torch.Tensor,
+    mode: str = "intersection",
+    first_score: torch.Tensor | None = None,
+    second_score: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Combine two label-free candidate masks from paired augmentations.
+
+    The intersection is the historical conservative gate. The union keeps a
+    sample when either deterministic view identifies it as a candidate; this
+    is useful when the intersection is known to reduce boundary coverage.
+    ``union_budgeted`` ranks the union by the supplied per-view scores but
+    keeps exactly the intersection cardinality, isolating coverage from
+    candidate-budget effects.
+    The function intentionally does not inspect labels or scores.
+    """
+    if first_mask.shape != second_mask.shape:
+        raise ValueError("cross-view candidate masks must have matching shapes")
+    if first_mask.dtype != torch.bool or second_mask.dtype != torch.bool:
+        raise ValueError("cross-view candidate masks must be boolean")
+    if mode == "intersection":
+        return first_mask & second_mask
+    if mode == "union":
+        return first_mask | second_mask
+    if mode == "union_budgeted":
+        union = first_mask | second_mask
+        budget = int((first_mask & second_mask).sum().item())
+        if budget <= 0 or not union.any():
+            return torch.zeros_like(union)
+        if first_score is None or second_score is None:
+            ranking = first_mask.to(dtype=torch.float32) + second_mask.to(
+                dtype=torch.float32
+            )
+        else:
+            if first_score.shape != first_mask.shape or second_score.shape != second_mask.shape:
+                raise ValueError("cross-view candidate scores must match mask shapes")
+            ranking = torch.maximum(first_score.detach(), second_score.detach())
+        ranking = ranking.masked_fill(~union, float("-inf"))
+        indices = torch.topk(ranking, k=min(budget, int(union.sum().item()))).indices
+        result = torch.zeros_like(union)
+        result[indices] = True
+        return result
+    raise ValueError(f"Unsupported cross-view candidate aggregation: {mode}")
 
 
 @torch.no_grad()
@@ -736,6 +1074,32 @@ def compute_discovery_candidate_weights(
     weights[mask] = candidate_weight[mask].clamp(0.0, 1.0)
     selected_agreement = neighbor_agreement[mask].mean().item() if mask.any() else 0.0
     return mask, weights, selected_agreement
+
+
+@torch.no_grad()
+def compute_discovery_consensus_weights(
+    logits: torch.Tensor,
+    uncertainty: torch.Tensor | None = None,
+    floor: float = 0.25,
+) -> torch.Tensor:
+    """Return bounded label-free risk weights for selected mixed-pool samples."""
+    if not 0.0 <= float(floor) <= 1.0:
+        raise ValueError("floor must be in [0, 1]")
+    if logits.ndim != 2 or logits.size(0) == 0:
+        return logits.new_zeros((logits.size(0),), dtype=torch.float32)
+    probs = logits.softmax(dim=-1)
+    entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=-1)
+    max_softmax_risk = 1.0 - probs.max(dim=-1).values
+    energy_risk = -torch.logsumexp(logits, dim=-1)
+    components = [entropy, max_softmax_risk, energy_risk]
+    if uncertainty is not None:
+        components.append(uncertainty.detach().float())
+    risk = torch.stack(
+        [_rank_normalize(item) for item in components], dim=0
+    ).mean(dim=0)
+    # Unlike the hard consensus intersection, every boundary candidate remains
+    # trainable; low classifier risk only reduces its contribution.
+    return (float(floor) + (1.0 - float(floor)) * risk).clamp(float(floor), 1.0)
 
 
 @torch.no_grad()
@@ -1210,10 +1574,14 @@ def train_one_epoch_student(
     alpha_pseudo: float = 0.0,
     alpha_energy: float = 0.0,
     alpha_vos: float = 0.0,
+    alpha_vos_rejection: float = 0.0,
     vos_mode: str = "gaussian",
     vos_gaussian_stats: Dict[str, torch.Tensor] | None = None,
     vos_tail_scale: float = 1.5,
     vos_noise_scale: float = 0.25,
+    vos_interclass_pairing: str = "random",
+    vos_detach_source: bool = True,
+    vos_boundary_fraction: float = 1.0,
     vos_uniform_weight: float = 0.25,
     pseudo_mode: str = "strong",
     pseudo_feature_noise: float = 0.05,
@@ -1257,7 +1625,9 @@ def train_one_epoch_student(
     discovery_feature_separation_temperature: float = 0.1,
     discovery_feature_candidate_gating: bool = False,
     discovery_cross_view_gating: bool = False,
+    discovery_cross_view_aggregation: str = "intersection",
     discovery_feature_candidate_space: str = "shared",
+    discovery_feature_candidate_soft_floor: float = 0.25,
     discovery_pool_mode: str = "unknown",
     alpha_discovery_boundary: float = 0.0,
     discovery_boundary_mode: str = "pure",
@@ -1274,6 +1644,10 @@ def train_one_epoch_student(
     discovery_knn_k: int = 5,
     discovery_knn_margin: float = 0.02,
     discovery_knn_soft_weighting: bool = False,
+    discovery_knn_risk: str = "pure",
+    discovery_knn_known_prior: float = 0.2,
+    discovery_knn_softness: float = 0.05,
+    discovery_knn_selection_conditional: bool = False,
     discovery_knn_aggregation: str = "max",
     discovery_knn_temperature: float = 0.1,
     alpha_discovery_uncertainty_separation: float = 0.0,
@@ -1421,6 +1795,7 @@ def train_one_epoch_student(
     pseudo_meter = AverageMeter()
     energy_meter = AverageMeter()
     vos_meter = AverageMeter()
+    vos_rejection_meter = AverageMeter()
     discovery_meter = AverageMeter()
     discovery_unknown_meter = AverageMeter()
     discovery_energy_meter = AverageMeter()
@@ -1459,6 +1834,13 @@ def train_one_epoch_student(
     discovery_known_anchor_known_fraction_meter = AverageMeter()
     feature_candidate_ratio_meter = AverageMeter()
     feature_candidate_weight_mean_meter = AverageMeter()
+    feature_candidate_known_fraction_meter = AverageMeter()
+    feature_candidate_unknown_recall_meter = AverageMeter()
+    feature_candidate_known_selection_rate_meter = AverageMeter()
+    feature_candidate_view_agreement_meter = AverageMeter()
+    discovery_knn_mixed_selection_rate_meter = AverageMeter()
+    discovery_knn_known_selection_rate_meter = AverageMeter()
+    discovery_knn_effective_prior_meter = AverageMeter()
     joint_meter = AverageMeter()
     joint_consistency_meter = AverageMeter()
     joint_balance_meter = AverageMeter()
@@ -1491,6 +1873,9 @@ def train_one_epoch_student(
     gradient_audit_sums = {}
     gradient_audit_batches = 0
     encoder_parameters = list(student.encoder.parameters()) if audit_loss_gradients else []
+    classifier_parameters = (
+        list(student.classifier.parameters()) if audit_loss_gradients else []
+    )
     rejection_parameters = []
     if audit_loss_gradients:
         for module_name in (
@@ -1605,7 +1990,11 @@ def train_one_epoch_student(
             s_out["logits"], pseudo_logits, margin=energy_margin, temperature=energy_temperature
         )
         loss_vos = s_out["logits"].new_tensor(0.0)
+        loss_vos_virtual_path = s_out["logits"].new_tensor(0.0)
         if alpha_vos > 0.0:
+            boundary_fraction = float(vos_boundary_fraction)
+            if not 0.0 < boundary_fraction <= 1.0:
+                raise ValueError("vos_boundary_fraction must be in (0, 1]")
             if vos_mode == "gaussian" and vos_gaussian_stats is not None:
                 virtual_features = synthesize_gaussian_virtual_outliers(
                     labels,
@@ -1621,17 +2010,49 @@ def train_one_epoch_student(
                     tail_scale=vos_tail_scale,
                     noise_scale=vos_noise_scale,
                 )
+            elif vos_mode == "interclass_mix":
+                virtual_features = synthesize_interclass_virtual_outliers(
+                    s_out["features"],
+                    labels,
+                    radial_scale=1.0,
+                    partner_strategy=vos_interclass_pairing,
+                    detach_source=vos_detach_source,
+                )
             else:
                 raise ValueError(
                     "Gaussian VOS requires vos_gaussian_stats; use batch_center "
-                    "for the online fallback."
+                    "or interclass_mix for online alternatives."
                 )
-            virtual_logits, _ = pseudo_forward_from_features(
+            virtual_logits, virtual_uncertainty = pseudo_forward_from_features(
                 student, virtual_features, stochastic=True
             )
-            loss_vos = energy_margin_loss(
+            if boundary_fraction < 1.0:
+                true_logits = s_out["logits"].gather(1, labels.view(-1, 1)).squeeze(1)
+                competitor_logits = s_out["logits"].clone()
+                competitor_logits.scatter_(1, labels.view(-1, 1), -float("inf"))
+                known_margin = true_logits - competitor_logits.max(dim=1).values
+                keep_count = max(1, int(round(boundary_fraction * known_margin.numel())))
+                keep_indices = torch.topk(
+                    known_margin.detach(), k=keep_count, largest=False
+                ).indices
+                boundary_weight = torch.zeros_like(known_margin)
+                boundary_weight[keep_indices] = 1.0
+            else:
+                boundary_weight = None
+            loss_vos = weighted_energy_margin_loss(
                 s_out["logits"],
                 virtual_logits,
+                outlier_weight=boundary_weight,
+                margin=energy_margin,
+                temperature=energy_temperature,
+            )
+            # Isolate the gradient that flows through construction of virtual
+            # features. Detaching known logits removes the separate, real-known
+            # branch of the energy-margin objective from this diagnostic.
+            loss_vos_virtual_path = weighted_energy_margin_loss(
+                s_out["logits"].detach(),
+                virtual_logits,
+                outlier_weight=boundary_weight,
                 margin=energy_margin,
                 temperature=energy_temperature,
             )
@@ -1639,6 +2060,21 @@ def train_one_epoch_student(
                 loss_vos = loss_vos + float(vos_uniform_weight) * outlier_exposure_uniform_loss(
                     virtual_logits
                 )
+                loss_vos_virtual_path = loss_vos_virtual_path + (
+                    float(vos_uniform_weight)
+                    * outlier_exposure_uniform_loss(virtual_logits)
+                )
+            # VOS candidates are auxiliary unknown-like features.  The energy
+            # term above only trains the classifier head; this optional term
+            # sends an explicit signal to the rejector used by detection.
+            # Keep it disabled by default because synthetic candidates are not
+            # guaranteed to be true unknowns.
+            loss_vos_rejection = weighted_unknown_bce(
+                virtual_uncertainty,
+                weight=boundary_weight,
+            )
+        else:
+            loss_vos_rejection = s_out["logits"].new_tensor(0.0)
         angular_mask = (
             s_out["logits"].argmax(dim=-1).eq(labels)
             if angular_correct_only
@@ -1793,6 +2229,14 @@ def train_one_epoch_student(
         discovery_weight_mean = 0.0
         feature_candidate_ratio = 0.0
         feature_candidate_weight_mean = 0.0
+        feature_candidate_known_fraction = 0.0
+        feature_candidate_unknown_recall = 0.0
+        feature_candidate_known_selection_rate = 0.0
+        feature_candidate_view_agreement = 0.0
+        discovery_knn_mixed_selection_rate = 0.0
+        discovery_knn_known_selection_rate = 0.0
+        discovery_knn_effective_prior = float(discovery_knn_known_prior)
+        discovery_knn_known_selection_mask = None
         discovery_uncertainty_feature_margin_weight_mean = 0.0
         discovery_uncertainty_pu_weight_mean = 0.0
         if discovery_iter is not None and (
@@ -2440,6 +2884,8 @@ def train_one_epoch_student(
                 )
             feature_candidate_masks = None
             feature_candidate_weights = None
+            first_feature_candidate_score = None
+            second_feature_candidate_score = None
             if (
                 discovery_feature_candidate_gating
                 and discovery_pool_mode == "mixed"
@@ -2452,6 +2898,11 @@ def train_one_epoch_student(
                     or alpha_discovery_objectosphere > 0.0
                 )
             ):
+                if discovery_knn_selection_conditional and discovery_cross_view_gating:
+                    raise ValueError(
+                        "selection-conditional PU requires single-view candidate "
+                        "selection; disable --discovery-cross-view-gating"
+                    )
                 if discovery_selection_model is None:
                     first_feature_selection = first_out
                     second_feature_selection = second_out
@@ -2459,7 +2910,21 @@ def train_one_epoch_student(
                     with torch.no_grad():
                         first_feature_selection = discovery_selection_model(first_view)
                         second_feature_selection = discovery_selection_model(second_view)
-                if discovery_feature_candidate_space == "shared":
+                if discovery_knn_selection_conditional:
+                    paired_feature_mask = select_single_view_discovery_candidates(
+                        first_feature_selection,
+                        candidate_space=discovery_feature_candidate_space,
+                        ratio=discovery_select_ratio,
+                        mode=discovery_select_mode,
+                        prototypes=student.classifier.weight,
+                        support_bank=(
+                            rejection_knn_support
+                            if discovery_feature_candidate_space == "rejection_support"
+                            else discovery_knn_support
+                        ),
+                        k=discovery_knn_k,
+                    )
+                elif discovery_feature_candidate_space == "shared":
                     paired_feature_mask = select_discovery_candidates(
                         0.5 * (
                             first_feature_selection["logits"]
@@ -2493,6 +2958,58 @@ def train_one_epoch_student(
                         ratio=discovery_select_ratio,
                         k=discovery_knn_k,
                     )
+                elif discovery_feature_candidate_space in {
+                    "shared_boundary",
+                    "shared_boundary_consensus",
+                    "shared_boundary_soft_consensus",
+                }:
+                    if discovery_knn_support is None:
+                        raise ValueError(
+                            "shared-boundary candidate gating requires a known "
+                            "shared-feature support bank"
+                        )
+                    first_feature_candidate_score = support_boundary_candidate_scores(
+                        first_feature_selection["features"],
+                        discovery_knn_support,
+                        k=discovery_knn_k,
+                    )
+                    second_feature_candidate_score = support_boundary_candidate_scores(
+                        second_feature_selection["features"],
+                        discovery_knn_support,
+                        k=discovery_knn_k,
+                    )
+                    paired_feature_mask = select_support_boundary_candidates(
+                        0.5
+                        * (
+                            first_feature_selection["features"]
+                            + second_feature_selection["features"]
+                        ),
+                        discovery_knn_support,
+                        ratio=discovery_select_ratio,
+                        k=discovery_knn_k,
+                    )
+                    if discovery_feature_candidate_space == "shared_boundary_consensus":
+                        consensus_mask = select_discovery_candidates(
+                            0.5
+                            * (
+                                first_feature_selection["logits"]
+                                + second_feature_selection["logits"]
+                            ),
+                            0.5
+                            * (
+                                first_feature_selection["uncertainty"]
+                                + second_feature_selection["uncertainty"]
+                            ),
+                            ratio=discovery_select_ratio,
+                            mode=discovery_select_mode,
+                            features=0.5
+                            * (
+                                first_feature_selection["features"]
+                                + second_feature_selection["features"]
+                            ),
+                            prototypes=student.classifier.weight,
+                        )
+                        paired_feature_mask = paired_feature_mask & consensus_mask
                 else:
                     raise ValueError(
                         "Unsupported discovery feature candidate space: "
@@ -2516,7 +3033,7 @@ def train_one_epoch_student(
                             features=second_feature_selection["features"],
                             prototypes=student.classifier.weight,
                         )
-                    else:
+                    elif discovery_feature_candidate_space == "rejection_support":
                         first_view_mask = select_support_distance_candidates(
                             first_feature_selection["rejection_features"],
                             rejection_knn_support,
@@ -2529,11 +3046,146 @@ def train_one_epoch_student(
                             ratio=discovery_select_ratio,
                             k=discovery_knn_k,
                         )
-                    paired_feature_mask = first_view_mask & second_view_mask
+                    elif discovery_feature_candidate_space in {
+                        "shared_boundary",
+                        "shared_boundary_soft_consensus",
+                    }:
+                        first_view_mask = select_support_boundary_candidates(
+                            first_feature_selection["features"],
+                            discovery_knn_support,
+                            ratio=discovery_select_ratio,
+                            k=discovery_knn_k,
+                        )
+                        second_view_mask = select_support_boundary_candidates(
+                            second_feature_selection["features"],
+                            discovery_knn_support,
+                            ratio=discovery_select_ratio,
+                            k=discovery_knn_k,
+                        )
+                    else:
+                        first_view_mask = select_support_boundary_candidates(
+                            first_feature_selection["features"],
+                            discovery_knn_support,
+                            ratio=discovery_select_ratio,
+                            k=discovery_knn_k,
+                        ) & select_discovery_candidates(
+                            first_feature_selection["logits"],
+                            first_feature_selection["uncertainty"],
+                            ratio=discovery_select_ratio,
+                            mode=discovery_select_mode,
+                            features=first_feature_selection["features"],
+                            prototypes=student.classifier.weight,
+                        )
+                        second_view_mask = select_support_boundary_candidates(
+                            second_feature_selection["features"],
+                            discovery_knn_support,
+                            ratio=discovery_select_ratio,
+                            k=discovery_knn_k,
+                        ) & select_discovery_candidates(
+                            second_feature_selection["logits"],
+                            second_feature_selection["uncertainty"],
+                            ratio=discovery_select_ratio,
+                            mode=discovery_select_mode,
+                            features=second_feature_selection["features"],
+                            prototypes=student.classifier.weight,
+                        )
+                    paired_feature_mask = aggregate_cross_view_candidate_masks(
+                        first_view_mask,
+                        second_view_mask,
+                        mode=discovery_cross_view_aggregation,
+                        first_score=first_feature_candidate_score,
+                        second_score=second_feature_candidate_score,
+                    )
+                if discovery_knn_selection_conditional:
+                    if discovery_selection_model is None:
+                        known_selection_output = s_out
+                    else:
+                        with torch.no_grad():
+                            known_selection_output = discovery_selection_model(images)
+                    discovery_knn_known_selection_mask = (
+                        select_single_view_discovery_candidates(
+                            known_selection_output,
+                            candidate_space=discovery_feature_candidate_space,
+                            ratio=discovery_select_ratio,
+                            mode=discovery_select_mode,
+                            prototypes=student.classifier.weight,
+                            support_bank=(
+                                rejection_knn_support
+                                if discovery_feature_candidate_space
+                                == "rejection_support"
+                                else discovery_knn_support
+                            ),
+                            k=discovery_knn_k,
+                        )
+                    )
+                    discovery_knn_mixed_selection_rate = float(
+                        paired_feature_mask.float().mean().item()
+                    )
+                    discovery_knn_known_selection_rate = float(
+                        discovery_knn_known_selection_mask.float().mean().item()
+                    )
+                    discovery_knn_effective_prior = float(
+                        selection_conditional_known_prior(
+                            discovery_knn_known_prior,
+                            discovery_knn_known_selection_rate,
+                            discovery_knn_mixed_selection_rate,
+                        ).item()
+                    )
                 # Both augmentations represent the same unlabeled example. The
                 # optional intersection gate trades recall for cleaner pseudo-unknowns.
                 feature_candidate_masks = (paired_feature_mask, paired_feature_mask)
                 feature_candidate_ratio = paired_feature_mask.float().mean().item()
+                if (
+                    discovery_feature_candidate_space
+                    == "shared_boundary_soft_consensus"
+                ):
+                    first_consensus_weights = compute_discovery_consensus_weights(
+                        first_feature_selection["logits"],
+                        first_feature_selection["uncertainty"],
+                        floor=discovery_feature_candidate_soft_floor,
+                    )
+                    second_consensus_weights = compute_discovery_consensus_weights(
+                        second_feature_selection["logits"],
+                        second_feature_selection["uncertainty"],
+                        floor=discovery_feature_candidate_soft_floor,
+                    )
+                    feature_candidate_weights = (
+                        first_consensus_weights[paired_feature_mask],
+                        second_consensus_weights[paired_feature_mask],
+                    )
+                    if paired_feature_mask.any():
+                        feature_candidate_weight_mean = 0.5 * (
+                            feature_candidate_weights[0].mean().item()
+                            + feature_candidate_weights[1].mean().item()
+                        )
+                if discovery_is_known is not None:
+                    # These labels are diagnostics only.  They are never passed
+                    # to a loss, gate, threshold, or optimizer decision.
+                    diagnostic_known = discovery_is_known.to(device).bool()
+                    diagnostic_selected = paired_feature_mask.bool()
+                    known_count = int(diagnostic_known.sum().item())
+                    unknown_mask = ~diagnostic_known
+                    unknown_count = int(unknown_mask.sum().item())
+                    selected_count = int(diagnostic_selected.sum().item())
+                    if selected_count > 0:
+                        feature_candidate_known_fraction = float(
+                            diagnostic_known[diagnostic_selected].float().mean().item()
+                        )
+                    if unknown_count > 0:
+                        feature_candidate_unknown_recall = float(
+                            diagnostic_selected[unknown_mask].float().mean().item()
+                        )
+                    if known_count > 0:
+                        feature_candidate_known_selection_rate = float(
+                            diagnostic_selected[diagnostic_known].float().mean().item()
+                        )
+                if discovery_cross_view_gating:
+                    intersection_count = int((first_view_mask & second_view_mask).sum().item())
+                    union_count = int((first_view_mask | second_view_mask).sum().item())
+                    if union_count > 0:
+                        feature_candidate_view_agreement = float(
+                            intersection_count / union_count
+                        )
                 if discovery_knn_soft_weighting and alpha_discovery_knn_boundary > 0.0:
                     first_soft_mask, first_soft_weights, _ = compute_discovery_candidate_weights(
                         first_feature_selection["logits"],
@@ -2969,8 +3621,24 @@ def train_one_epoch_student(
                 second_knn_weights = None
                 if feature_candidate_weights is not None:
                     first_knn_weights, second_knn_weights = feature_candidate_weights
+                if discovery_knn_risk in {"pure", "naive_mixed"}:
+                    knn_boundary = knn_support_boundary_loss
+                    knn_kwargs = {}
+                else:
+                    knn_boundary = pu_knn_support_boundary_loss
+                    knn_kwargs = {
+                        "known_features": (
+                            s_out["features"][discovery_knn_known_selection_mask]
+                            if discovery_knn_selection_conditional
+                            and discovery_knn_known_selection_mask is not None
+                            else s_out["features"]
+                        ),
+                        "known_prior": discovery_knn_effective_prior,
+                        "risk_mode": discovery_knn_risk,
+                        "softness": discovery_knn_softness,
+                    }
                 loss_discovery_knn_boundary = 0.5 * (
-                    knn_support_boundary_loss(
+                    knn_boundary(
                         first_knn_values,
                         discovery_knn_support["features_by_class"],
                         discovery_knn_support["radii"],
@@ -2979,8 +3647,9 @@ def train_one_epoch_student(
                         sample_weights=first_knn_weights,
                         aggregation=discovery_knn_aggregation,
                         temperature=discovery_knn_temperature,
+                        **knn_kwargs,
                     )
-                    + knn_support_boundary_loss(
+                    + knn_boundary(
                         second_knn_values,
                         discovery_knn_support["features_by_class"],
                         discovery_knn_support["radii"],
@@ -2989,6 +3658,7 @@ def train_one_epoch_student(
                         sample_weights=second_knn_weights,
                         aggregation=discovery_knn_aggregation,
                         temperature=discovery_knn_temperature,
+                        **knn_kwargs,
                     )
                 )
             if alpha_discovery_rejection_knn_boundary > 0.0:
@@ -3017,8 +3687,24 @@ def train_one_epoch_student(
                     first_rejection_knn_weights, second_rejection_knn_weights = (
                         feature_candidate_weights
                     )
+                if discovery_knn_risk in {"pure", "naive_mixed"}:
+                    rejection_knn_boundary = knn_support_boundary_loss
+                    rejection_knn_kwargs = {}
+                else:
+                    rejection_knn_boundary = pu_knn_support_boundary_loss
+                    rejection_knn_kwargs = {
+                        "known_features": (
+                            s_out["rejection_features"][discovery_knn_known_selection_mask]
+                            if discovery_knn_selection_conditional
+                            and discovery_knn_known_selection_mask is not None
+                            else s_out["rejection_features"]
+                        ),
+                        "known_prior": discovery_knn_effective_prior,
+                        "risk_mode": discovery_knn_risk,
+                        "softness": discovery_knn_softness,
+                    }
                 loss_discovery_rejection_knn_boundary = 0.5 * (
-                    knn_support_boundary_loss(
+                    rejection_knn_boundary(
                         first_rejection_knn_values,
                         rejection_knn_support["features_by_class"],
                         rejection_knn_support["radii"],
@@ -3027,8 +3713,9 @@ def train_one_epoch_student(
                         sample_weights=first_rejection_knn_weights,
                         aggregation=discovery_knn_aggregation,
                         temperature=discovery_knn_temperature,
+                        **rejection_knn_kwargs,
                     )
-                    + knn_support_boundary_loss(
+                    + rejection_knn_boundary(
                         second_rejection_knn_values,
                         rejection_knn_support["features_by_class"],
                         rejection_knn_support["radii"],
@@ -3037,6 +3724,7 @@ def train_one_epoch_student(
                         sample_weights=second_rejection_knn_weights,
                         aggregation=discovery_knn_aggregation,
                         temperature=discovery_knn_temperature,
+                        **rejection_knn_kwargs,
                     )
                 )
             if alpha_discovery_uncertainty_separation > 0.0:
@@ -3317,6 +4005,7 @@ def train_one_epoch_student(
             + alpha_pseudo * loss_pseudo
             + alpha_energy * loss_energy
             + alpha_vos * loss_vos
+            + alpha_vos_rejection * loss_vos_rejection
             + alpha_discovery * loss_discovery
             + alpha_discovery_unknown * loss_discovery_unknown
             + alpha_discovery_energy * loss_discovery_energy
@@ -3375,8 +4064,28 @@ def train_one_epoch_student(
                     "discovery_uncertainty_feature_margin": (
                         loss_discovery_uncertainty_feature_margin
                     ),
+                    # The shared-feature kNN boundary term was previously
+                    # omitted from the encoder audit.  Its scalar loss being
+                    # non-zero is not enough to establish that it changes
+                    # the representation: record its actual encoder gradient
+                    # norm and conflicts with the main objectives.
+                    "discovery_knn_boundary": loss_discovery_knn_boundary,
+                    "discovery_boundary": loss_discovery_boundary,
+                    # VOS uses real-known logits as one side of its energy
+                    # margin, so it can update the encoder even when virtual
+                    # source features are detached. The isolated term below
+                    # measures only gradients through synthesized features.
+                    "vos_total_term": alpha_vos * loss_vos,
+                    "vos_virtual_source_path": (
+                        alpha_vos * loss_vos_virtual_path
+                    ),
                 },
                 encoder_parameters,
+            )
+            classifier_gradient_diagnostics = compute_parameter_gradient_diagnostics(
+                {"vos_total_term": alpha_vos * loss_vos},
+                classifier_parameters,
+                prefix="classifier",
             )
             # Audit the actual independent rejection branch separately.  These
             # are weighted loss contributions, so a disabled coefficient is
@@ -3432,6 +4141,7 @@ def train_one_epoch_student(
                         alpha_outlier_rejection_uniform
                         * loss_outlier_rejection_uniform
                     ),
+                    "vos_rejection_term": alpha_vos_rejection * loss_vos_rejection,
                 },
                 rejection_parameters,
                 prefix="rejection",
@@ -3452,6 +4162,7 @@ def train_one_epoch_student(
                 ),
             )
             gradient_diagnostics.update(rejection_gradient_diagnostics)
+            gradient_diagnostics.update(classifier_gradient_diagnostics)
             gradient_audit_batches += 1
             for name, value in gradient_diagnostics.items():
                 gradient_audit_sums[name] = gradient_audit_sums.get(name, 0.0) + value
@@ -3554,6 +4265,7 @@ def train_one_epoch_student(
         pseudo_meter.update(loss_pseudo.item(), images.size(0))
         energy_meter.update(loss_energy.item(), images.size(0))
         vos_meter.update(loss_vos.item(), images.size(0))
+        vos_rejection_meter.update(loss_vos_rejection.item(), images.size(0))
         discovery_meter.update(loss_discovery.item(), images.size(0))
         discovery_unknown_meter.update(loss_discovery_unknown.item(), images.size(0))
         discovery_energy_meter.update(loss_discovery_energy.item(), images.size(0))
@@ -3626,6 +4338,27 @@ def train_one_epoch_student(
         feature_candidate_weight_mean_meter.update(
             feature_candidate_weight_mean, images.size(0)
         )
+        feature_candidate_known_fraction_meter.update(
+            feature_candidate_known_fraction, images.size(0)
+        )
+        feature_candidate_unknown_recall_meter.update(
+            feature_candidate_unknown_recall, images.size(0)
+        )
+        feature_candidate_known_selection_rate_meter.update(
+            feature_candidate_known_selection_rate, images.size(0)
+        )
+        feature_candidate_view_agreement_meter.update(
+            feature_candidate_view_agreement, images.size(0)
+        )
+        discovery_knn_mixed_selection_rate_meter.update(
+            discovery_knn_mixed_selection_rate, images.size(0)
+        )
+        discovery_knn_known_selection_rate_meter.update(
+            discovery_knn_known_selection_rate, images.size(0)
+        )
+        discovery_knn_effective_prior_meter.update(
+            discovery_knn_effective_prior, images.size(0)
+        )
         joint_meter.update(loss_joint_discovery.item(), images.size(0))
         joint_consistency_meter.update(joint_consistency.item(), images.size(0))
         joint_balance_meter.update(joint_balance.item(), images.size(0))
@@ -3697,6 +4430,7 @@ def train_one_epoch_student(
         "pseudo": pseudo_meter.avg,
         "energy": energy_meter.avg,
         "vos": vos_meter.avg,
+        "vos_rejection": vos_rejection_meter.avg,
         "discovery": discovery_meter.avg,
         "discovery_unknown": discovery_unknown_meter.avg,
         "discovery_energy": discovery_energy_meter.avg,
@@ -3745,6 +4479,27 @@ def train_one_epoch_student(
         ),
         "feature_candidate_ratio": feature_candidate_ratio_meter.avg,
         "feature_candidate_weight_mean": feature_candidate_weight_mean_meter.avg,
+        "feature_candidate_known_fraction": (
+            feature_candidate_known_fraction_meter.avg
+        ),
+        "feature_candidate_unknown_recall": (
+            feature_candidate_unknown_recall_meter.avg
+        ),
+        "feature_candidate_known_selection_rate": (
+            feature_candidate_known_selection_rate_meter.avg
+        ),
+        "feature_candidate_view_agreement": (
+            feature_candidate_view_agreement_meter.avg
+        ),
+        "discovery_knn_mixed_selection_rate": (
+            discovery_knn_mixed_selection_rate_meter.avg
+        ),
+        "discovery_knn_known_selection_rate": (
+            discovery_knn_known_selection_rate_meter.avg
+        ),
+        "discovery_knn_effective_prior": (
+            discovery_knn_effective_prior_meter.avg
+        ),
         "joint_discovery": joint_meter.avg,
         "joint_consistency": joint_consistency_meter.avg,
         "joint_balance": joint_balance_meter.avg,
@@ -4176,6 +4931,7 @@ def build_rejector_features(
     if feature_mode not in {
         "augmented",
         "support_augmented",
+        "predicted_support_augmented",
         "uncertainty_augmented",
         "support_uncertainty_augmented",
         "rejection_uncertainty_augmented",
@@ -4265,6 +5021,7 @@ def build_rejector_features(
         )
     if feature_mode in {
         "support_augmented",
+        "predicted_support_augmented",
         "support_uncertainty_augmented",
         "rejection_support_uncertainty_augmented",
         "rejection_support_augmented",
@@ -4276,6 +5033,13 @@ def build_rejector_features(
             raise ValueError("support_augmented requires known_support_score")
         support_score = np.asarray(outputs["known_support_score"], dtype=np.float32).reshape(-1, 1)
         summary = np.concatenate([summary, support_score], axis=1)
+        if feature_mode == "predicted_support_augmented":
+            if "predicted_support_score" not in outputs:
+                raise ValueError("predicted_support_augmented requires predicted_support_score")
+            predicted_support_score = np.asarray(
+                outputs["predicted_support_score"], dtype=np.float32
+            ).reshape(-1, 1)
+            summary = np.concatenate([summary, predicted_support_score], axis=1)
     base_features = features
     if rejection_augmented:
         rejection = np.asarray(outputs["rejection_features"], dtype=np.float32)
@@ -4290,7 +5054,7 @@ def build_rejector_features(
 def fit_feature_rejector(
     known_outputs: Dict[str, np.ndarray],
     unknown_outputs: Dict[str, np.ndarray],
-    max_samples: int = 5000,
+    max_samples: int | None = None,
     seed: int = 42,
     feature_mode: str = "embedding",
     model_type: str = "logistic",
@@ -4305,7 +5069,7 @@ def fit_feature_rejector(
     rng = np.random.default_rng(int(seed))
 
     def sample_rows(values):
-        if len(values) <= max_samples:
+        if max_samples is None or len(values) <= max_samples:
             return values
         return values[rng.choice(len(values), size=max_samples, replace=False)]
 
@@ -4336,6 +5100,7 @@ def fit_feature_rejector(
     elif feature_mode in {
         "augmented",
         "support_augmented",
+        "predicted_support_augmented",
         "uncertainty_augmented",
         "support_uncertainty_augmented",
         "rejection_uncertainty_augmented",
@@ -4475,6 +5240,14 @@ def attach_known_support_score(
     distances = 1.0 - features @ centers.T
     normalized_distances = distances / np.clip(radii[None, :], 1e-6, None)
     outputs["known_support_score"] = normalized_distances.min(axis=1).astype(np.float64)
+    if "logits" in outputs:
+        logits = np.asarray(outputs["logits"], dtype=np.float32)
+        if logits.ndim != 2 or logits.shape[1] != len(centers):
+            raise ValueError("support centers must align with classifier logits")
+        predicted_class = logits.argmax(axis=1)
+        outputs["predicted_support_score"] = normalized_distances[
+            np.arange(len(normalized_distances)), predicted_class
+        ].astype(np.float64)
 
 
 def fit_known_conformal_support_rejector(
@@ -4539,7 +5312,7 @@ def attach_known_conformal_support_score(
 def fit_pu_feature_rejector(
     known_outputs: Dict[str, np.ndarray],
     unlabeled_outputs: Dict[str, np.ndarray],
-    max_samples: int | None = 5000,
+    max_samples: int | None = None,
     iterations: int = 4,
     seed: int = 42,
     feature_mode: str = "embedding",
@@ -4586,6 +5359,7 @@ def fit_pu_feature_rejector(
         if feature_mode in {
             "augmented",
             "support_augmented",
+            "predicted_support_augmented",
             "uncertainty_augmented",
             "support_uncertainty_augmented",
             "rejection_uncertainty_augmented",
@@ -4671,11 +5445,70 @@ class NnPUMlpFeatureRejector:
         return np.stack([1.0 - probability, probability], axis=1)
 
 
+def nnpu_binary_risk(
+    known_logits: torch.Tensor,
+    unlabeled_logits: torch.Tensor,
+    known_prior: float,
+    risk_mode: str = "nu_corrected",
+    unlabeled_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute the binary known-negative / unknown-positive nnPU risk.
+
+    ``known_prior`` is the known fraction in the unlabeled pool.  In the
+    corrected mode the positive-class risk is
+    ``E_U[l(unknown)] - pi_K E_K[l(unknown)]``.  Keeping this algebra in a
+    small public helper makes the PU convention directly testable and avoids
+    silently swapping the two known-sample terms in the training loop.
+    """
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1) for nnPU")
+    if risk_mode not in {"legacy", "nu_corrected"}:
+        raise ValueError("risk_mode must be 'legacy' or 'nu_corrected'")
+    known_zero = torch.zeros_like(known_logits)
+    known_one = torch.ones_like(known_logits)
+    unlabeled_one = torch.ones_like(unlabeled_logits)
+    # The score is higher for unknown samples, so known examples are reliable
+    # negatives (target 0) and the mixed pool is the unlabeled positive pool.
+    known_negative_loss = F.binary_cross_entropy_with_logits(
+        known_logits, known_zero
+    )
+    known_positive_loss = F.binary_cross_entropy_with_logits(
+        known_logits, known_one
+    )
+    unlabeled_loss = F.binary_cross_entropy_with_logits(
+        unlabeled_logits, unlabeled_one, reduction="none"
+    )
+    if unlabeled_weight is None:
+        unlabeled_positive_loss = unlabeled_loss.mean()
+    else:
+        weight = unlabeled_weight.reshape(-1).to(unlabeled_loss).clamp_min(0.0)
+        if weight.numel() != unlabeled_loss.numel():
+            raise ValueError("unlabeled_weight must match unlabeled_logits")
+        denominator = weight.sum()
+        if denominator <= 0:
+            unlabeled_positive_loss = unlabeled_loss.sum() * 0.0
+        else:
+            # Normalize by the sum of weights so a weighted arm is compared
+            # at the same empirical-risk scale as the unweighted baseline.
+            unlabeled_positive_loss = (unlabeled_loss * weight).sum() / denominator
+    if risk_mode == "legacy":
+        positive_risk = (
+            unlabeled_positive_loss - prior * known_positive_loss
+        ) / max(1.0 - prior, 1e-6)
+        return prior * known_negative_loss + torch.relu(positive_risk)
+    # Standard non-negative PU decomposition.  The positive-risk correction
+    # subtracts the positive-label loss on known samples; the supervised term
+    # remains the negative-label loss on known samples.
+    positive_risk = unlabeled_positive_loss - prior * known_positive_loss
+    return prior * known_negative_loss + torch.relu(positive_risk)
+
+
 def fit_nnpu_feature_rejector(
     known_outputs: Dict[str, np.ndarray],
     unlabeled_outputs: Dict[str, np.ndarray],
     known_prior: float = 0.2,
-    max_samples: int | None = 5000,
+    max_samples: int | None = None,
     iterations: int = 300,
     lr: float = 0.05,
     weight_decay: float = 1e-4,
@@ -4686,15 +5519,15 @@ def fit_nnpu_feature_rejector(
     stratified_known: bool = False,
     score_margin_weight: float = 0.0,
     score_margin: float = 0.5,
+    unlabeled_sample_weight: np.ndarray | None = None,
 ):
     """Fit a mixed-pool rejector with a non-negative NU/PU-style risk.
 
     ``legacy`` preserves the historical implementation. ``nu_corrected``
-    uses the direct negative-unlabeled risk decomposition for a pool whose
-    known fraction is ``known_prior``; this is the form that follows from
-    treating known samples as reliable negatives and unknown samples as the
-    positive class. Both modes keep the non-negative correction on the
-    unlabeled-derived positive risk.
+    uses the standard non-negative PU decomposition for reliable known
+    negatives and an unknown-positive score. The corrected mode removes the
+    historical ``1 - known_prior`` rescaling while keeping the class terms in
+    their mathematically correct roles.
     """
     prior = float(known_prior)
     if not 0.0 < prior < 1.0:
@@ -4714,11 +5547,22 @@ def fit_nnpu_feature_rejector(
     if len(known) == 0 or len(unlabeled) == 0:
         raise ValueError("nnPU requires non-empty known and unlabeled features")
     rng = np.random.default_rng(int(seed))
+    if unlabeled_sample_weight is None:
+        unlabeled_weight = np.ones(len(unlabeled), dtype=np.float32)
+    else:
+        unlabeled_weight = np.asarray(unlabeled_sample_weight, dtype=np.float32)
+        if unlabeled_weight.shape != (len(unlabeled),):
+            raise ValueError("unlabeled_sample_weight must align with unlabeled outputs")
+        if not np.isfinite(unlabeled_weight).all() or (unlabeled_weight < 0).any():
+            raise ValueError("unlabeled_sample_weight must be finite and non-negative")
+        if float(unlabeled_weight.sum()) <= 0.0:
+            raise ValueError("unlabeled_sample_weight must have positive total weight")
 
-    def sample_rows(values):
+    def sample_rows(values, weights=None):
         if max_samples is None or len(values) <= max_samples:
-            return values
-        return values[rng.choice(len(values), size=max_samples, replace=False)]
+            return values, weights
+        indices = rng.choice(len(values), size=max_samples, replace=False)
+        return values[indices], None if weights is None else weights[indices]
 
     if stratified_known and max_samples is not None and len(known) > max_samples:
         labels = np.asarray(known_outputs.get("labels"), dtype=np.int64)
@@ -4736,9 +5580,15 @@ def fit_nnpu_feature_rejector(
             )
         known = known[np.concatenate(selected)]
     else:
-        known = sample_rows(known)
+        known, _ = sample_rows(known)
+    unlabeled, unlabeled_weight = sample_rows(unlabeled, unlabeled_weight)
     known = known.astype(np.float32, copy=False)
-    unlabeled = sample_rows(unlabeled).astype(np.float32, copy=False)
+    unlabeled = unlabeled.astype(np.float32, copy=False)
+    unlabeled_weight = unlabeled_weight.astype(np.float32, copy=False)
+    positive_mean = float(unlabeled_weight.mean())
+    if not np.isfinite(positive_mean) or positive_mean <= 0.0:
+        raise ValueError("unlabeled_sample_weight must have a positive finite mean")
+    unlabeled_weight = unlabeled_weight / positive_mean
     combined = np.concatenate([known, unlabeled], axis=0)
     mean = combined.mean(axis=0)
     scale = combined.std(axis=0)
@@ -4749,6 +5599,7 @@ def fit_nnpu_feature_rejector(
     torch.manual_seed(int(seed))
     known_tensor = torch.from_numpy(known)
     unlabeled_tensor = torch.from_numpy(unlabeled)
+    unlabeled_weight_tensor = torch.from_numpy(unlabeled_weight)
     if model_type == "linear":
         weight = torch.zeros(known.shape[1], requires_grad=True)
         bias = torch.zeros((), requires_grad=True)
@@ -4775,25 +5626,16 @@ def fit_nnpu_feature_rejector(
     optimizer = torch.optim.Adam(
         parameters, lr=float(lr), weight_decay=float(weight_decay)
     )
-    known_zero = torch.zeros(len(known_tensor))
-    known_one = torch.ones(len(known_tensor))
-    unknown_one = torch.ones(len(unlabeled_tensor))
     for _ in range(max(1, int(iterations))):
         known_logits = predict(known_tensor)
         unlabeled_logits = predict(unlabeled_tensor)
-        known_as_unknown = torch.nn.functional.binary_cross_entropy_with_logits(
-            known_logits, known_zero
+        loss = nnpu_binary_risk(
+            known_logits,
+            unlabeled_logits,
+            prior,
+            risk_mode=risk_mode,
+            unlabeled_weight=unlabeled_weight_tensor,
         )
-        known_as_known = torch.nn.functional.binary_cross_entropy_with_logits(
-            known_logits, known_one
-        )
-        unlabeled_as_unknown = torch.nn.functional.binary_cross_entropy_with_logits(
-            unlabeled_logits, unknown_one
-        )
-        negative_risk = unlabeled_as_unknown - prior * known_as_known
-        if risk_mode == "legacy":
-            negative_risk = negative_risk / max(1.0 - prior, 1e-6)
-        loss = prior * known_as_unknown + torch.relu(negative_risk)
         if float(score_margin_weight) > 0.0:
             mean_score_gap = unlabeled_logits.mean() - known_logits.mean()
             loss = loss + float(score_margin_weight) * torch.relu(

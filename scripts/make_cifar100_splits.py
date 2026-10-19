@@ -78,10 +78,15 @@ def build_protocols(
     for fine_ids in by_coarse.values():
         fine_ids.sort()
 
+    # Keep the semantic-hard structure (3 known / 2 novel fine classes per
+    # superclass) while allowing a genuinely independent class split per seed.
+    # Use a dedicated RNG so changing the random-protocol draw above does not
+    # silently alter this protocol's class assignment.
+    hard_rng = random.Random(seed + 1_000_003)
     hard_known = sorted(
         fine_id
         for fine_ids in by_coarse.values()
-        for fine_id in fine_ids[:3]
+        for fine_id in hard_rng.sample(fine_ids, 3)
     )
     isolated_coarse = sorted(rng.sample(list(range(20)), 12))
     isolated_known = sorted(
@@ -94,7 +99,11 @@ def build_protocols(
         "random": {"known_classes": random_known, "metadata": {"seed": seed}},
         "semantic_hard": {
             "known_classes": hard_known,
-            "metadata": {"known_per_coarse": 3, "novel_per_coarse": 2},
+            "metadata": {
+                "seed": seed,
+                "known_per_coarse": 3,
+                "novel_per_coarse": 2,
+            },
         },
         "semantic_isolated": {
             "known_classes": isolated_known,

@@ -1,0 +1,98 @@
+{
+  "protocol": {
+    "source_discover": "runs\\knn_pu_boundary_control_s123_e4_hard_nnpu_discover\\discover_config.json",
+    "student_ckpt": "runs\\knn_pu_boundary_control_s123_e4_pure\\student.pt",
+    "single_changed_factor": "rejector_pool_selection",
+    "candidate_weight": 1.5,
+    "labels_used_for_selection": false
+  },
+  "arms": {
+    "all": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\soft_boundary_s123_e4_w15_all",
+      "config": {
+        "student_ckpt": "runs\\knn_pu_boundary_control_s123_e4_pure\\student.pt",
+        "discovery_pool_mode": "mixed",
+        "matched_discovery_pool": true,
+        "matched_pool_size": 5400,
+        "score_mode": "feature_rejector",
+        "rejector_pool_selection": "all",
+        "rejector_candidate_mode": "prototype_boundary",
+        "rejector_candidate_ratio": 0.25,
+        "rejector_candidate_weight": 1.5,
+        "rejector_training": "nnpu",
+        "rejector_known_prior": 0.2,
+        "rejector_nnpu_risk": "nu_corrected",
+        "rejector_feature_mode": "support_augmented",
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95
+      },
+      "metrics": {
+        "auroc": 0.8954898333333334,
+        "aupr": 0.8404726353871541,
+        "fpr95": 0.3943333333333333,
+        "known_accept_rate": 0.959,
+        "unknown_reject_rate": 0.44575,
+        "known_rejected": 246,
+        "unknown_false_accept": 2217
+      }
+    },
+    "weighted_boundary": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\soft_boundary_s123_e4_w15_weighted_boundary",
+      "config": {
+        "student_ckpt": "runs\\knn_pu_boundary_control_s123_e4_pure\\student.pt",
+        "discovery_pool_mode": "mixed",
+        "matched_discovery_pool": true,
+        "matched_pool_size": 5400,
+        "score_mode": "feature_rejector",
+        "rejector_pool_selection": "weighted_boundary",
+        "rejector_candidate_mode": "prototype_boundary",
+        "rejector_candidate_ratio": 0.25,
+        "rejector_candidate_weight": 1.5,
+        "rejector_training": "nnpu",
+        "rejector_known_prior": 0.2,
+        "rejector_nnpu_risk": "nu_corrected",
+        "rejector_feature_mode": "support_augmented",
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95
+      },
+      "metrics": {
+        "auroc": 0.9025379583333334,
+        "aupr": 0.853212511886605,
+        "fpr95": 0.397,
+        "known_accept_rate": 0.965,
+        "unknown_reject_rate": 0.4465,
+        "known_rejected": 210,
+        "unknown_false_accept": 2214
+      }
+    },
+    "high_risk": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\soft_boundary_s123_e4_w15_high_risk",
+      "config": {
+        "student_ckpt": "runs\\knn_pu_boundary_control_s123_e4_pure\\student.pt",
+        "discovery_pool_mode": "mixed",
+        "matched_discovery_pool": true,
+        "matched_pool_size": 5400,
+        "score_mode": "feature_rejector",
+        "rejector_pool_selection": "high_risk",
+        "rejector_candidate_mode": "prototype_boundary",
+        "rejector_candidate_ratio": 0.25,
+        "rejector_candidate_weight": 1.5,
+        "rejector_training": "nnpu",
+        "rejector_known_prior": 0.2,
+        "rejector_nnpu_risk": "nu_corrected",
+        "rejector_feature_mode": "support_augmented",
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95
+      },
+      "metrics": {
+        "auroc": 0.8092281458333334,
+        "aupr": 0.7745234567755114,
+        "fpr95": 0.7371666666666666,
+        "known_accept_rate": 0.9505,
+        "unknown_reject_rate": 0.41675,
+        "known_rejected": 297,
+        "unknown_false_accept": 2333
+      }
+    }
+  }
+}

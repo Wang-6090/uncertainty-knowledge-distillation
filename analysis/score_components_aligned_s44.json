@@ -1,0 +1,124 @@
+[
+  {
+    "run": "shared_boundary_aligned_control_s44_e4_shared_discover",
+    "n": 10000,
+    "components": {
+      "combined_score": {
+        "auc": 0.8975330625000002,
+        "known": {
+          "known_mean": -5.139649321834247,
+          "unknown_mean": 3.728427451789379,
+          "known_median": -4.923024654388428,
+          "unknown_median": 3.731656551361084,
+          "known_p75": -1.1364443600177765,
+          "unknown_p75": 6.40829610824585
+        }
+      },
+      "entropy": {
+        "auc": 0.7834977291666667,
+        "known": {
+          "known_mean": 1.0106626377042933,
+          "unknown_mean": 1.919983592268196,
+          "known_median": 0.8881249725818634,
+          "unknown_median": 1.9806388020515442,
+          "known_p75": 1.5874558091163635,
+          "unknown_p75": 2.5298218727111816
+        }
+      },
+      "epistemic": {
+        "auc": 0.7281130208333334,
+        "known": {
+          "known_mean": 0.030588258990037493,
+          "unknown_mean": 0.05185283101501409,
+          "known_median": 0.023029595613479614,
+          "unknown_median": 0.04859137535095215,
+          "known_p75": 0.04628995060920715,
+          "unknown_p75": 0.0673646628856659
+        }
+      },
+      "aleatoric": {
+        "auc": 0.7832836666666667,
+        "known": {
+          "known_mean": 0.9800743787142558,
+          "unknown_mean": 1.868130761253182,
+          "known_median": 0.8554846942424774,
+          "unknown_median": 1.9200406074523926,
+          "known_p75": 1.5362644791603088,
+          "unknown_p75": 2.463192403316498
+        }
+      },
+      "proto_dist": {
+        "auc": 0.7703563958333334,
+        "known": {
+          "known_mean": 0.20964331881205242,
+          "unknown_mean": 0.311850597307086,
+          "known_median": 0.1953507959842682,
+          "unknown_median": 0.3131785988807678,
+          "known_p75": 0.28135281801223755,
+          "unknown_p75": 0.3787274807691574
+        }
+      }
+    }
+  },
+  {
+    "run": "shared_boundary_aligned_control_s44_e4_shared_boundary_discover",
+    "n": 10000,
+    "components": {
+      "combined_score": {
+        "auc": 0.8946654166666667,
+        "known": {
+          "known_mean": -5.210344835420449,
+          "unknown_mean": 3.6050323089808227,
+          "known_median": -5.324007511138916,
+          "unknown_median": 3.835724115371704,
+          "known_p75": -1.2653167247772217,
+          "unknown_p75": 6.440638303756714
+        }
+      },
+      "entropy": {
+        "auc": 0.7846651041666666,
+        "known": {
+          "known_mean": 1.0586755338758282,
+          "unknown_mean": 1.9853691708233674,
+          "known_median": 0.9496519863605499,
+          "unknown_median": 2.0500378608703613,
+          "known_p75": 1.6529213786125183,
+          "unknown_p75": 2.61133348941803
+        }
+      },
+      "epistemic": {
+        "auc": 0.7322589583333334,
+        "known": {
+          "known_mean": 0.029933402018327872,
+          "unknown_mean": 0.05071598258486483,
+          "known_median": 0.023685842752456665,
+          "unknown_median": 0.04853832721710205,
+          "known_p75": 0.045006170868873596,
+          "unknown_p75": 0.0646059513092041
+        }
+      },
+      "aleatoric": {
+        "auc": 0.7842029583333332,
+        "known": {
+          "known_mean": 1.0287421318575003,
+          "unknown_mean": 1.9346531882385025,
+          "known_median": 0.9118116796016693,
+          "unknown_median": 1.996773600578308,
+          "known_p75": 1.6076649725437164,
+          "unknown_p75": 2.548651695251465
+        }
+      },
+      "proto_dist": {
+        "auc": 0.7621346041666666,
+        "known": {
+          "known_mean": 0.21383864756425222,
+          "unknown_mean": 0.3135394590198994,
+          "known_median": 0.20014426112174988,
+          "unknown_median": 0.3169320225715637,
+          "known_p75": 0.28961504995822906,
+          "unknown_p75": 0.3815290629863739
+        }
+      }
+    }
+  }
+]

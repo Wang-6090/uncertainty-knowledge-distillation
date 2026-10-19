@@ -1,0 +1,56 @@
+{
+  "protocol": {
+    "source_discover": "runs\\strict_instrumented_s44_e4_feature_rejector\\discover_config.json",
+    "student_ckpt": "runs\\knn_pu_boundary_strict_s44_e4_pure\\student.pt",
+    "labels_used_for_selection": false,
+    "single_changed_factor": "rejector_candidate_mode"
+  },
+  "arms": {
+    "entropy_uncertainty": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\rejector_candidate_boundary_s44_e4_entropy_uncertainty",
+      "config": {
+        "student_ckpt": "runs\\knn_pu_boundary_strict_s44_e4_pure\\student.pt",
+        "rejector_pool_selection": "high_risk",
+        "rejector_candidate_mode": "entropy_uncertainty",
+        "rejector_candidate_ratio": 0.25,
+        "rejector_training": "nnpu",
+        "rejector_known_prior": 0.2,
+        "rejector_feature_mode": "support_augmented",
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95
+      },
+      "metrics": {
+        "auroc": 0.780363375,
+        "aupr": 0.7415277016535771,
+        "fpr95": 0.7835,
+        "known_accept_rate": 0.9448333333333333,
+        "unknown_reject_rate": 0.39275,
+        "known_rejected": 331,
+        "unknown_false_accept": 2429
+      }
+    },
+    "prototype_boundary": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\rejector_candidate_boundary_s44_e4_prototype_boundary",
+      "config": {
+        "student_ckpt": "runs\\knn_pu_boundary_strict_s44_e4_pure\\student.pt",
+        "rejector_pool_selection": "high_risk",
+        "rejector_candidate_mode": "prototype_boundary",
+        "rejector_candidate_ratio": 0.25,
+        "rejector_training": "nnpu",
+        "rejector_known_prior": 0.2,
+        "rejector_feature_mode": "support_augmented",
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95
+      },
+      "metrics": {
+        "auroc": 0.7853807500000001,
+        "aupr": 0.7436289380285361,
+        "fpr95": 0.7883333333333333,
+        "known_accept_rate": 0.9556666666666667,
+        "unknown_reject_rate": 0.36325,
+        "known_rejected": 266,
+        "unknown_false_accept": 2547
+      }
+    }
+  }
+}

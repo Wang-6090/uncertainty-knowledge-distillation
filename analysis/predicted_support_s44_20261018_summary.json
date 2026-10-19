@@ -1,0 +1,62 @@
+{
+  "protocol": {
+    "source_discover": "runs\\score_wiring_full_s44_20261018_mc4_support_feature_rejector_feature_rejector\\discover_config.json",
+    "student_ckpt": "runs\\interclass_vos_rejection_s44_e4_interclass_mix\\student.pt",
+    "single_changed_factor": "rejector_feature_mode",
+    "labels_used_for_feature_construction": false
+  },
+  "arms": {
+    "support_augmented": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\predicted_support_s44_20261018_support_augmented",
+      "config": {
+        "student_ckpt": "runs\\interclass_vos_rejection_s44_e4_interclass_mix\\student.pt",
+        "discovery_pool_mode": "mixed",
+        "matched_pool_size": 5400,
+        "rejector_pool_selection": "all",
+        "rejector_training": "nnpu",
+        "rejector_known_prior": 0.2,
+        "rejector_nnpu_risk": "nu_corrected",
+        "rejector_feature_mode": "support_augmented",
+        "rejector_mc_samples": 4,
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95
+      },
+      "metrics": {
+        "auroc": 0.8982521666666667,
+        "aupr": 0.8395991059522967,
+        "fpr95": 0.36233333333333334,
+        "oscr": 0.6617400833333333,
+        "known_accept_rate": 0.9488333333333333,
+        "unknown_reject_rate": 0.48325,
+        "known_rejected": 307,
+        "unknown_false_accept": 2067
+      }
+    },
+    "predicted_support_augmented": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\predicted_support_s44_20261018_predicted_support_augmented",
+      "config": {
+        "student_ckpt": "runs\\interclass_vos_rejection_s44_e4_interclass_mix\\student.pt",
+        "discovery_pool_mode": "mixed",
+        "matched_pool_size": 5400,
+        "rejector_pool_selection": "all",
+        "rejector_training": "nnpu",
+        "rejector_known_prior": 0.2,
+        "rejector_nnpu_risk": "nu_corrected",
+        "rejector_feature_mode": "predicted_support_augmented",
+        "rejector_mc_samples": 4,
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95
+      },
+      "metrics": {
+        "auroc": 0.8988332916666667,
+        "aupr": 0.8396883206067101,
+        "fpr95": 0.36816666666666664,
+        "oscr": 0.661385375,
+        "known_accept_rate": 0.9535,
+        "unknown_reject_rate": 0.47775,
+        "known_rejected": 279,
+        "unknown_false_accept": 2089
+      }
+    }
+  }
+}

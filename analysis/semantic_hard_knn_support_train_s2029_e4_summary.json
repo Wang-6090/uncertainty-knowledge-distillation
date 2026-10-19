@@ -1,0 +1,150 @@
+{
+  "question": "Does training-time class-conditional kNN support-boundary loss improve semantic-hard open-set separation?",
+  "seed": 2029,
+  "epochs": 4,
+  "single_changed_factor": "alpha_discovery_knn_boundary (0 vs configured treatment weight)",
+  "treatment_weight": 0.1,
+  "risk_mode": "pure",
+  "candidate_gate": "shared_boundary with cross-view gating",
+  "split": "C:\\Users\\13520\\Desktop\\dachuang\\splits_cifar100_protocols\\cifar100_60_40_semantic_hard.json",
+  "teacher_checkpoint": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_rejector_seed2028_teacher\\teacher.pt",
+  "calibration": "known validation only, target 95% coverage",
+  "test_labels_used_for_training_or_calibration": false,
+  "evidence_level": "single-seed exploratory training-objective comparison",
+  "arms": {
+    "baseline": {
+      "train_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_knn_support_train_s2029_e4_baseline",
+      "discover_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_knn_support_train_s2029_e4_baseline_discover",
+      "train_config": {
+        "seed": 2029,
+        "epochs": 4,
+        "teacher_ckpt": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_rejector_seed2028_teacher\\teacher.pt",
+        "split_path": "C:\\Users\\13520\\Desktop\\dachuang\\splits_cifar100_protocols\\cifar100_60_40_semantic_hard.json",
+        "alpha_discovery_knn_boundary": 0.0,
+        "alpha_discovery_rejection_knn_boundary": 0.0,
+        "alpha_discovery_rejection_boundary": 0.0,
+        "discovery_knn_risk": "pure",
+        "discovery_feature_candidate_gating": true,
+        "discovery_cross_view_gating": true,
+        "discovery_feature_candidate_space": "shared_boundary"
+      },
+      "discover_config": {
+        "seed": 2029,
+        "student_ckpt": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_knn_support_train_s2029_e4_baseline\\student.pt",
+        "split_path": "C:\\Users\\13520\\Desktop\\dachuang\\splits_cifar100_protocols\\cifar100_60_40_semantic_hard.json",
+        "score_mode": "feature_rejector",
+        "rejector_pool_selection": "all",
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95,
+        "matched_pool_size": 5400,
+        "matched_known_prior": 0.2
+      },
+      "metrics": {
+        "auroc": 0.7963631041666668,
+        "aupr": 0.6968912187105528,
+        "fpr95": 0.6136666666666667,
+        "oscr": 0.583455625,
+        "known_accept_rate": 0.9523333333333334,
+        "unknown_reject_rate": 0.265,
+        "known_class_accuracy_after_accept": 0.7012600630031501
+      },
+      "score_distribution": {
+        "known": {
+          "count": 6000,
+          "mean": -2.0290857102908193,
+          "std": 4.722076169038249,
+          "q05": -10.762091732025146,
+          "q25": -4.684303164482117,
+          "median": -1.5061489343643188,
+          "q75": 1.259317696094513,
+          "q95": 4.607230830192566
+        },
+        "unknown": {
+          "count": 4000,
+          "mean": 2.6332337294053287,
+          "std": 3.2142580842915285,
+          "q05": -2.7749554395675657,
+          "q25": 0.5911950767040253,
+          "median": 2.7069162130355835,
+          "q75": 4.8553173542022705,
+          "q95": 7.750679206848143
+        },
+        "mean_gap_unknown_minus_known": 4.662319439696148,
+        "median_gap_unknown_minus_known": 4.213065147399902,
+        "ks_distance": 0.4448333333333333,
+        "overlap_unknown_below_known_q95": 0.725,
+        "overlap_known_above_unknown_q05": 0.6136666666666667,
+        "threshold": 4.711056065559383,
+        "known_above_threshold": 0.04766666666666667,
+        "unknown_above_threshold": 0.265
+      }
+    },
+    "knn_support_boundary": {
+      "train_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_knn_support_train_s2029_e4_knn_support_boundary",
+      "discover_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_knn_support_train_s2029_e4_knn_support_boundary_discover",
+      "train_config": {
+        "seed": 2029,
+        "epochs": 4,
+        "teacher_ckpt": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_rejector_seed2028_teacher\\teacher.pt",
+        "split_path": "C:\\Users\\13520\\Desktop\\dachuang\\splits_cifar100_protocols\\cifar100_60_40_semantic_hard.json",
+        "alpha_discovery_knn_boundary": 0.1,
+        "alpha_discovery_rejection_knn_boundary": 0.0,
+        "alpha_discovery_rejection_boundary": 0.0,
+        "discovery_knn_risk": "pure",
+        "discovery_feature_candidate_gating": true,
+        "discovery_cross_view_gating": true,
+        "discovery_feature_candidate_space": "shared_boundary"
+      },
+      "discover_config": {
+        "seed": 2029,
+        "student_ckpt": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_knn_support_train_s2029_e4_knn_support_boundary\\student.pt",
+        "split_path": "C:\\Users\\13520\\Desktop\\dachuang\\splits_cifar100_protocols\\cifar100_60_40_semantic_hard.json",
+        "score_mode": "feature_rejector",
+        "rejector_pool_selection": "all",
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95,
+        "matched_pool_size": 5400,
+        "matched_known_prior": 0.2
+      },
+      "metrics": {
+        "auroc": 0.7957840833333334,
+        "aupr": 0.6987509500575086,
+        "fpr95": 0.6088333333333333,
+        "oscr": 0.5940090833333334,
+        "known_accept_rate": 0.9488333333333333,
+        "unknown_reject_rate": 0.27675,
+        "known_class_accuracy_after_accept": 0.7173722114877921
+      },
+      "score_distribution": {
+        "known": {
+          "count": 6000,
+          "mean": -1.9922189335351188,
+          "std": 4.733973428760155,
+          "q05": -10.41848464012146,
+          "q25": -4.680417060852051,
+          "median": -1.5580421090126038,
+          "q75": 1.2679811716079712,
+          "q95": 4.775371193885805
+        },
+        "unknown": {
+          "count": 4000,
+          "mean": 2.752618614617735,
+          "std": 3.4040329624649726,
+          "q05": -2.7651437163352965,
+          "q25": 0.5155196189880371,
+          "median": 2.7225146293640137,
+          "q75": 5.055002927780151,
+          "q95": 8.187280416488646
+        },
+        "mean_gap_unknown_minus_known": 4.744837548152853,
+        "median_gap_unknown_minus_known": 4.280556738376617,
+        "ks_distance": 0.44425000000000003,
+        "overlap_unknown_below_known_q95": 0.72525,
+        "overlap_known_above_unknown_q05": 0.6088333333333333,
+        "threshold": 4.747548675537106,
+        "known_above_threshold": 0.051166666666666666,
+        "unknown_above_threshold": 0.27675
+      }
+    }
+  }
+}

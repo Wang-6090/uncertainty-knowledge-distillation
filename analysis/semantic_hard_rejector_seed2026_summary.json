@@ -1,0 +1,138 @@
+{
+  "question": "Does prototype-boundary weighted rejector fitting improve semantic-hard detection on a fresh training seed?",
+  "seed": 2026,
+  "teacher_epochs": 5,
+  "student_epochs": 4,
+  "single_detector_factor": "rejector pool treatment (all vs weighted prototype-boundary candidates)",
+  "candidate_ratio": 0.25,
+  "candidate_weight": 2.0,
+  "threshold_calibration": "known validation only, target 95% known coverage",
+  "test_labels_used_for_training_calibration_or_method_selection": false,
+  "evidence_level": "exploratory seed replication; candidate rule was prioritized after prior exploratory work",
+  "teacher_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_rejector_seed2026_teacher",
+  "student_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_rejector_seed2026_student",
+  "arms": {
+    "all_pool": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_rejector_seed2026_all_pool",
+      "config": {
+        "seed": 2026,
+        "student_ckpt": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_rejector_seed2026_student\\student.pt",
+        "discovery_pool_mode": "mixed",
+        "matched_pool_size": 5400,
+        "matched_known_prior": 0.2,
+        "score_mode": "feature_rejector",
+        "rejector_training": "nnpu",
+        "rejector_pool_selection": "all",
+        "rejector_candidate_mode": "entropy_uncertainty",
+        "rejector_candidate_ratio": 0.25,
+        "rejector_candidate_weight": 2.0,
+        "rejector_feature_mode": "support_augmented",
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95
+      },
+      "metrics": {
+        "auroc": 0.7843265000000001,
+        "aupr": 0.6801915511142429,
+        "fpr95": 0.6378333333333334,
+        "oscr": 0.5874302083333334,
+        "known_accept_rate": 0.9528333333333333,
+        "unknown_reject_rate": 0.236,
+        "known_rejected": 283,
+        "unknown_false_accept": 3056,
+        "known_class_accuracy_after_accept": 0.7157600139933532,
+        "calibration_known_accept_rate": 0.9493865030674846
+      },
+      "score_distribution": {
+        "known": {
+          "count": 6000,
+          "mean": -1.2443712458411853,
+          "std": 4.500190955850794,
+          "q05": -9.321236991882325,
+          "q25": -3.9212294816970825,
+          "median": -0.7224260568618774,
+          "q75": 1.8927460312843323,
+          "q95": 5.191807126998901
+        },
+        "unknown": {
+          "count": 4000,
+          "mean": 3.029416945707053,
+          "std": 3.1578957573108175,
+          "q05": -2.3009903192520142,
+          "q25": 1.100829154253006,
+          "median": 3.125165820121765,
+          "q75": 5.148466348648071,
+          "q95": 7.85911476612091
+        },
+        "mean_gap_unknown_minus_known": 4.273788191548238,
+        "median_gap_unknown_minus_known": 3.8475918769836426,
+        "ks_distance": 0.4313333333333333,
+        "overlap_unknown_below_known_q95": 0.7535,
+        "overlap_known_above_unknown_q05": 0.6378333333333334,
+        "threshold": 5.277907085418697,
+        "known_above_threshold": 0.04716666666666667,
+        "unknown_above_threshold": 0.236
+      }
+    },
+    "prototype_boundary_weighted": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_rejector_seed2026_prototype_boundary_weighted",
+      "config": {
+        "seed": 2026,
+        "student_ckpt": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_hard_rejector_seed2026_student\\student.pt",
+        "discovery_pool_mode": "mixed",
+        "matched_pool_size": 5400,
+        "matched_known_prior": 0.2,
+        "score_mode": "feature_rejector",
+        "rejector_training": "nnpu",
+        "rejector_pool_selection": "weighted_boundary",
+        "rejector_candidate_mode": "prototype_boundary",
+        "rejector_candidate_ratio": 0.25,
+        "rejector_candidate_weight": 2.0,
+        "rejector_feature_mode": "support_augmented",
+        "threshold_policy": "known_coverage",
+        "target_known_coverage": 0.95
+      },
+      "metrics": {
+        "auroc": 0.7940587916666666,
+        "aupr": 0.6995362269789753,
+        "fpr95": 0.5998333333333333,
+        "oscr": 0.59311975,
+        "known_accept_rate": 0.9518333333333333,
+        "unknown_reject_rate": 0.262,
+        "known_rejected": 289,
+        "unknown_false_accept": 2952,
+        "known_class_accuracy_after_accept": 0.7166870950796708,
+        "calibration_known_accept_rate": 0.9493865030674846
+      },
+      "score_distribution": {
+        "known": {
+          "count": 6000,
+          "mean": -2.7985487902462483,
+          "std": 5.342520498092249,
+          "q05": -13.262245464324952,
+          "q25": -5.7566447257995605,
+          "median": -2.0503545999526978,
+          "q75": 0.8636634945869446,
+          "q95": 4.7582362651824965
+        },
+        "unknown": {
+          "count": 4000,
+          "mean": 2.479455405578017,
+          "std": 3.720783076318952,
+          "q05": -3.38571286201477,
+          "q25": 0.022722139954566956,
+          "median": 2.441497564315796,
+          "q75": 4.9926053285598755,
+          "q95": 8.500635957717893
+        },
+        "mean_gap_unknown_minus_known": 5.278004195824265,
+        "median_gap_unknown_minus_known": 4.491852164268494,
+        "ks_distance": 0.4353333333333333,
+        "overlap_unknown_below_known_q95": 0.7305,
+        "overlap_known_above_unknown_q05": 0.6003333333333334,
+        "threshold": 4.850851297378533,
+        "known_above_threshold": 0.04816666666666667,
+        "unknown_above_threshold": 0.262
+      }
+    }
+  }
+}

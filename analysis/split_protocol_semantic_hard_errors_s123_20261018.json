@@ -1,0 +1,503 @@
+{
+  "protocol": "semantic_hard",
+  "detail_path": "runs\\split_protocol_matched_teacher_s123_e4_20261018_semantic_hard_discover\\discovery_detail.json",
+  "split_path": "splits_cifar100_protocols\\cifar100_60_40_semantic_hard.json",
+  "test_labels_used_for_training_selection_or_calibration": false,
+  "purpose": "descriptive post-hoc test-set error analysis only",
+  "unknown_count": 4000,
+  "unknown_false_accept_count": 3019,
+  "unknown_false_accept_rate": 0.75475,
+  "novel_classes_with_false_accepts": 40,
+  "novel_class_count": 40,
+  "per_novel_class_false_accept_rate": {
+    "min": 0.49,
+    "median": 0.755,
+    "max": 0.94
+  },
+  "novel_classes": [
+    {
+      "class_id": 18,
+      "count": 100,
+      "false_accepts": 76,
+      "false_accept_rate": 0.76
+    },
+    {
+      "class_id": 24,
+      "count": 100,
+      "false_accepts": 84,
+      "false_accept_rate": 0.84
+    },
+    {
+      "class_id": 28,
+      "count": 100,
+      "false_accepts": 76,
+      "false_accept_rate": 0.76
+    },
+    {
+      "class_id": 31,
+      "count": 100,
+      "false_accepts": 87,
+      "false_accept_rate": 0.87
+    },
+    {
+      "class_id": 38,
+      "count": 100,
+      "false_accepts": 83,
+      "false_accept_rate": 0.83
+    },
+    {
+      "class_id": 46,
+      "count": 100,
+      "false_accepts": 72,
+      "false_accept_rate": 0.72
+    },
+    {
+      "class_id": 57,
+      "count": 100,
+      "false_accepts": 72,
+      "false_accept_rate": 0.72
+    },
+    {
+      "class_id": 58,
+      "count": 100,
+      "false_accepts": 61,
+      "false_accept_rate": 0.61
+    },
+    {
+      "class_id": 59,
+      "count": 100,
+      "false_accepts": 90,
+      "false_accept_rate": 0.9
+    },
+    {
+      "class_id": 60,
+      "count": 100,
+      "false_accepts": 49,
+      "false_accept_rate": 0.49
+    },
+    {
+      "class_id": 61,
+      "count": 100,
+      "false_accepts": 77,
+      "false_accept_rate": 0.77
+    },
+    {
+      "class_id": 66,
+      "count": 100,
+      "false_accepts": 65,
+      "false_accept_rate": 0.65
+    },
+    {
+      "class_id": 68,
+      "count": 100,
+      "false_accepts": 58,
+      "false_accept_rate": 0.58
+    },
+    {
+      "class_id": 71,
+      "count": 100,
+      "false_accepts": 66,
+      "false_accept_rate": 0.66
+    },
+    {
+      "class_id": 72,
+      "count": 100,
+      "false_accepts": 93,
+      "false_accept_rate": 0.93
+    },
+    {
+      "class_id": 73,
+      "count": 100,
+      "false_accepts": 87,
+      "false_accept_rate": 0.87
+    },
+    {
+      "class_id": 74,
+      "count": 100,
+      "false_accepts": 90,
+      "false_accept_rate": 0.9
+    },
+    {
+      "class_id": 75,
+      "count": 100,
+      "false_accepts": 75,
+      "false_accept_rate": 0.75
+    },
+    {
+      "class_id": 76,
+      "count": 100,
+      "false_accepts": 66,
+      "false_accept_rate": 0.66
+    },
+    {
+      "class_id": 78,
+      "count": 100,
+      "false_accepts": 80,
+      "false_accept_rate": 0.8
+    },
+    {
+      "class_id": 79,
+      "count": 100,
+      "false_accepts": 85,
+      "false_accept_rate": 0.85
+    },
+    {
+      "class_id": 80,
+      "count": 100,
+      "false_accepts": 88,
+      "false_accept_rate": 0.88
+    },
+    {
+      "class_id": 82,
+      "count": 100,
+      "false_accepts": 49,
+      "false_accept_rate": 0.49
+    },
+    {
+      "class_id": 83,
+      "count": 100,
+      "false_accepts": 75,
+      "false_accept_rate": 0.75
+    },
+    {
+      "class_id": 84,
+      "count": 100,
+      "false_accepts": 90,
+      "false_accept_rate": 0.9
+    },
+    {
+      "class_id": 85,
+      "count": 100,
+      "false_accepts": 74,
+      "false_accept_rate": 0.74
+    },
+    {
+      "class_id": 86,
+      "count": 100,
+      "false_accepts": 61,
+      "false_accept_rate": 0.61
+    },
+    {
+      "class_id": 87,
+      "count": 100,
+      "false_accepts": 64,
+      "false_accept_rate": 0.64
+    },
+    {
+      "class_id": 88,
+      "count": 100,
+      "false_accepts": 82,
+      "false_accept_rate": 0.82
+    },
+    {
+      "class_id": 89,
+      "count": 100,
+      "false_accepts": 62,
+      "false_accept_rate": 0.62
+    },
+    {
+      "class_id": 90,
+      "count": 100,
+      "false_accepts": 75,
+      "false_accept_rate": 0.75
+    },
+    {
+      "class_id": 91,
+      "count": 100,
+      "false_accepts": 73,
+      "false_accept_rate": 0.73
+    },
+    {
+      "class_id": 92,
+      "count": 100,
+      "false_accepts": 91,
+      "false_accept_rate": 0.91
+    },
+    {
+      "class_id": 93,
+      "count": 100,
+      "false_accepts": 85,
+      "false_accept_rate": 0.85
+    },
+    {
+      "class_id": 94,
+      "count": 100,
+      "false_accepts": 73,
+      "false_accept_rate": 0.73
+    },
+    {
+      "class_id": 95,
+      "count": 100,
+      "false_accepts": 80,
+      "false_accept_rate": 0.8
+    },
+    {
+      "class_id": 96,
+      "count": 100,
+      "false_accepts": 94,
+      "false_accept_rate": 0.94
+    },
+    {
+      "class_id": 97,
+      "count": 100,
+      "false_accepts": 69,
+      "false_accept_rate": 0.69
+    },
+    {
+      "class_id": 98,
+      "count": 100,
+      "false_accepts": 78,
+      "false_accept_rate": 0.78
+    },
+    {
+      "class_id": 99,
+      "count": 100,
+      "false_accepts": 64,
+      "false_accept_rate": 0.64
+    }
+  ],
+  "false_accepts_by_predicted_known_class": [
+    {
+      "class_id": 10,
+      "count": 143
+    },
+    {
+      "class_id": 27,
+      "count": 128
+    },
+    {
+      "class_id": 7,
+      "count": 112
+    },
+    {
+      "class_id": 23,
+      "count": 102
+    },
+    {
+      "class_id": 49,
+      "count": 100
+    },
+    {
+      "class_id": 39,
+      "count": 94
+    },
+    {
+      "class_id": 22,
+      "count": 91
+    },
+    {
+      "class_id": 16,
+      "count": 86
+    },
+    {
+      "class_id": 12,
+      "count": 83
+    },
+    {
+      "class_id": 25,
+      "count": 82
+    },
+    {
+      "class_id": 41,
+      "count": 80
+    },
+    {
+      "class_id": 34,
+      "count": 79
+    },
+    {
+      "class_id": 13,
+      "count": 76
+    },
+    {
+      "class_id": 35,
+      "count": 68
+    },
+    {
+      "class_id": 15,
+      "count": 65
+    },
+    {
+      "class_id": 3,
+      "count": 61
+    },
+    {
+      "class_id": 57,
+      "count": 59
+    },
+    {
+      "class_id": 53,
+      "count": 58
+    },
+    {
+      "class_id": 29,
+      "count": 57
+    },
+    {
+      "class_id": 43,
+      "count": 56
+    },
+    {
+      "class_id": 9,
+      "count": 55
+    },
+    {
+      "class_id": 30,
+      "count": 55
+    },
+    {
+      "class_id": 8,
+      "count": 53
+    },
+    {
+      "class_id": 0,
+      "count": 52
+    },
+    {
+      "class_id": 44,
+      "count": 51
+    },
+    {
+      "class_id": 48,
+      "count": 49
+    },
+    {
+      "class_id": 54,
+      "count": 49
+    },
+    {
+      "class_id": 51,
+      "count": 46
+    },
+    {
+      "class_id": 26,
+      "count": 45
+    },
+    {
+      "class_id": 21,
+      "count": 43
+    },
+    {
+      "class_id": 46,
+      "count": 43
+    },
+    {
+      "class_id": 36,
+      "count": 39
+    },
+    {
+      "class_id": 55,
+      "count": 39
+    },
+    {
+      "class_id": 31,
+      "count": 38
+    },
+    {
+      "class_id": 40,
+      "count": 38
+    },
+    {
+      "class_id": 11,
+      "count": 37
+    },
+    {
+      "class_id": 56,
+      "count": 36
+    },
+    {
+      "class_id": 47,
+      "count": 34
+    },
+    {
+      "class_id": 37,
+      "count": 32
+    },
+    {
+      "class_id": 6,
+      "count": 32
+    },
+    {
+      "class_id": 5,
+      "count": 31
+    },
+    {
+      "class_id": 59,
+      "count": 31
+    },
+    {
+      "class_id": 18,
+      "count": 30
+    },
+    {
+      "class_id": 28,
+      "count": 29
+    },
+    {
+      "class_id": 1,
+      "count": 29
+    },
+    {
+      "class_id": 4,
+      "count": 28
+    },
+    {
+      "class_id": 24,
+      "count": 28
+    },
+    {
+      "class_id": 50,
+      "count": 27
+    },
+    {
+      "class_id": 52,
+      "count": 26
+    },
+    {
+      "class_id": 58,
+      "count": 26
+    },
+    {
+      "class_id": 14,
+      "count": 24
+    },
+    {
+      "class_id": 20,
+      "count": 24
+    },
+    {
+      "class_id": 17,
+      "count": 23
+    },
+    {
+      "class_id": 32,
+      "count": 21
+    },
+    {
+      "class_id": 19,
+      "count": 18
+    },
+    {
+      "class_id": 2,
+      "count": 18
+    },
+    {
+      "class_id": 33,
+      "count": 18
+    },
+    {
+      "class_id": 38,
+      "count": 17
+    },
+    {
+      "class_id": 42,
+      "count": 14
+    },
+    {
+      "class_id": 45,
+      "count": 11
+    }
+  ],
+  "top_5_predicted_class_share": 0.1937727724412057,
+  "top_10_predicted_class_share": 0.3381914541238821
+}

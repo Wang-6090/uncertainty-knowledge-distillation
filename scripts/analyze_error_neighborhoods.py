@@ -83,6 +83,42 @@ def _summarize_group(mask, pred, neighbor_labels, neighbor_similarities, k):
     }
 
 
+def _finite_mean(values, mask):
+    """Return a JSON-safe mean for an optional per-sample diagnostic vector."""
+    values = np.asarray(values, dtype=float)
+    selected = values[mask]
+    selected = selected[np.isfinite(selected)]
+    return float(selected.mean()) if len(selected) else None
+
+
+def _score_component_summary(detail, mask):
+    """Summarize detector components without assuming their score direction.
+
+    The audit is descriptive: some components are distances (higher means more
+    unknown), while others are model outputs whose direction depends on the
+    fitted rejector.  We therefore report means only and do not combine or
+    threshold them here.
+    """
+    names = (
+        "score",
+        "feature_rejector_score",
+        "proto_dist",
+        "knn_distance",
+        "knn_predicted_class_distance",
+        "knn_predicted_class_relative_distance",
+        "knn_min_class_distance",
+        "knn_min_class_relative_distance",
+        "knn_predicted_class_support",
+        "entropy",
+        "feature_norm",
+    )
+    return {
+        name: _finite_mean(detail.get(name), mask)
+        for name in names
+        if name in detail
+    }
+
+
 def _analyze_checkpoint(args, bundle, train_loader, test_loader, known_classes, name, ckpt_path, detail_dir, device):
     detail_path = Path(detail_dir) / "discovery_detail.json"
     report_path = Path(detail_dir) / "discovery_report.json"
@@ -94,6 +130,7 @@ def _analyze_checkpoint(args, bundle, train_loader, test_loader, known_classes, 
         backbone=args.backbone,
         proj_dim=args.proj_dim,
         dropout=args.dropout,
+        rejection_feature_dim=args.rejection_feature_dim,
         pretrained=False,
         cifar_stem=args.cifar_stem,
     ).to(device)
@@ -157,6 +194,12 @@ def _analyze_checkpoint(args, bundle, train_loader, test_loader, known_classes, 
             "count": int(cls_mask.sum()),
             "false_accept_count": int(false_mask.sum()),
             "false_accept_rate": float(false_mask.sum() / cls_mask.sum()),
+            "accepted_unknown_score_components": _score_component_summary(
+                detail, false_mask
+            ),
+            "rejected_unknown_score_components": _score_component_summary(
+                detail, cls_mask & ~accepted
+            ),
             "top_nearest_known_train_classes": [
                 {"raw_class": int(c), "count": int(nearest_counts[c])}
                 for c in np.argsort(nearest_counts)[::-1][:5]
@@ -172,6 +215,8 @@ def _analyze_checkpoint(args, bundle, train_loader, test_loader, known_classes, 
 
     false_accept = groups["unknown_false_accept"]
     topk_prediction_support = (neighbor_mapped == pred[:, None]).mean(axis=1)
+    false_accept_nearest_raw = neighbor_raw[false_accept, 0] if false_accept.any() else np.asarray([], dtype=int)
+    false_accept_nearest_counts = np.bincount(false_accept_nearest_raw, minlength=100)
     return {
         "checkpoint": str(ckpt_path),
         "detector_detail": str(detail_path),
@@ -194,6 +239,15 @@ def _analyze_checkpoint(args, bundle, train_loader, test_loader, known_classes, 
         "unknown_false_accept_local_support": {
             "count": int(false_accept.sum()),
             "mean_topk_neighbor_support_for_predicted_class": float(topk_prediction_support[false_accept].mean()) if false_accept.any() else None,
+            "score_components": _score_component_summary(detail, false_accept),
+            "unknown_rejected_score_components": _score_component_summary(
+                detail, groups["unknown_rejected"]
+            ),
+            "top_nearest_known_train_classes_over_all_false_accepts": [
+                {"raw_class": int(c), "count": int(false_accept_nearest_counts[c])}
+                for c in np.argsort(false_accept_nearest_counts)[::-1][:10]
+                if false_accept_nearest_counts[c] > 0
+            ],
             "unknown_class_breakdown": unknown_class_rows,
         },
     }
@@ -227,8 +281,8 @@ def analyze(args):
 
     outputs = {}
     for name, ckpt, detail_dir in (
-        ("five_epoch", args.five_epoch_ckpt, args.five_epoch_detail_dir),
-        ("ten_epoch", args.ten_epoch_ckpt, args.ten_epoch_detail_dir),
+        (args.first_name, args.five_epoch_ckpt, args.five_epoch_detail_dir),
+        (args.second_name, args.ten_epoch_ckpt, args.ten_epoch_detail_dir),
     ):
         outputs[name] = _analyze_checkpoint(
             args, bundle, train_loader, test_loader, bundle.known_classes,
@@ -252,6 +306,12 @@ def parse_args(argv=None):
     parser.add_argument("--backbone", default="resnet18")
     parser.add_argument("--proj-dim", type=int, default=128)
     parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument(
+        "--rejection-feature-dim",
+        type=int,
+        default=0,
+        help="Must match the checkpoint's rejection branch dimension.",
+    )
     parser.add_argument("--cifar-stem", action="store_true")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--mixed-known-pool-ratio", type=float, default=0.2)
@@ -262,6 +322,16 @@ def parse_args(argv=None):
     parser.add_argument("--five-epoch-detail-dir", required=True)
     parser.add_argument("--ten-epoch-ckpt", required=True)
     parser.add_argument("--ten-epoch-detail-dir", required=True)
+    parser.add_argument(
+        "--first-name",
+        default="five_epoch",
+        help="Report key for the first checkpoint (legacy default: five_epoch).",
+    )
+    parser.add_argument(
+        "--second-name",
+        default="ten_epoch",
+        help="Report key for the second checkpoint (legacy default: ten_epoch).",
+    )
     parser.add_argument("--output", default="./analysis/error_neighborhoods_s123_20261011.json")
     return parser.parse_args(argv)
 

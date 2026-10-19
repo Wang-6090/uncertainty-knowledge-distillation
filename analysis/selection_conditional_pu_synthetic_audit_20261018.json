@@ -1,0 +1,29 @@
+{
+  "cases": [
+    {
+      "known_prior": 0.2,
+      "known_selection_rate": 0.1,
+      "unknown_selection_rate": 0.5,
+      "empirical_mixed_selection_rate": 0.421942,
+      "empirical_selected_known_rate": 0.10145160157699909,
+      "analytical_selected_known_prior": 0.04761904761904762,
+      "estimated_selected_known_prior": 0.04808793589472771,
+      "true_selected_unknown_risk": 4.5,
+      "recovered_selected_unknown_risk": 4.500000066529187,
+      "absolute_risk_error": 6.652918660421392e-08
+    },
+    {
+      "known_prior": 0.2,
+      "known_selection_rate": 0.8,
+      "unknown_selection_rate": 0.3,
+      "empirical_mixed_selection_rate": 0.400216,
+      "empirical_selected_known_rate": 0.7987914682460282,
+      "analytical_selected_known_prior": 0.4000000000000001,
+      "estimated_selected_known_prior": 0.39918017387390137,
+      "true_selected_unknown_risk": 2.75,
+      "recovered_selected_unknown_risk": 2.750000198411045,
+      "absolute_risk_error": 1.9841104492712702e-07
+    }
+  ],
+  "max_absolute_risk_error": 1.9841104492712702e-07
+}

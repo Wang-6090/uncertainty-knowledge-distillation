@@ -1,5 +1,225 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 2026-10-18：边界 VOS + rejection BCE 配对复核——未获得稳定收益
+
+为验证“困难边界虚拟未知上的 rejection-head BCE”是否真的改善核心的
+已知/未知分数分离，在 seed=44 和 seed=123 分别做了配对对照。两臂均固定
+CIFAR-100 semantic-isolated 60/40、4 epochs、nearest-class VOS、
+`alpha_vos=0.01`、边界比例 25%、相同训练/数据协议、检测器和验证集
+95% known-coverage 校准；唯一训练变量是 `alpha_vos_rejection`（0 vs 0.05）。
+配置审计确认除损失权重、输出路径和随训练产生的最佳验证准确率元数据外，
+其余训练参数相同；treatment 训练历史中 `vos_rejection` 非零，说明损失实际生效。
+
+| seed | BCE | AUROC | FPR95 | OSCR | KS | unknown below known-q95 | known above unknown-q05 | 已知接受率 | 未知拒绝率 | 接受后已知准确率 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 44 | 关 | 0.89524 | 0.38033 | 0.65273 | 0.64292 | 0.54375 | 0.38033 | 93.92% | 51.45% | 72.64% |
+| 44 | 0.05 | 0.90118 | 0.34583 | 0.65685 | 0.64700 | 0.51500 | 0.34583 | 94.92% | 49.08% | 72.36% |
+| 123 | 关 | 0.89518 | 0.40750 | 0.64017 | 0.63950 | 0.50900 | 0.40750 | 95.18% | 48.20% | 71.00% |
+| 123 | 0.05 | 0.89078 | 0.41417 | 0.63212 | 0.63025 | 0.53700 | 0.41417 | 95.73% | 42.75% | 70.40% |
+
+seed=44 的排序与 overlap 有小幅改善，但 seed=123 反向，未知拒绝率在两个 seed
+都下降（分别 −2.37、−5.45 个百分点）。因此这不是稳定有效的拒识改进，不能只
+凭 seed=44 的 AUROC 或已知接受率得出正面结论。**不将该 BCE 设为默认，也不继续
+对它扫权重。**保留 boundary VOS 与 rejection BCE 的区别：此前 boundary VOS
+本身较有希望，但仍需独立复核；本次结果否定的是将 BCE 直接施加到合成虚拟未知上
+能稳定帮助 rejector 的假设。接下来按未知细类及其最近已知类分析误接收，再设计
+有可靠非测试监督依据的类条件拒识信号；所有实验仍联合考察排序、分数重叠和已知效用。
+
+此前高风险伪未知筛选方向也仍判为无效：拒绝率提升主要来自误拒已知样本，而非分数
+分离改善。 :codex-annotation{index="1"}
+
+完整设计、逐 seed 差值和限制见
+[`analysis/vos_boundary_rejection_matched_s44_s123_e4_20261018.md`](analysis/vos_boundary_rejection_matched_s44_s123_e4_20261018.md)。
+
+### 配对实验后的误差邻域诊断（seed=123）
+
+进一步复核了 control 与 BCE=0.05 treatment 的测试误差邻域。测试标签仅用于推理后的
+描述性分组，没有参与训练、校准或方法选择。control 有 `2,072/4,000` 个未知样本被误接收
+（51.80%），treatment 为 `2,290/4,000`（57.25%）；误接收样本的平均最近已知类 cosine
+距离分别为 0.2090 和 0.2230。高误接收集中在 lamp、snake、clock、kangaroo 等少数未知类，
+常见近邻包括 squirrel、shrew、rabbit、mouse、shark 等。也就是说，错误有局部类别/语义集中性，
+但单纯更远的最近邻距离并没有对应更强拒识，不能据此直接把 kNN 距离加进默认检测分数。
+
+这项诊断不挽救 rejection BCE：treatment 比 control 多误接收 218 个未知样本，与两 seed 配对
+实验中未知拒绝率均下降的结论一致。下一步先在冻结 checkpoint 上，用**已知验证集**检查预测类
+条件分数校准和局部支持量与已知误拒之间的关系；任何类别条件映射都要报告按类样本数、校准误差、
+排名/重叠指标及已知效用，并与全局校准对照。验证通过后才值得设计训练期算法实验；不能按测试集
+未知类别拟合阈值，也不能把测试集分组结果当作监督信号。详细统计、协议和限制见
+[`analysis/vos_boundary_rejection_error_neighborhoods_s123_20261018.md`](analysis/vos_boundary_rejection_error_neighborhoods_s123_20261018.md)。
+
+### 冻结模型的类条件阈值诊断（seed=123）
+
+为检查类别间 rejector 分数尺度差异是否导致未知误接收，固定上述 BCE-off checkpoint、
+`feature_rejector` 分数、数据划分与模型，只将全局阈值换成按预测已知类分别取已知验证分数
+95 分位数的阈值（每类至少 5 个验证样本；不使用未知验证/测试标签校准）。这是校准策略诊断，
+不是训练算法实验；阈值不改变分数排序，因此 AUROC 等排序指标应保持不变。
+
+| 阈值策略 | AUROC | FPR95 | OSCR | 测试已知接受率 | 测试未知拒绝率 |
+|---|---:|---:|---:|---:|---:|
+| 全局 95% known-coverage（原配对基线） | 0.89518 | 0.40750 | 0.64017 | 95.18% | 48.20% |
+| 按预测类条件 95 分位数 | 0.89518 | 0.40750 | 0.64017 | 88.45% | 49.65% |
+
+类条件阈值只多拒绝 1.45 个百分点未知样本，却多误拒 6.73 个百分点已知样本；实际已知覆盖
+也明显偏离名义 95%。因此它没有解决特征/分数重叠，不设为默认，也不继续用测试集选阈值或
+调收缩系数。后续若要研究类条件校准，先在已知验证数据内部做独立校准/评估拆分和阈值稳定性
+诊断；算法主线仍应回到能改善排序与分数重叠、同时维持已知效用的训练期方法。复现实验命令与
+限制见 [`analysis/class_conditional_threshold_pilot_s123_20261011.md`](analysis/class_conditional_threshold_pilot_s123_20261011.md)
+（历史阈值试验）以及本轮运行配置 `runs/vos_boundary_rejection_classcond_s123_e4_feature_rejector/`。
+
+## 2026-10-18：候选筛选后的有效先验校正——实现正确，但未改善核心分离
+
+上一轮审计发现：如果 kNN 边界损失只作用于候选筛选后的 mixed pool，直接使用原始已知先验可能使 PU 风险参考分布不匹配。因此新增可选开关 `--discovery-knn-selection-conditional`，按
+
+`pi_selected = pi × P(S|known) / P(S|mixed)`
+
+计算筛选后的有效先验，并对已知样本使用与 mixed pool 相同的单视图候选规则。该开关默认关闭，只在 mixed pool、candidate gating、`hard_nnpu/soft_nnpu`、kNN 边界损失开启且 cross-view gating 关闭时生效。训练日志新增 mixed/known selection rate 和 effective prior，合成数据审计恢复误差约为 `1.98e-7`，说明公式和 wiring 正确。
+
+随后完成了 seed=44 的严格配对实验：CIFAR-100 semantic-isolated 60/40、4 epochs、mixed pool=5400、known prior=0.2、shared-boundary 候选空间、hard-NNPU、同一检测器和验证集 95% known-coverage 校准，唯一变量是该开关。
+
+| 条件 | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known-q95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 原始先验 | 0.90048 | 0.35550 | 0.65797 | 95.783% | 42.450% | 0.65717 | 53.600% |
+| 筛选条件先验 | 0.89906 | 0.36317 | 0.65904 | 95.350% | 45.750% | 0.64725 | 51.325% |
+
+有效先验确实恢复到 `0.2`，但 AUROC、FPR95、KS 没有改善；未知拒绝率上升伴随已知接受率下降，主要是工作点变化，而不是已知/未知分布真正分离。该方法不设为默认，也不再继续扫描先验或阈值。完整记录见 [`analysis/selection_conditional_pu_wiring_20261018.md`](analysis/selection_conditional_pu_wiring_20261018.md)，汇总见 [`analysis/selection_conditional_pu_s44_e4_summary.json`](analysis/selection_conditional_pu_s44_e4_summary.json)。
+
+本轮还修复了实验汇总脚本在 Windows 下无法序列化 `Path` 的问题，并补充了报告字段映射，避免实验实际完成后因记录失败而被误判为未完成。当前核心问题仍是 semantic-near unknown 与已知类在共享表示和 rejector 分数上的重叠；下一步应停止调 PU 先验，转向直接的类条件拒识监督或针对 hard unknown 的表示几何约束，并继续用 AUROC、FPR95、OSCR、KS、overlap 和已知效用共同判断。
+
+## 2026-10-18：困难边界虚拟未知（VOS）seed 复核——收益未复现
+
+前面对 inter-class VOS 的审计表明，对所有已知样本生成虚拟未知可能扰动正常已知区域。因此本轮只使用已知分类 margin 最低的 25% 样本生成 nearest-class 虚拟未知，固定 `alpha_vos=0.01`、`alpha_vos_rejection=0`，与同脚本的 no-VOS control 配对。
+
+| 条件 | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known-q95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| no VOS control | 0.89218 | 0.38883 | 0.65732 | 95.833% | 43.600% | 0.63058 | 53.325% |
+| nearest-class + boundary 25% | **0.89919** | **0.36667** | **0.65976** | 94.133% | **52.850%** | **0.64617** | **52.800%** |
+
+这次 AUROC、FPR95、OSCR、KS 和重叠代理均向好的方向移动，比“筛选条件先验校正”更有希望；但已知接受率下降 1.70 个百分点，仍不能只凭未知拒绝率上升判定解决核心问题。完整结果见 [`analysis/vos_boundary_fraction_control_s44_e4_20261018.md`](analysis/vos_boundary_fraction_control_s44_e4_20261018.md)。
+
+同时修复了 VOS 的一个 wiring 问题：`vos_boundary_fraction` 原来只作用于 Energy VOS，若开启 `alpha_vos_rejection`，拒识头仍会对全部虚拟样本施加 unknown 监督。新增 `weighted_unknown_bce`，使两条分支使用相同边界 mask；默认 `alpha_vos_rejection=0`，因此不改变默认流程。对应测试验证了被屏蔽样本没有梯度。
+
+随后在 seed=123 完成同协议复现（4 epochs、nearest-class VOS、boundary fraction=0.25、`alpha_vos=0.01`、`alpha_vos_rejection=0`，仅比较 no-VOS 与 boundary VOS）：
+
+| seed | 条件 | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known-q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 123 | no VOS control | 0.90069 | 0.37983 | 0.64926 | 96.20% | 44.18% | 0.64883 | 49.65% |
+| 123 | nearest-class + boundary 25% | 0.89193 | 0.40950 | 0.63662 | 96.08% | 43.08% | 0.63350 | 50.85% |
+
+seed=123 中 treatment 相对 control 的 AUROC 下降 0.00876、FPR95 恶化 0.02967、OSCR 下降
+0.01264、KS 下降 0.01533，未知拒绝率下降 1.10 个百分点。seed=44 的正向变化因此没有复现，
+目前不把 boundary VOS 认定为稳定有效方法，不扩大 VOS 权重/比例搜索；它也不应与 BCE 叠加，
+因为 rejection BCE 的双 seed 配对结果同样不稳定。接下来回到表示/拒识机制层：检查已知分类
+margin 所选边界样本是否真对应 semantic-near unknown 的局部困难区域，以及 VOS 梯度对已知分类
+边界和 rejector 分数的影响，再据此设计新的一因素训练试验。完整结果见
+[`analysis/vos_boundary_vos_replication_s123_20261018.md`](analysis/vos_boundary_vos_replication_s123_20261018.md)。
+
+### VOS source-gradient 配对实验（seed=44/123；方向未复现，停止此分支）
+
+在梯度路径机制 smoke test 确认 detach 只切断虚拟特征构造路径之后，完成 seed=123 配对并对 seed=44 复核。两 seed 均固定相同 teacher/初始化协议、semantic-isolated 60/40 划分、nearest-class VOS、boundary 25%、`alpha_vos=0.01`、`alpha_vos_rejection=0`、mixed discovery pool、检测器与验证集 95% known-coverage 校准；唯一训练变量是是否让合成虚拟特征对源特征回传梯度。seed=123 的 detached → source-gradient：AUROC `0.88736→0.89541`、FPR95 `0.39533→0.41783`（变差）、OSCR `0.63657→0.64061`、KS `0.61783→0.63600`、unknown-below-known-q95 overlap `56.40%→47.80%`、已知接受率 `95.42%→95.77%`、未知拒绝率 `41.70%→46.80%`。seed=44 则 AUROC `0.89494→0.89261`、FPR95 `0.38033→0.37400`、OSCR `0.65610→0.65129`、KS `0.63742→0.63783`、unknown-below-known-q95 overlap `52.43%→53.58%`、已知接受率 `94.37%→95.07%`、未知拒绝率 `49.48%→46.20%`。排序、overlap 与工作点指标方向跨 seed 不一致，因此不构成可靠改进，核心分数重叠仍在。
+
+梯度审计（每臂每 epoch 338 个 batch，跨 epoch 均值）在两 seed 都确认：detached 的 VOS 总 encoder 梯度约 `0.217–0.219`，虚拟特征构造路径为 `0`；source-gradient 的总量约 `0.209`，新增虚拟路径约 `0.286`，两路径 cosine 约 `0.66`。source-gradient 新增路径与真实已知 logits 分支存在较强部分抵消；`alpha_vos_rejection=0` 时 rejector 梯度为 `0`。机制稳定存在，但检测收益不稳定。**不改变默认 detach，停止该 source-gradient VOS 分支，不做权重扫描或与 rejection BCE 组合。**下一步回到真实 hard unknown 的类别级错误结构和训练协议可学习信号，不再把合成边界点当作主要突破口。
+
+实验过程中发现短跑 driver 曾继承源配置中的绝对 checkpoint 输出路径，导致覆盖 seed-123 VOS treatment checkpoint；该 1-epoch/512 样本产物未用作性能证据。随后修正输出隔离，并在独立目录完成完整配对和 seed-44 复核。旧的 discovery 指标记录仍是历史结果，但原 checkpoint 文件需要重生成后才能做 checkpoint 级复分析。梯度机制 smoke-test 脚本为 [`scripts/run_vos_gradient_path_audit.py`](scripts/run_vos_gradient_path_audit.py)，完整配对脚本为 [`scripts/run_vos_source_gradient_compare.py`](scripts/run_vos_source_gradient_compare.py)；协议、逐 seed 结果、限制及事故说明见 [`analysis/vos_source_gradient_compare_s123_e4_20261018.md`](analysis/vos_source_gradient_compare_s123_e4_20261018.md)。
+
+### VOS 梯度路径核查（2026-10-18；机制审计，非性能实验）
+
+复查实现后确认，`detach_source=True` 只切断“虚拟特征由真实特征合成”这一条反向路径，并不会让 VOS 完全绕开 encoder：Energy margin 仍以真实已知样本 logits 作为一侧，因此 `loss_vos` 仍能经已知 logits 更新 encoder 和 classifier。此前将该项概括为“只训练分类头”不准确，现已补上训练期分模块梯度审计：记录实际加权 VOS 对 encoder、分类头的梯度范数；另以 detach 的已知 logits 单独记录虚拟特征构造路径梯度；若启用 `alpha_vos_rejection`，也单独审计 rejection 分支梯度。`alpha_vos_rejection=0` 时该拒识头项应为零。
+
+新增确定性单元测试验证：source detach 默认确实消除虚拟构造路径的特征梯度，但完整 energy-margin 仍保留真实已知分支梯度；开启 source-gradient 时虚拟构造路径重新连通。测试通过（`224 passed`，`git diff --check` 通过）。这只是计算图机制核实，没有新训练、没有新性能数据，因此不据此声称 VOS 有效；seed=44/123 的结论仍是收益未稳定复现。下一步如再评估 VOS，先用 `--audit-loss-gradients` 在训练 batch 上查看各路径梯度范数及相对主任务的尺度，再决定是否值得做 detach/source-gradient 配对训练；对比中除梯度开关外固定训练 seed、初始化、数据与校准协议，并联合检查 AUROC、FPR95、OSCR、overlap、固定覆盖拒绝率和已知效用。
+
+## 2026-10-17：support score 与候选池审计补充
+
+在严格 PU-kNN wiring 复核之后，又对同一个 seed=44 学生 checkpoint 做了两项不重训审计：
+
+1. 固定数据划分、混合池、验证集 95% known-coverage 校准和 checkpoint，只切换最终检测分数；当前 `feature_rejector` 的 AUROC 为 `0.9008`，直接 `known_support` 为 `0.7717`，`known_conformal` 为 `0.7161`。这说明简单支持半径或共形支持分数不能替代当前 mixed-pool nnPU rejector，不能把它们作为核心问题的解决方案。
+2. 审计 5,400 样本混合发现池的候选质量。当前 `entropy_uncertainty` 候选池已知污染约 `4.96%`、未知纯度 `95.04%`、未知召回 `29.70%`；`distance_consensus` 的纯度最高约 `96.59%`，但未知召回仅 `30.19%`。因此候选池不是“已知污染严重”，反复更换候选 gate 预计不能单独解决分布重叠。
+
+本轮新增报告见 [`analysis/support_score_and_candidate_audit_s44_20261017.md`](analysis/support_score_and_candidate_audit_s44_20261017.md)，审计脚本见 [`scripts/audit_discovery_candidate_pool.py`](scripts/audit_discovery_candidate_pool.py)。`train.py` 现在会把 support radius 的类数、分位数及半径统计写入 `calibration_report.json`，仅用于诊断，不改变默认训练或检测结果。
+
+另外，按预测已知类分别校准 95% 阈值后，未知拒绝率仅由 `47.08%` 提高到 `48.53%`，但已知接受率降至 `87.95%`，AUROC 不变；这进一步说明不能继续把核心问题归因于全局阈值或简单 calibration。
+
+按未知细类的事后统计显示，`clock`、`lamp`、`beaver`、`porcupine`、`possum` 等类别拒绝率仅约 `16%–25%`，失败集中在少数 hard/semantic-near unknown，而不是所有未知类均匀失败。后续算法实验必须增加逐未知类指标和 accepted-unknown 的最近已知类统计。
+
+当前下一步应转向：按未知细类统计拒绝率，定位最容易被接受的 semantic-near unknown；再针对这些样本设计表示学习/类条件边界改动，并用固定验证协议做配对实验。不要把本轮 support score 或候选 gate 审计误写成算法效果。
+
+## 2026-10-17：PU-kNN 边界损失严格 wiring 复核
+
+本轮先审计上一轮实验的 wiring，再进行严格配对复核。原实验配置同时启用了 `alpha_discovery_rejection_boundary=0.1`，因此不能把结果归因于 pure/hard-NNPU kNN 风险形式。本轮修正脚本，显式关闭独立 rejection boundary 和 rejection-kNN boundary，只保留 `alpha_discovery_knn_boundary=0.1`。比较因素仍只有 `discovery_knn_risk=pure` 与 `hard_nnpu`；两臂固定 seed=44、CIFAR-100 semantic-isolated 60/40、4 epochs、混合池 5,400（已知先验 0.2）、共享边界候选空间、同一检测器和验证集 95% known-coverage 校准。
+
+严格复核已完成，报告目录为 `runs/knn_pu_boundary_strict_s44_e4_pure_discover/` 和 `runs/knn_pu_boundary_strict_s44_e4_hard_nnpu_discover/`。
+
+| seed | kNN risk | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known-q95 | 接受后已知准确率 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 44 | pure | 0.90078 | 0.36233 | 0.65830 | 95.63% | 47.08% | 0.64942 | 50.75% | 72.34% |
+| 44 | hard_nnpu | 0.89380 | 0.38633 | 0.66304 | 94.33% | 51.65% | 0.63392 | 51.05% | 73.96% |
+
+`hard_nnpu` 的未知拒绝率提高 4.58 个百分点，但已知接受率下降 1.30 个百分点；同时 AUROC、FPR95、KS 变差，overlap 也略变差，只有 OSCR 和接受后已知准确率上升。因此这不是稳定的分布分离改进，更像是工作点与选择性分类效用的 trade-off。训练日志还显示 hard-NNPU 的 `discovery_knn_boundary` 末轮约为 `0.000405`，而 pure 为 `0.023561`，说明硬截断使该项大部分时间几乎没有有效梯度；不能把更高拒绝率解释为更强的 kNN 边界学习。
+
+代码修改位于 `novel_discovery/losses.py`、`novel_discovery/pipeline.py`、`train.py`、`tests/test_core_behaviors.py` 和 `scripts/run_knn_pu_boundary_control.py`。严格复核脚本现在会在训练和 discover 配置中显式记录四个 boundary 权重，避免历史配置污染。单元测试结果为 `206 passed`。
+
+本轮结论：`hard_nnpu` 暂不设为默认，也不补第二个 seed 来放大一个已出现负向排序信号的方法。下一步优先审计 support radius、候选池的已知污染率/未知召回率，以及 semantic-near unknown 的误接收；若继续研究 PU-kNN，应先改进风险项的梯度有效性并用验证集预注册选择规则，而不是继续调阈值或叠加 gating。
+
+核心判据仍是已知/未知特征与分数分布是否真正分开，而非拒绝率单项升高；当前尚无证据表明本轮 PU-kNN 改善了该问题。
+
+## 2026-10-16：支持集上限修复（已进入默认配置）
+
+上一轮 paired 实验发现，feature rejector 的已知支持最多使用 5,000 个样本时，类条件 support 覆盖不足会加重已知/未知分数重叠。本轮固定 student checkpoint、CIFAR-100 semantic-isolated 60/40、mixed pool=5400、`nu_corrected`、`support_augmented`、linear nnPU、MC=4 和 95% known-coverage 校准，只比较分层 5,000 样本与全部支持样本：
+
+| seed | support | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 44 | stratified 5000 → all | 0.88389 → **0.90342** | 0.4027 → **0.3590** | 0.65048 → 0.66667 | 93.28% → **95.37%** | 50.15% → 49.48% | 0.6098 → **0.6512** | 56.35% → **48.40%** |
+| 123 | stratified 5000 → all | 0.88964 → **0.90315** | 0.4070 → **0.3812** | 0.63537 → 0.64405 | 96.65% → 95.72% | 39.40% → **50.05%** | 0.6279 → **0.6571** | 51.88% → **45.95%** |
+
+两组 seed 都支持“使用全部已知支持样本”这一修复：排序分离、KS、重叠代理和未知拒绝率整体改善，说明这不是简单阈值调整，而是修复了 rejector 支持集覆盖不足。它仍不能说明共享表征已经完全解决重叠问题，OSCR 和已知分类效用仍需持续监控。因此 `train.py` 的 `--rejector-max-samples` 默认值已从 `5000` 改为 `0`（使用全部可用样本）；显式设置正数仍可复现旧实验或进行容量消融。完整协议与原始结果见 [`analysis/nnpu_support_size_control_20261016.md`](analysis/nnpu_support_size_control_20261016.md)，复现实验见 [`scripts/run_nnpu_support_size_control.py`](scripts/run_nnpu_support_size_control.py)。
+
+同时完成了支持规模参数的 wiring 审计：`hard`、`soft_pu` 和 `nnpu` 三种 rejector 都统一使用 `0/None=全部支持`，并且 hard 分支现在会真正接收 `--rejector-max-samples`；此前 hard 分支忽略了该命令行参数，可能造成实验协议误判。
+
+## 2026-10-16：类条件 support 距离不是充分检测器
+
+为确认 full-support 的收益是否只是来自原型/支持集距离，本轮在同一 student checkpoint、同一 CIFAR-100 semantic-isolated 60/40、同一 mixed pool、同一 95% known-coverage 校准下，将最终分数改为只使用已知类条件 support 距离：
+
+| detector | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known q95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| full-support `support_augmented` nnPU | 0.90342 | 0.3590 | 0.66667 | 95.37% | 49.48% | 0.6512 | 48.40% |
+| known-only class support | 0.76023 | 0.6763 | 0.58271 | 93.82% | 23.23% | 0.3876 | 79.45% |
+
+结论是：类条件 support 距离单独不能解决重叠问题；当前有效因素是 mixed-pool nnPU 的学习，而 `known_support_score` 更适合作为 rejector 输入或诊断量，不应替代最终检测器。完整记录见 [`analysis/known_support_vs_nnpu_s44_20261016.md`](analysis/known_support_vs_nnpu_s44_20261016.md)。下一步固定 full-support、`nu_corrected` 和其他协议，只测试 `rejection_balanced_support_augmented`，检查高维 logit 块是否造成尺度/维度捷径。
+
+## 2026-10-16：平衡高维 logit 特征的复核
+
+为检查 rejector 是否被 60 维分类 logits 的尺度或维度主导，本轮只将 `support_augmented` 换成已有的 `rejection_balanced_support_augmented`，对 logits 逐样本归一化；full-support、`nu_corrected`、linear nnPU、student checkpoint、mixed pool、MC=4 和 95% known-coverage 校准全部固定：
+
+| seed | feature mode | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 44 | support → balanced | 0.90342 → **0.90863** | 0.3590 → **0.3318** | 0.66667 → **0.67036** | 95.37% → **96.37%** | 49.48% → 42.40% | 0.6512 → **0.6685** | 48.40% → 49.75% |
+| 123 | support → balanced | 0.90315 → **0.90582** | 0.3812 → **0.3488** | 0.64405 → **0.64791** | 95.72% → 94.90% | 50.05% → **52.03%** | 0.6571 → **0.6636** | 45.95% → 48.13% |
+
+AUROC、FPR95、OSCR 和 KS 在两个 seed 都改善，说明特征尺度确实影响 rejector；但 overlap 代理在两个 seed 都变差，且 seed=44 的工作点未知拒绝率下降。因此暂不修改默认 feature mode，只保留该模式作为候选消融，避免把排序指标改善误写为核心重叠问题已经解决。完整记录见 [`analysis/nnpu_balanced_support_control_20261016.md`](analysis/nnpu_balanced_support_control_20261016.md)。
+
+## 2026-10-16：已知支持分层抽样（历史候选，优先级已被 full-support 复核覆盖）
+
+在 nnPU rejector 的已知支持最多抽取 5,000 个样本时，随机抽样可能使不同已知类的支持数量不均，进而加重类条件 support 覆盖不一致。本轮只打开已有的 `--rejector-stratified-known`，其余固定为 `nu_corrected`、`support_augmented`、linear nnPU、同一 mixed pool、同一 student checkpoint、MC=4 和验证集 95% known-coverage 校准。
+
+| seed | 抽样 | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 44 | random → stratified | 0.88225 → 0.88389 | 0.4070 → 0.4027 | 0.64918 → 0.65048 | 95.15% → 93.28% | 42.40% → 50.15% | 0.6046 → 0.6098 | 56.73% → 56.35% |
+| 123 | random → stratified | 0.88326 → 0.88964 | 0.4362 → 0.4070 | 0.62922 → 0.63537 | 96.37% → 96.65% | 40.18% → 39.40% | 0.6038 → 0.6279 | 52.45% → 51.88% |
+
+两 seed 的排序与分布分离指标均同向改善，说明该方向可能确实减少了已知支持集合的类偏差；但 seed=44 的已知接受率下降约 1.9 个百分点，seed=123 的未知拒绝率略降，因此当时没有直接设为无条件默认。随后完成的 full-support paired 复核在两个 seed 上进一步改善 AUROC、FPR95、KS 和重叠代理，因此当前优先使用全部支持样本，分层 5,000 仅保留为历史 ablation。详细记录见 [`analysis/nnpu_stratified_support_control_20261016.md`](analysis/nnpu_stratified_support_control_20261016.md)，复现实验见 [`scripts/run_nnpu_stratified_support_control.py`](scripts/run_nnpu_stratified_support_control.py)。
+
+## 2026-10-16：nnPU 风险归一化审计（两 seed，结论为候选而非默认）
+
+本轮先核对了 feature rejector 的 nnPU 风险实现，再做严格 paired control。修正内容是去掉历史实现中对 mixed-pool 正类风险的额外 `1/(1-已知先验)` 缩放；已知样本仍作为可靠负类，mixed pool 仍作为未标注样本，不能把这次修正误写成交换类别标签。新增 `nnpu_binary_risk` 公共函数、公式单元测试和复现实验脚本 [`scripts/run_nnpu_formula_control.py`](scripts/run_nnpu_formula_control.py)。
+
+固定学生 checkpoint、CIFAR-100 semantic-isolated 60/40、mixed pool=5400、已知先验=0.2、`support_augmented`、linear rejector、MC=4 和验证集 95% known-coverage 校准，仅比较 `legacy` 与 `nu_corrected`：
+
+| seed | risk | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 44 | legacy → nu_corrected | 0.89385 → 0.89999 | 0.3720 → 0.3578 | 0.65765 → 0.66143 | 95.18% → 94.98% | 46.43% → 47.48% | 0.6283 → 0.6445 | 52.88% → 52.53% |
+| 123 | legacy → nu_corrected | 0.88511 → 0.88326 | 0.4543 → 0.4362 | 0.63460 → 0.62922 | 96.13% → 96.37% | 42.60% → 40.18% | 0.6145 → 0.6038 | 52.18% → 52.45% |
+
+结论：公式修正是有效的代码和目标审计，seed=44 的整体分离指标有改善，但 seed=123 的方向不一致。因此 `nu_corrected` 暂时作为明确的可复现实验选项保留，不能单独设为“已经解决核心重叠问题”的默认方案，也不应继续只调这个缩放项。详细公式、协议、结果和限制见 [`analysis/nnpu_formula_control_20261016.md`](analysis/nnpu_formula_control_20261016.md)。下一步优先检查 mixed pool 中已知 support 的类均衡与覆盖，而不是继续做阈值扫描。
+
 ## 2026-10-15：soft-NNPU treatment 已完成与判断
 
 上轮中断的 `soft_nnpu` treatment 已在严格同协议下补完：服务器、数据划分、教师和学生、混合池、已知先验、4 epochs、检测器和校准方式均保持一致，唯一算法变量是 `hard_nnpu -> soft_nnpu`，边界权重为 `0.1`。训练和 discover 均已完成，完整审计见 [`analysis/rejection_boundary_soft_nnpu_audit_s44_20261015.md`](analysis/rejection_boundary_soft_nnpu_audit_s44_20261015.md)。
@@ -5708,3 +5928,389 @@ not be reported as a solved core problem.
 `rejection_support` 虽然让报告阈值下未知拒绝率提高 5.43 个百分点，但已知接受率下降 1.27 个百分点；AUROC 几乎不变，FPR95 和 score overlap 变差，均值/中位数分数间隔缩小。因此不能把它判定为解决核心重叠问题的有效方法，也不修改默认候选空间。它最多说明 rejection-support 具有少量互补信号，后续若继续研究必须先固定独立验证集上的 support 半径和边界权重，并用多 seed 同时检查排序、分离、已知 utility 和固定覆盖率拒绝率。
 
 本轮结论和完整协议见 [`analysis/rejection_knn_candidate_space_control_s44_20261016.md`](analysis/rejection_knn_candidate_space_control_s44_20261016.md)。当前候选空间方向暂时停止继续扫描，下一步回到共享 encoder 的类条件局部 support 几何，重点分析 semantic-near unknown 的误接收和 support 半径是否可靠。
+
+### 2026-10-16：共享边界候选与分类共识硬交集复核
+
+为降低 `shared_boundary` 候选中的已知样本污染，新增 `shared_boundary_consensus`：将共享特征的 kNN support 边界候选与原分类器/不确定性共识候选取交集。先在 seed=44 看机制，再使用相同 soft-NNPU 配置模板对 seed=123 做配对复核；三组均固定四轮训练、混合池（5400，已知先验 0.2）、共享特征 kNN 边界损失权重 0.1、跨视图 gate、检测器和仅用 validation 校准到 95% 已知覆盖率。不同 seed=123 的既有 hard-NNPU 记录没有混入对照。
+
+| seed | 候选空间 | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | 未知低于 known-q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 44 | shared | 0.89753 | 0.35867 | 0.66378 | 95.67% | 43.78% | 0.64692 | 52.20% |
+| 44 | shared_boundary | 0.89467 | 0.39017 | 0.65287 | 94.18% | 51.73% | 0.63750 | 52.85% |
+| 44 | shared_boundary_consensus | 0.90097 | 0.35417 | 0.65818 | 96.02% | 44.28% | 0.64617 | 50.13% |
+| 123 | shared | 0.89468 | 0.40833 | 0.64609 | 95.97% | 45.03% | 0.63333 | 48.78% |
+| 123 | shared_boundary | 0.89328 | 0.40050 | 0.64483 | 94.88% | 48.45% | 0.63208 | 52.80% |
+| 123 | shared_boundary_consensus | 0.89436 | 0.40983 | 0.64446 | 95.80% | 46.53% | 0.63817 | 50.70% |
+
+机制审计确认 gate 和边界损失均实际生效，但硬交集把未知候选召回从约 11%–15% 压到约 1%–5%；已知污染降低是以候选覆盖骤降为代价。seed=44 的检测改善幅度小且 OSCR 下降，seed=123 没有复现，AUROC/FPR95/OSCR 均略差于 `shared`。结论是存在 precision–recall 取舍，不能认定解决了已知/未知重叠，也不改默认配置、不再针对该硬交集扫参数。
+
+后续候选仅作为研究假设：保留边界候选覆盖，把分类共识作为有界软损失权重，而非硬删除样本；先用预先规定的 validation 规则与 boundary-only 对照。如果排序和重叠没有跨 seed 稳定改善，停止继续叠加候选 gate，转向 support 半径校准、开放集数据划分审计及拒识分支的直接监督。完整协议、机制指标和结果见 [`analysis/shared_boundary_consensus_recheck_20261016.md`](analysis/shared_boundary_consensus_recheck_20261016.md)。
+
+### 2026-10-16：共享边界候选的软共识权重复核
+
+针对硬共识交集会丢失未知候选的问题，新增 `shared_boundary_soft_consensus`。它保留 `shared_boundary` 的全部跨视图候选，只用原分类器/不确定性风险产生 `[0.25, 1.0]` 的无标签损失权重。seed=44 和 seed=123 均使用同一 soft-NNPU 配置模板，固定四轮训练、混合池、kNN 边界损失、检测器和 validation-only 95% known-coverage 校准；每个 seed 只比较 boundary-only 与 soft-consensus。
+
+| seed | 方法 | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | 未知低于 known-q95 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 44 | boundary-only | 0.89964 | 0.35500 | 0.66006 | 95.48% | 46.50% | 0.64492 | 51.20% |
+| 44 | soft consensus | **0.90447** | **0.34467** | **0.66855** | 94.70% | **50.95%** | **0.66783** | **50.30%** |
+| 123 | boundary-only | 0.89788 | 0.39217 | 0.64421 | 95.98% | 44.95% | 0.64058 | 50.43% |
+| 123 | soft consensus | **0.89914** | 0.39967 | 0.64257 | **96.68%** | 42.58% | 0.63775 | **48.00%** |
+
+两组都确认权重路径实际生效，候选覆盖和未知召回没有像硬交集一样塌缩。但 seed=44 的多指标改善没有在 seed=123 完整复现：后者 FPR95、OSCR、KS 和固定工作点未知拒绝率变差。结论是该方向比硬交集更有价值，但仍属于有条件消融，不改默认配置，也不根据测试集挑选权重。
+
+结果进一步提示：当前 kNN 边界损失可能把边界内的已知污染样本与真正位于已知 support 外的未知样本用相同的“向外推离”目标处理。下一步优先审计该损失的 signed/class-conditional 几何，并在保持相同多 seed 协议下尝试区分 support 内外样本，而不是继续堆叠候选 gate。完整记录见 [`analysis/shared_boundary_soft_consensus_recheck_20261016.md`](analysis/shared_boundary_soft_consensus_recheck_20261016.md)。
+## 2026-10-17：soft-NNPU 对照与 kNN 边界梯度审计
+
+本轮完成了 `pure`、`hard_nnpu`、`soft_nnpu` 三臂严格配对实验，并补齐了共享 encoder 上 `discovery_knn_boundary` 的实际梯度审计。实验固定 seed=44、CIFAR-100 semantic-isolated 60/40、mixed pool=5400、known prior=0.2、4 epochs、shared-boundary 候选空间、边界权重 0.1、同一检测器和 validation-only 95% known-coverage 校准，只有 `discovery_knn_risk` 不同。
+
+| risk | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS | unknown below known-q95 | 接受后已知准确率 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| pure | 0.900255 | 0.364833 | 0.658245 | 94.517% | 50.800% | 0.653000 | 51.775% | 72.827% |
+| hard_nnpu | 0.903022 | 0.347667 | 0.665626 | 94.367% | 52.500% | 0.656583 | 50.625% | 73.384% |
+| soft_nnpu | 0.898656 | 0.360833 | 0.659466 | 93.917% | 52.125% | 0.642917 | 52.025% | 73.203% |
+
+soft-NNPU 相对 pure 的 AUROC、KS 和 overlap 变差，因此不能判定为改善；未知拒绝率上升不能单独作为成功证据。hard-NNPU 在本次运行中较好，但与此前严格复核的负向结果不一致，暂不设为默认。
+
+此前梯度诊断漏记了共享 encoder 上的 kNN 边界项，本轮已修正。1 epoch 机制审计显示 pure/soft 的 kNN encoder 梯度范数分别为 1.557455/1.046466，与 CE 的余弦分别为 -0.035698/-0.047631；因此该项确实参与表征学习，但方向略有冲突，soft 形式的有效梯度更弱。这解释了为什么 soft-NNPU 没有带来稳定开放集收益，但不能代替正式性能实验。
+
+详细记录见 [`analysis/knn_pu_boundary_soft_and_gradient_audit_s44_20261017.md`](analysis/knn_pu_boundary_soft_and_gradient_audit_s44_20261017.md)，机制审计脚本为 [`scripts/run_knn_gradient_audit.py`](scripts/run_knn_gradient_audit.py)。下一步停止继续调 NNPU softness，先按未知细类、预测已知类和 kNN 支持距离审计误接收样本，再据此设计类条件表征改动。
+
+### 2026-10-17：inter-class virtual outlier 配对策略审计
+
+针对已知/未知分数重叠，本轮新增可选的 inter-class virtual outlier。第一轮随机选择异类样本进行特征插值，未知拒绝率提高但整体排序指标混合；随后新增 `nearest_class`，按当前 batch 中最近的异类原型选择配对，试图生成更贴近已知决策边界的虚拟未知样本。新增参数为 `--vos-interclass-pairing {random,nearest_class}`，默认仍为 `random`，不会改变历史流程。
+
+严格匹配的 seed=44、4 epoch 对照结果如下：
+
+| 配对策略 | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | KS |
+|---|---:|---:|---:|---:|---:|---:|
+| random 对照 | 0.90062 | 0.36033 | 0.66090 | 93.02% | **58.73%** | 0.65250 |
+| nearest_class | **0.90495** | **0.33167** | 0.65971 | **94.90%** | 48.78% | **0.66383** |
+
+`nearest_class` 改善了 AUROC、FPR95 和 KS，说明分数排序和整体分布分离有潜在收益；但 validation-only 校准后的测试未知拒绝率下降 9.95 个百分点，OSCR 略降，已知全体准确率也从 0.7155 降到 0.7067。因此它只能作为“有潜力但未稳定”的可选消融，不能替换默认策略，也不能仅凭未知拒绝率上升或下降判断成败。随机配对的上一轮结果与本轮绝对数值不完全一致，原因是当前 GPU 训练存在非位级确定性，已在分析文档中分开记录，不能跨运行直接合并。
+
+完整记录见 [`analysis/interclass_virtual_outlier_pairing_s44_20261017.md`](analysis/interclass_virtual_outlier_pairing_s44_20261017.md)。下一步不继续盲目扫描配对策略，而是验证“只对高风险已知边界样本施加虚拟未知损失”是否能减少工作点误拒绝；同时保留已知分类约束，并继续使用 AUROC、FPR95、OSCR、已知接受率、未知拒绝率和 score overlap 联合判断。
+
+### 2026-10-18: boundary candidate and class-conditional support feature recheck
+
+本轮仍针对核心问题“已知/未知特征与分数分布重叠”，没有调整最终阈值。首先新增 `confident_boundary` 候选模式，将预测已知类的支持边界接近度与 Softmax 置信度组合，用于检验高置信 semantic-near unknown 是否能改善 rejector 训练。随后新增 `predicted_support_augmented` rejector 特征，把“最近已知支持类距离”和“模型预测类支持距离”同时输入 nnPU rejector。
+
+代码验证：`python -m pytest -q tests/test_core_behaviors.py` 为 `218 passed`，`compileall` 通过。新增可复现实验脚本：`scripts/run_confident_boundary_compare.py` 和 `scripts/run_predicted_support_feature_compare.py`。
+
+seed=44 的严格 paired 条件：CIFAR-100 semantic-isolated 60/40、固定 student checkpoint、mixed pool=5400、known prior=0.2、`nu_corrected` nnPU、support-augmented 主配置、MC=4、full-support、validation-only 95% known-coverage；候选实验只改变 `rejector_candidate_mode`，特征实验只改变 `rejector_feature_mode`。
+
+| 实验 | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 |
+|---|---:|---:|---:|---:|---:|
+| `prototype_boundary` | 0.9089 | 0.3323 | 0.6679 | 95.78% | 48.03% |
+| `confident_boundary` | 0.8832 | 0.4352 | 0.6442 | 94.82% | 45.80% |
+| `support_augmented` | 0.8983 | 0.3623 | 0.6617 | 94.88% | 48.33% |
+| `predicted_support_augmented` | 0.8988 | 0.3682 | 0.6614 | 95.35% | 47.78% |
+
+结论：`confident_boundary` 明显无效，不能继续采用，也不能用“已知拒绝率变化”解释为成功；简单加入置信度反而削弱了边界候选的训练方向。`predicted_support_augmented` 与现有特征几乎相当但 FPR95、OSCR 和未知拒绝率略差，当前不足以替换 `support_augmented`。这两轮结果共同说明，继续堆叠后处理候选或单个支持距离特征不是解决重叠问题的主要方向。
+
+后续应优先转向训练阶段的类条件表示/拒绝分支监督：针对被错误接受的 semantic-near unknown 建立稳定的类条件困难负样本，同时保留已知类分类约束，避免把边界内已知样本一起推向 unknown。下一轮应先做小规模梯度与数据协议审计，再进行单因素训练实验；不能只依据未知拒绝率上升判断有效。
+
+### 2026-10-18：候选门控后 PU 先验与风险分布审计
+
+进一步沿训练调用链检查后发现，当前 PU-kNN 边界项可能存在先验/分布不匹配：训练先用共享边界和跨视图一致性从混合池筛出候选，再将筛选后的风险当作 `R_mix`；但修正项仍使用原始 `known_prior=0.2` 和未经相同门控筛选的整批已知样本风险。这不满足 PU 风险校正中“先验与混合风险来自同一采样分布”的前提。训练历史的标签诊断字段显示，候选中已知占比由第 1 轮的约 17% 降到后几轮约 6–9%；hard-NNPU 边界损失同期从 0.01095 降至 0.00051。该现象与过度扣除、非负截断后梯度趋近于零相符，但尚不能单独证明它解释了所有检测错误。
+
+| 风险臂 | epoch 1 候选已知占比 | epoch 4 候选已知占比 | epoch 4 kNN loss |
+|---|---:|---:|---:|
+| pure | 16.67% | 6.19% | 0.02309 |
+| hard-NNPU | 17.21% | 7.11% | 0.00051 |
+
+以上候选占比仅来自训练期间的事后诊断标签，**没有进入 loss、模型选择或校准**，不能用它直接调先验。下一步应实现不使用混合池标签的 selection-conditional PU 修正：用同一候选规则测量已知训练样本的选中率与混合池整体选中率，推导筛选后的有效先验，并只用同一规则筛出的已知训练特征计算已知风险。先做已知真先验的合成混合测试，检查风险和梯度；通过后再做 seed=44、4 epoch 的 pure 对 corrected-PU 配对训练，固定其余配置和 validation-only 95% 已知覆盖率校准，联合比较 AUROC、FPR95、OSCR、KS、重叠和已知效用。
+
+详细机制、日志数值、假设边界和参考文献见 [`analysis/selected_candidate_pu_prior_audit_s44_20261018.md`](analysis/selected_candidate_pu_prior_audit_s44_20261018.md)。这轮是机制审计和实验设计，不是性能提升结论；未改默认算法配置，也未上传仓库。
+### 2026-10-18：无门控 mixed-pool PU-kNN 双 seed 配对复核
+
+为验证“hard-NNPU 本身是否能改善已知/未知分布重叠”，本轮去掉两组实验中的候选门控和跨视图 gate，避免把候选选择造成的先验错配与 NNPU 风险形式混在一起。固定 CIFAR-100 semantic-isolated 60/40、mixed pool=5400、known prior=0.2、4 epochs、`alpha_discovery_knn_boundary=0.1`、其它 rejection-boundary 项为 0、同一检测器和 validation-only 95% known-coverage 校准；唯一改变 `discovery_knn_risk`，比较显式污染池基线 `naive_mixed` 与 `hard_nnpu`，并在 seed=44、123 各做一轮。
+
+| seed | 风险形式 | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 |
+|---:|---|---:|---:|---:|---:|---:|
+| 44 | `naive_mixed` | 0.902374 | 0.346500 | 0.659630 | 94.767% | 49.500% |
+| 44 | `hard_nnpu` | 0.901560 | 0.347667 | 0.663014 | 94.617% | 50.700% |
+| 123 | `naive_mixed` | 0.889590 | 0.420167 | 0.638726 | 95.500% | 45.475% |
+| 123 | `hard_nnpu` | 0.889536 | 0.412500 | 0.634528 | 96.867% | 40.450% |
+
+结果没有跨 seed 一致方向：seed=44 的 hard-NNPU 仅使未知拒绝率提高 1.20 个百分点，seed=123 反而下降 5.03 个百分点；AUROC 几乎不变，OSCR 一升一降。因此 hard-NNPU 没有证据能够稳定拉开已知/未知分数分布，不能设为默认，也不能继续只调先验或阈值。该结果同时说明：此前发现的“候选门控后 PU 先验/风险分布可能错配”仍是 gated 路径的真实代码问题，但不是全部重叠问题的唯一原因；即使取消门控，NNPU 本身也没有解决核心问题。
+
+本轮完整记录见 [`analysis/knn_pu_ungated_control_s44_s123_20261018.md`](analysis/knn_pu_ungated_control_s44_s123_20261018.md)，汇总文件为 [`analysis/knn_pu_ungated_s44_e4_summary.json`](analysis/knn_pu_ungated_s44_e4_summary.json) 和 [`analysis/knn_pu_ungated_s123_e4_summary.json`](analysis/knn_pu_ungated_s123_e4_summary.json)。下一步不再扫描 NNPU softness/先验；先用合成混合数据验证 selection-conditional PU 推导和梯度，再决定是否修正 gated 路径。若推导验证通过，只做一次严格 gated paired control；若不通过，停止这条 PU 分支，转向直接的类条件表示/拒识分支监督。
+
+随后增加了独立的 selection-conditional 先验计算函数和合成审计，但没有接入默认训练。公式为 `pi_selected = pi * s_known / s_mixed`，其中 `s_known` 是已知训练样本在同一候选规则下的选中率，`s_mixed` 是混合池整体选中率。两种不同选择率的 500,000 样本合成测试中，修正后的 PU 风险恢复未知风险的最大绝对误差约为 `1.98e-7`；这只证明公式和实现正确，不证明真实 gate 的选择率估计可靠。函数、脚本和报告分别见 [`novel_discovery/losses.py`](novel_discovery/losses.py)、[`scripts/audit_selection_conditional_pu.py`](scripts/audit_selection_conditional_pu.py) 和 [`analysis/selection_conditional_pu_synthetic_audit_20261018.json`](analysis/selection_conditional_pu_synthetic_audit_20261018.json)。在真实训练前仍需用同一无标签规则测量两种选择率、记录采样噪声和无效估计，并做一次 gated 配对实验；本轮不改变默认风险形式。
+### 2026-10-18：selection-conditional PU-kNN 已严格接入（尚无性能结论）
+
+针对前面发现的候选 gate 与 PU-kNN 先验可能不匹配的问题，已完成一个
+**默认关闭的可选消融**：`--discovery-knn-selection-conditional`。它使用
+
+```text
+pi_selected = pi * P(S|known) / P(S|mixed)
+```
+
+估计候选筛选后的有效已知先验，并且只在以下条件同时满足时允许使用：混合
+发现池、候选 gate、`hard_nnpu/soft_nnpu` 风险、kNN 边界损失开启，且关闭
+cross-view 交集。为避免把不同采样事件混在一起，该模式将混合池和已知 batch
+都按同一个单视图候选规则计算选择率；如果使用 EMA/teacher selection model，
+两边的选择率都使用该模型，而实际 PU 已知风险仍取 student 的对应特征。双视图
+交集模式会直接报错，不做静默近似。
+
+这次修改的作用是修正候选筛选后先验与已知风险参考分布的不一致，**不是**直接
+拉开已知/未知特征分布的算法证明。当前只完成代码和公式验证，没有把它设为默认，
+也没有宣称性能提升：
+
+- 核心测试 `221 passed`，`compileall` 和 `git diff --check` 通过；
+- 合成 selection-conditional PU 审计最大风险恢复误差约 `1.98e-7`；
+- 默认开关为关闭，显式参数可正确解析；
+- 训练日志新增 `discovery_knn_mixed_selection_rate`、
+  `discovery_knn_known_selection_rate` 和 `discovery_knn_effective_prior`，用于
+  检查真实 gate 的采样率和有效先验，而不是只看未知拒绝率。
+
+详细记录见 [`analysis/selection_conditional_pu_wiring_20261018.md`](analysis/selection_conditional_pu_wiring_20261018.md)。下一步只做一次严格配对的
+gated 实验：固定 seed、数据划分、混合池、训练轮数、检测器和 validation-only
+95% 已知覆盖率校准，只切换该开关，并联合比较 AUROC、FPR95、OSCR、KS、score
+overlap、已知接受率、接受后已知准确率、未知拒绝率及三个选择率诊断。若只改变
+工作点或跨 seed 不稳定，就停止继续调先验，转向直接的类条件拒绝分支监督。
+
+### 2026-10-18：边界 VOS 上增加 rejection BCE 的配对实验暂停记录
+
+本轮计划检验：在已有较有希望的 nearest-class、困难边界 25% VOS 上，增加小权重
+`alpha_vos_rejection=0.05` 是否能进一步拉开已知/未知分数分布。复核后发现，最初运行的
+control 是完全无 VOS，而 treatment 同时加入 VOS 和 rejection BCE，属于多因素同时变化，
+因此其 `discovery_report.json` 数字只能作为探索观察，不能归因于 rejection BCE，也不能
+与 boundary-only 实验作严格配对结论。
+
+已修正 [`scripts/run_interclass_vos_control.py`](scripts/run_interclass_vos_control.py)，允许
+明确配置 control 侧 VOS。修正后的设计两组都固定 seed=44、相同数据划分和训练配置、4 epochs、
+nearest-class VOS、`alpha_vos=0.01`、boundary fraction=0.25、同一检测器和 validation-only
+95% 已知覆盖率校准；唯一差异为 rejection BCE 权重（control=0，treatment=0.05）。
+
+按“快速结束”要求，配对重跑已在 control 训练中途停止，treatment 尚未启动，没有完整模型或
+有效比较指标。**目前不能判断 rejection BCE 有效或无效。**不得引用中间 loss 作为性能证据。
+核心测试为 `222 passed`，`git diff --check` 通过。下午继续前先核查是否有完整 control checkpoint；
+随后运行：
+
+```powershell
+python scripts/run_interclass_vos_control.py --tag vos_boundary_rejection_matched_s44_e4 --pairing-strategy nearest_class --boundary-fraction 0.25 --alpha-vos-rejection 0.05 --control-alpha-vos 0.01 --control-pairing-strategy nearest_class --control-boundary-fraction 0.25 --control-alpha-vos-rejection 0.0
+```
+
+完成后联合分析 AUROC、FPR95、OSCR、KS、score overlap、已知接受率、接受后已知准确率和未知拒绝率；
+只有拒绝率上升不算核心问题改善。过程记录见
+[`analysis/vos_boundary_rejection_matched_s44_e4_status_20261018.md`](analysis/vos_boundary_rejection_matched_s44_e4_status_20261018.md)。本轮未上传 GitHub。
+### 2026-10-18：source-gradient VOS 逐未知类别误接收复核
+
+对已有 seed=44/123、detached/source-gradient 四组 discovery detail 做了
+**仅事后描述**的逐未知类别误接收审计；没有使用测试标签训练、选模型、校准或调阈值。
+每组 4,000 个未知测试样本（每个未知类 100 个）。source-gradient 的未知误接收率
+在 seed=123 从 58.33% 降到 53.20%，但在 seed=44 从 50.53% 升到 53.80%，仍是
+seed-sensitive。四组 top-10 高误接收类别的交集只有 `bus`；类别的排名和梯度开关
+带来的变化方向大多不稳定。因此不能用这些测试错误直接构造类条件训练权重，也没有
+证据认为少数固定类别足以解释整体重叠。source-gradient VOS 的第二 seed 复核已完成，
+不再继续该分支或扫权重，默认保留 detached 路径。
+
+后续应只从训练/验证可合法获得的信号出发，先审计类条件边界风险代理及已知污染，再做
+单因素配对实验；同时检查 mixed-pool 协议和表示学习目标，不把单点未知拒绝率作为成功标准。
+完整方法、数字、限制和下一步见
+[`analysis/vos_source_gradient_classwise_audit_s44_s123_20261018.md`](analysis/vos_source_gradient_classwise_audit_s44_s123_20261018.md)
+及 [`analysis/vos_source_gradient_compare_s123_e4_20261018.md`](analysis/vos_source_gradient_compare_s123_e4_20261018.md)。
+### 2026-10-18：匹配 teacher 的 split-protocol 对比（seed=44/123 方向复现）
+
+前一轮因 semantic-isolated teacher 的类别头/原型不能用于 semantic-hard 而中止；之后使用同一 teacher 配置模板分别重训两种 split 的 teacher，再用同一 student/discovery 配置完成配对对比。现在已在 seed=44 和 seed=123 完成两次配对复核；各次均固定 teacher 5 epochs、student 4 epochs、同一 detached-VOS 配方和 discovery/calibration 配置；两个协议均为 60 known / 40 novel，已知验证集单独校准到约 95% coverage。每个 seed 内除类别 split 及其匹配 teacher 训练外，student/discovery 配置一致，测试标签未用于训练、选择或校准。估计量是“类别划分 + 对应 teacher 重训”的端到端协议敏感性，不是只改变 split 的因果效应；短训练预算且只有两个 seed，仍属于诊断性复核，不是最终性能结论。
+
+| CIFAR-100 划分 | AUROC | FPR95 | OSCR | 测试已知接受率 | 测试未知拒绝率 | 接受后已知准确率 | score KS | unknown below known-q95 overlap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| semantic-isolated（coarse superclass 不共享） | 0.89186 | 0.38717 | 0.65143 | 94.20% | 49.45% | 72.61% | 0.63267 | 53.53% |
+| semantic-hard（20 个 superclass 全共享） | 0.79051 | 0.60667 | 0.59306 | 93.68% | 28.23% | 72.14% | 0.43450 | 75.25% |
+
+seed=123 的独立配对复核（相同 5/4 epoch 预算及验证集 95% known-coverage 校准）：
+
+| CIFAR-100 划分 | AUROC | FPR95 | OSCR | 测试已知接受率 | 测试未知拒绝率 | 接受后已知准确率 | score KS | unknown below known-q95 overlap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| semantic-isolated（coarse superclass 不共享） | 0.89048 | 0.40883 | 0.63757 | 95.62% | 43.75% | 70.82% | 0.62350 | 51.98% |
+| semantic-hard（20 个 superclass 全共享） | 0.78111 | 0.64683 | 0.59025 | 95.00% | 24.53% | 72.68% | 0.41825 | 75.45% |
+
+两次配对中，semantic-hard 相较 isolated 的方向完全一致：AUROC 分别低 `0.10135/0.10937`，FPR95 高 `0.21950/0.23800`，KS 低 `0.19817/0.20525`，unknown-below-known-q95 overlap 高 `21.72/23.47` 个百分点，95% 校准工作点的未知拒绝率低 `21.22/19.23` 个百分点；接受后已知准确率没有相应下降（hard 分别高 `0.47/1.86` 个百分点）。这支持一个重要诊断：**数据协议及 known/novel 类别的语义关系显著影响检测难度，semantic-isolated 的结果不能代表同 superclass 内细粒度未知类别的难题。** 两 seed 的方向复现增加了该诊断的可信度，但这不是算法改进，也不能据短预算、两个 seed 推断普遍效应大小。
+
+对 semantic-hard 的 discovery detail 做了额外事后错误分解（仅描述测试集，不参与训练/校准/选择）：4,000 个未知测试样本中有 2,871 个被接受为已知；40 个未知细类全部都出现误接收，各类误接收率范围为 39%–94%，中位数 74.5%。最高的几个细类也不是唯一来源，误接收分散到所有 novel 类别。误接收样本的已知预测较集中但非单一类别：排名前 5 的已知预测类覆盖 24.2%，前 10 覆盖 38.3%。因此这不只是少数异常未知类或一个已知输出类造成的局部问题，而是 semantic-hard 下较普遍的分数/表示重叠，同时存在细类难度差异。该汇总使用保存的 `raw_labels` 还原未知细类；报告中的 open-set `true_label=-1` 是未知标签占位符，不能拿它做细类分析。
+
+seed=123 的事后细类审计与 seed=44 一致（只作测试集描述，不参与训练/校准/选择）：semantic-isolated 误接收 `2,250/4,000` 个未知样本（56.25%），semantic-hard 为 `3,019/4,000`（75.48%）；两种 split 的 40 个未知细类都全部出现误接收。各类误接收率中位数分别为 60.0% 和 75.5%（范围 17%–86%、49%–94%）。hard 条件下 top-5/top-10 已知预测类只覆盖 19.4%/33.8% 的误接收，进一步说明不是少数未知细类或单一已知输出类导致。seed=44 的对应 hard 审计为 40/40 类均有误接收，中位数 74.5%，top-5/top-10 覆盖 24.2%/38.3%。
+
+核心问题仍未解决：semantic-hard 的已知与未知分数分布重叠明显，且在已知验证集约 95% 覆盖校准下测试未知拒绝率只有 28.23%（seed=44）/24.53%（seed=123），同时接受后已知准确率并未显著下降。因此差异主要不能用“阈值设得保守”解释；更符合细粒度语义相近未知类广泛进入已知类决策区域的表现。不要据此调阈值，也不要用测试标签选择损失。后续优先级：
+
+1. 若需把协议效应量化为稳健估计，增加预先固定的 seed 配对复核，保持各臂训练配方、校准和预算匹配；否则不要继续重复同一类短跑。
+2. 在不使用测试标签训练或选择的前提下，对 semantic-hard 的 validation/train 误差代理按未知细类语义、最近已知类及特征邻域做分析，检查模型是否学到局部近邻混淆；测试细类审计仅作最后的描述性确认。
+3. 再在 semantic-hard 上开展一次只变一个因素的类条件拒识/表示间隔实验，监督信号必须来自训练集或合规验证集；按 AUROC、FPR95、OSCR、score overlap、95% known coverage 下未知拒绝率及已知效用联合评估，semantic-isolated 保留为较容易协议对照。
+
+结果文件：seed=44 [`analysis/split_protocol_matched_teacher_s44_e4_20261018_v2_summary.json`](analysis/split_protocol_matched_teacher_s44_e4_20261018_v2_summary.json)，seed=123 [`analysis/split_protocol_matched_teacher_s123_e4_20261018_summary.json`](analysis/split_protocol_matched_teacher_s123_e4_20261018_summary.json)；配对运行脚本：[`scripts/run_split_protocol_sensitivity.py`](scripts/run_split_protocol_sensitivity.py)。可复跑的只读细类误接收审计为 [`scripts/analyze_split_protocol_errors.py`](scripts/analyze_split_protocol_errors.py)，seed=44/123 的四个输出分别为 [`analysis/split_protocol_semantic_isolated_errors_s44_20261018.json`](analysis/split_protocol_semantic_isolated_errors_s44_20261018.json)、[`analysis/split_protocol_semantic_hard_errors_s44_20261018.json`](analysis/split_protocol_semantic_hard_errors_s44_20261018.json)、[`analysis/split_protocol_semantic_isolated_errors_s123_20261018.json`](analysis/split_protocol_semantic_isolated_errors_s123_20261018.json)、[`analysis/split_protocol_semantic_hard_errors_s123_20261018.json`](analysis/split_protocol_semantic_hard_errors_s123_20261018.json)。运行示例：`python scripts/analyze_split_protocol_errors.py --detail runs/<protocol>_discover/discovery_detail.json --split splits_cifar100_protocols/cifar100_60_40_<protocol>.json --output analysis/<report>.json`。上一轮中止原因与无效的部分结果仍记录在 [`analysis/split_protocol_sensitivity_pilot_20261018.md`](analysis/split_protocol_sensitivity_pilot_20261018.md)，不得将其单臂结果当作协议比较证据。
+
+### semantic-hard 冻结 checkpoint 分数族对照（seed=123；无 score 替代方案胜出）
+
+为避免因 semantic-isolated 上的历史结果外推到 hard split，本轮固定 seed=123 semantic-hard student checkpoint、mixed discovery pool、测试样本与聚类关闭配置，只比较现有分数族，并用已知验证集约 95% coverage 校准；没有重训 student，测试标签没有用于校准或选分数。当前 `feature_rejector` 最好：AUROC/FPR95/OSCR=`0.78111/0.64683/0.59025`，未知拒绝率 `24.53%`；normalized entropy + prototype=`0.69923/0.73950/0.55937`、拒绝率 `9.80%`；normalized entropy + diagonal Mahalanobis=`0.67227/0.82433/0.52084`、拒绝率 `12.25%`；known support=`0.69601/0.75100/0.54051`、拒绝率 `12.90%`。因此没有证据支持替换或叠加这些弱分数，继续堆分数/调阈值不是当前优先方向；但该冻结 checkpoint 分数审计也不是训练算法比较，不能据此断言其他表示或训练目标无效。semantic-hard 未知拒绝仍很低，下一步应回到训练/验证可获得信号上的局部表示几何与污染控制，再做单因素训练配对实验。完整条件和局限见 [`analysis/semantic_hard_score_audit_s123_20261018.md`](analysis/semantic_hard_score_audit_s123_20261018.md)，运行入口为 [`scripts/run_score_mode_audit.py`](scripts/run_score_mode_audit.py)，各模式结果位于 `runs/split_hard_score_audit_s123_20261018_<score>/`。
+
+随后在 semantic-hard 的 seed=44/123 冻结 checkpoint 上探索拒识器候选加权：保持完整 mixed pool、候选比例 25%、候选权重 2、known prior 和其余设置相同，只比较 `weighted_boundary` 下 `prototype_boundary` 与 `confident_boundary`。prototype-boundary 两 seed 的 AUROC/FPR95/OSCR 均优于 confident-boundary；相对原全池 rejector，AUROC 分别 `+0.00541/+0.01290`、FPR95 分别改善 `0.01567/0.03467`，但 validation-calibrated 未知拒绝率变化为 `+2.35/-0.33` 个百分点，未稳定提升。这只是冻结 checkpoint 的 detector/rejector 对照，不是 student 表示改进或核心问题解决。
+
+方法学自检发现：最初只覆写 `rejector_candidate_mode` 的运行保留了 `rejector_pool_selection=all`，因此候选选择逻辑完全未执行，结果与基线相同；该次运行是惰性参数 wiring 检查，不是有效实验。之后才用两臂均为 `weighted_boundary` 的配对对照。另需降低证据等级：候选池审计报告了候选后 pool-label 污染率/召回，虽然这些标签没有进入模型或自动筛选，但其结果影响了人工优先测试哪一种候选规则；因此本次测试比较属于探索性、存在人工选择路径，不能作为未触碰测试集的确认结论，也不能据此改默认。配对 bootstrap 的 AUROC 区间仅描述固定 checkpoint 的测试样本不确定性；其未知拒绝区间使用每次重采样的测试已知标签重算 95% 阈值，不代表 validation-only 部署校准，不据此声称拒识收益。
+
+结论：prototype-boundary 是较值得独立复核的方向，但目前最多是排序指标的弱正向信号，未知拒绝率没有跨 seed 稳定改善。暂不更改默认策略，也不继续用当前测试集扫候选权重/模式。若继续，应预先固定新的 seed/split 和一项候选比较，仅依据训练/验证可获得且不含隐藏 pool 标签的规则定义实验；报告排序、验证校准工作点、known utility，并把测试集留作最终一次确认。详见 [`analysis/semantic_hard_score_audit_s123_20261018.md`](analysis/semantic_hard_score_audit_s123_20261018.md)，池审计及 bootstrap 文件链接见该报告。
+
+### 历史记录：数据划分协议敏感性实验最初被初始化 checkpoint 阻断（后续已完成配对）
+
+本轮想检验核心重叠是否依赖 CIFAR-100 的类别划分：对比 `semantic_isolated`
+（12 个完整 coarse superclass 为已知、8 个为未知）和 `semantic_hard`
+（每个 superclass 内 3 个已知细类、2 个未知细类），固定 seed=44、4 epochs、
+detached-VOS 配方、mixed discovery pool、检测器和 validation-only 95% known-coverage
+校准。测试标签不用于训练、选模型或校准。
+
+在最初这次尝试中，该对比**没有完成，不能作协议效果结论**。isolated 臂完成了独立运行，但 hard 臂加载
+已有 `semantic_isolated_full_s123_disjointcal_teacher/teacher.pt` 时，训练代码正确发现其
+60 类分类头及原型的 `known_classes/novel_classes` 与 semantic-hard split 不匹配并报错。
+绕过检查或复用该 teacher 都会造成错误的类别头映射，不能接受。虽然本地有
+`semantic_hard_teacher_s44/teacher.pt`，但它的教师训练 batch size、验证/测试限制及
+calibration ratio 与原 isolated teacher 不同，直接替换会引入训练处方混杂。isolated 单臂
+结果不作为跨协议证据，hard 臂没有有效训练结果。
+
+当时增加了 [`scripts/run_split_protocol_sensitivity.py`](scripts/run_split_protocol_sensitivity.py)，
+用 checkpoint 元数据检查阻止了不兼容 teacher 被错误复用。随后已按同一配置模板分别重新训练
+两种协议的 teacher，并完成两臂配对；最新数据及解释以本节之前的“匹配 teacher 的 split-protocol
+对比完成”记录为准。该对比衡量“协议 + 相匹配 teacher 训练”的端到端差异；若要单独识别
+split 的因果效应，需要预先定义不依赖类别编号的 split-agnostic 初始化。详细记录见
+[`analysis/split_protocol_sensitivity_pilot_20261018.md`](analysis/split_protocol_sensitivity_pilot_20261018.md)。
+最初中止轮次的部分结果不用于协议结论；后续完整配对在 seed=44/123 各完成一次，但仍是短训练预算下的两 seed 诊断结果，不据此宣称 loss 有效或算法问题已解决。
+
+### 2026-10-19：seed=2026 prototype-boundary rejector 复核完成
+
+为检查此前探索性 `prototype_boundary + weighted_boundary` 的排序指标改善能否在新训练 seed 上复现，预先规划了 semantic-hard seed=2026 的单模型实验：5 epoch teacher、4 epoch student；同一冻结 student、mixed discovery pool、known prior 和 validation-only 95% known-coverage 校准下，只比较 all-pool 与 prototype-boundary weighted rejector（候选比例 0.25、权重 2.0）。联合观察 AUROC、FPR95、OSCR、校准工作点未知拒绝、已知效用和分数重叠；测试集不参与训练、校准或方法选择。
+
+此前一次运行曾在 teacher 阶段中断，未产生结果；本次从头完成 5 epoch teacher、4 epoch student，并在同一冻结 student 上运行两臂。检查保存配置后确认两臂共用 seed=2026、semantic-hard split、mixed pool（5400，known prior=0.2）、student checkpoint、`feature_rejector`/NNPU、`support_augmented` 特征和 validation-only 95% known-coverage 校准。唯一有意改变的因素是 rejector pool treatment：all pool 对比 weighted prototype-boundary（候选比例 0.25、权重 2.0）。测试集没有用于训练、校准或调参；由于候选规则曾由旧探索性测试诊断优先选出，本次仍是探索性复核，而非独立确认。
+
+| Rejector | AUROC | FPR95 | OSCR | 已知接受率 | 未知拒绝率 | 接受后已知准确率 | KS | unknown below known-q95 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| all-pool | 0.78433 | 0.63783 | 0.58743 | 95.28% | 23.60% | 71.58% | 0.43133 | 75.35% |
+| prototype-boundary weighted | **0.79406** | **0.59983** | **0.59312** | 95.18% | **26.20%** | 71.67% | 0.43533 | **73.05%** |
+
+该 seed 上 prototype-boundary 方向有一致但幅度有限的正向点估计：AUROC `+0.00973`、FPR95 改善 `0.03800`、OSCR `+0.00569`、工作点未知拒绝率 `+2.60` 个百分点；已知接受率只下降 `0.10` 个百分点，接受后已知准确率 `+0.09` 个百分点。因此这次拒绝率提升不像是通过大幅误拒已知样本换来的。分数分布重叠也仅小幅缓解：KS `+0.00400`，unknown-below-known-q95 比例 `−2.30` 个百分点；仍有 73.05% 的未知分数低于已知 q95，分布仍显著重叠。校准集实际已知接受率约 94.94%，测试已知接受率约 95.18%，符合预设工作点附近的预期。
+
+判断：这是比此前冻结 checkpoint 上的单次弱信号更有希望的复核，但只在一个新训练 seed、一个固定类别 split 上运行一次，且候选规则有历史测试诊断导致的人工优先选择，证据仍不足以改变默认设置或宣称核心问题已解决。核心的已知/未知重叠依然严重；不要继续在这份测试集上扫候选比例/权重。下一步应预注册新的训练 seed（最好再增加独立类别 split），保持相同训练/评测协议，只确认 all-pool 与此固定 prototype-boundary 配方；报告完整排序、validation-calibrated 工作点、known utility 和 overlap。若不能在独立 seed/split 复现，再停止该 rejector 方向，转向训练期 class-conditional support/outlier 表征目标，而不是再调阈值。
+
+结果明细见 [`analysis/semantic_hard_rejector_seed2026_interrupted_20261019.md`](analysis/semantic_hard_rejector_seed2026_interrupted_20261019.md) 和机器可读汇总 [`analysis/semantic_hard_rejector_seed2026_summary.json`](analysis/semantic_hard_rejector_seed2026_summary.json)；运行入口为 [`scripts/run_semantic_hard_rejector_seed_recheck.py`](scripts/run_semantic_hard_rejector_seed_recheck.py)。
+
+随后使用完全相同的固定配方在 seed=2027 重复一次（5/4 epoch，语义划分、pool 规格和拒识器设置不变；两臂仍共用各自 seed 的 student）。prototype-boundary 相对各 seed 内 all-pool 的差值如下：
+
+| Seed | AUROC Δ | FPR95 Δ（负向为改善） | OSCR Δ | 未知拒绝率 Δ | 已知接受率 Δ | KS Δ | unknown below known-q95 Δ |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2026 | +0.00973 | −0.03800 | +0.00569 | +2.60 pp | −0.10 pp | +0.00400 | −2.30 pp |
+| 2027 | +0.00705 | −0.03150 | +0.00634 | +0.625 pp | −0.083 pp | +0.01000 | −0.525 pp |
+| 2028 | +0.00805 | −0.02783 | +0.01258 | −0.425 pp | −0.383 pp | +0.01258 | +2.075 pp |
+seed 2028 的配对条件、完整指标和后续判断见 [`analysis/semantic_hard_rejector_seed2028_recheck_20261019.md`](analysis/semantic_hard_rejector_seed2028_recheck_20261019.md)；机器可读汇总见 [`analysis/semantic_hard_rejector_seed2028_summary.json`](analysis/semantic_hard_rejector_seed2028_summary.json)。
+
+**三 seed 复核后的修订结论：** AUROC/FPR95/OSCR 排序指标均同向小幅改善，但 validation-calibrated 未知拒绝变化依次为 `+2.60/+0.625/−0.425 pp`；unknown-below-known-q95 overlap 在 seed 2028 反而恶化 `+2.075 pp`。所以排序收益没有稳定转化为工作点未知拒绝收益，不能认为核心重叠已解决。三次共用 semantic-hard 类别划分，且候选方向由历史探索引出，证据仍属探索性；停止在该测试集扫参，不改默认。下一步优先做训练期 class-conditional support/outlier 表征实验：只用 known train labels 建立类别条件支持区域，以预先固定的训练/验证代理确定 hard-boundary 样本；mixed pool 伪未知须 label-free 保守筛选并报告候选污染敏感性，不得用测试标签或事后诊断挑样本、权重。训练目标与 rejector 后处理分开配对评估，联合考察局部邻域、排序、固定 coverage 下拒识、known utility。
+
+两个 seed 的排序指标方向一致，已知接受率均约 95%，接受后已知分类准确率没有明显损失；但工作点未知拒绝率的收益从 `+2.60 pp` 缩小到 `+0.625 pp`，且两个 seed 中未知分数仍分别有 `73.05%` 和 `74.225%` 低于已知 q95。故结论是“值得继续做一次预注册多 seed/独立 split 确认，但收益幅度有限，核心重叠未解决”，而非稳健有效或可改默认。此两次复核共用固定 semantic-hard 类别划分，且方向曾被历史测试集诊断影响；它们不是完全独立的确认性证据。下一步若继续，只做固定配置的额外独立 seed/split 复核，不扫参数；若实际目标是减少重叠，应另立训练期 class-conditional support/outlier 表征实验并与此拒识器后处理分开评估。
+
+### 2026-10-19：训练期 shared-feature kNN support-boundary 单因素筛查
+
+为执行上述训练期 class-conditional support 方向，固定 semantic-hard split、seed=2029、4 epochs、同一 split-compatible teacher、mixed pool 5,400（known prior 0.2）、候选与 cross-view gating、feature rejector 及 known-validation-only 95% coverage 校准，只比较 `alpha_discovery_knn_boundary=0` 与 `0.1`。两臂均显式关闭独立 rejection-boundary 和 rejection-kNN loss。训练历史确认 treatment 的 kNN loss 和对应梯度均非零，因此这次确实执行了目标函数，而非仅配置开关。
+
+结果是混合且幅度有限：AUROC `0.79636 -> 0.79578`（−0.00058），FPR95 `0.61367 -> 0.60883`（改善 0.00483），OSCR `0.58346 -> 0.59401`（+0.01055），95% validation-calibrated 工作点的未知拒绝率 `26.50% -> 27.68%`（+1.18 pp），接受后已知准确率 `70.13% -> 71.74%`（+1.61 pp）。但 KS 几乎不变（−0.00058），unknown-below-known-q95 overlap 从 `72.500%` 到 `72.525%`，没有改善；测试已知接受率为 95.23%/94.88%。因此不能把工作点拒绝率上升解读为分布重叠解决。
+
+机制审计还显示 treatment 的 cross-view 候选 gate 最终仅选中约 17.3% 的 mixed discovery pool；训练日志中只用于审计、不会进入 loss/gate/阈值/优化器决策的池标签统计显示，入选集已知污染约 9.0%，但未知召回只有约 19.7%。`discovery_knn_*_selection_rate` 为零是因为 selection-conditional PU 开关关闭，不代表没有候选入选；本轮应看 `feature_candidate_*` 审计字段。该信号提示候选未知覆盖率可能限制训练损失效果。下一步优先研究预先固定的 label-free 候选规则如何提升未知边界覆盖，同时用训练已知样本控制误选，并严格隔离训练池诊断标签，不得使用测试标签或诊断标签进行筛选与调参。
+
+**决策：**不改默认，不在测试集调 kNN 权重。该单 seed 结果仅为探索性混合信号；结合 kNN bank 使每 epoch 训练明显变慢、核心 overlap 完全未改善，暂不优先做同一 split 的权重扫描。后续转向训练/验证合法的局部边界样本诊断：审计候选选择稳定性、类条件 support 覆盖与 mixed-pool 污染代理，并预先固定 seed/split、校准规则及联合指标；只有排序/overlap 与 coverage-matched 拒识共同改善且 known utility 可接受，才考虑独立复核。完整条件、数值与限制见 [`analysis/semantic_hard_knn_support_train_s2029_e4.md`](analysis/semantic_hard_knn_support_train_s2029_e4.md)，机器可读结果见 [`analysis/semantic_hard_knn_support_train_s2029_e4_summary.json`](analysis/semantic_hard_knn_support_train_s2029_e4_summary.json)。
+
+### 2026-10-19：取消候选 gate 的 full-pool soft-nnPU kNN 对照（seed=2030）
+
+**实验问题与预设对比：**上节候选 gate 对未知样本的召回约为 19.7%，怀疑训练期 kNN 边界损失受候选覆盖不足限制。为隔离该因素，在 semantic-hard split、seed=2030、同一 teacher、4 epochs、同一 5,400 样本 mixed pool（known prior=0.2）、同一其余训练/评估配置下，比较 `alpha_discovery_knn_boundary=0` 与 `0.1`。两臂都关闭 feature/cross-view candidate gating，使用完整 mixed pool 上的 soft-nnPU kNN 边界损失（known prior=0.2、softness=0.05）；拒识器均为 `feature_rejector`，known validation-only 校准到 95% coverage。实验前固定联合观察 AUROC、FPR95、OSCR、校准工作点未知拒绝率、known utility、KS 与 overlap proxy。测试标签没有用于训练、校准或配置选择；结果仅作单 seed 机制筛查。
+
+| full-pool kNN 边界损失 | AUROC | FPR95 | OSCR | 测试已知接受率 | 未知拒绝率（95% known coverage） | 接受后已知准确率 | score KS | unknown below known-q95 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 关闭（baseline） | 0.78714 | 0.63800 | 0.58901 | 96.07% | 22.45% | 71.56% | 0.42575 | 73.75% |
+| 开启（weight=0.1） | 0.77725 | 0.64617 | 0.58615 | 95.32% | 22.35% | 71.94% | 0.41792 | 76.18% |
+
+Treatment 相对 baseline 的 AUROC `−0.00988`、FPR95 `+0.00817`（变差）、OSCR `−0.00285`，固定 coverage 的未知拒绝率 `−0.10 pp`；KS 虽提高 `0.00783`，但 overlap proxy 反而恶化 `+2.425 pp`。接受后已知准确率只增加 `0.37 pp`，无法抵消开集排序及 overlap 指标的退步。因此本次没有支持“低候选召回是唯一瓶颈”：取消 gate 并让损失接触完整 pool，没有改善核心区分能力。训练日志确认 kNN loss 在四个 epoch 都非零（约 0.057–0.112），梯度范数约 0.59–0.79，effective prior=0.2；处理确实执行，并非配置未接线。full-pool kNN 计算也显著增加时间（该 treatment 约 14 分钟），收益/成本不理想。
+
+**关于梯度量级的补充核查：**日志中的逐损失梯度范数是未乘 loss coefficient 的 raw gradient，不能直接当作最终优化器更新强度。treatment 的 kNN raw encoder 梯度均值约 0.720，CE 均值约 12.372；乘实际 `alpha_discovery_knn_boundary=0.1` 后，kNN 梯度范数约为 CE 的 0.60%。raw kNN 梯度与 CE 的 cosine 均值约 −0.131（与 KD 约 +0.007、SupCon 约 −0.049）；正系数缩放不改变 cosine，但小的相对范数意味着本次失败还不能排除“有效梯度过弱”。这不是将结果解释为单纯调权重问题，而是一个尚待单次检验的机制假设。
+
+**seed=2031 结果：**只改变 kNN loss 系数的配对比较如下。保存配置确认 baseline/treatment 的其余训练、pool、teacher、split 和评估协议相同；calibration 使用 known validation，测试标签未用于训练、校准或选择。
+
+| full-pool kNN 边界损失 | AUROC | FPR95 | OSCR | 测试已知接受率 | 未知拒绝率 | 接受后已知准确率 | score KS | unknown below known-q95 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 关闭（baseline） | 0.78630 | 0.63200 | 0.58618 | 93.48% | 29.50% | 71.99% | 0.43567 | 76.38% |
+| 开启（weight=0.5） | 0.79365 | 0.60833 | 0.58930 | 94.77% | 26.45% | 71.44% | 0.44125 | 74.40% |
+
+Treatment 的 AUROC `+0.00735`、FPR95 改善 `0.02367`、OSCR `+0.00312`；KS `+0.00558`，overlap proxy 下降 `1.975 pp`。但 validation-calibrated 工作点未知拒绝率下降 `3.05 pp`，已知接受率上升 `1.283 pp`，接受后已知准确率下降 `0.553 pp`。所以这是排序/分布略改善与工作点效用变差的明确权衡，不符合预设的联合成功判据。validation 校准目标是 95%，测试实际 known acceptance 并不保证恰为 95%；报告中必须保留这个泛化差异，不能把测试结果伪称为精确 coverage matching。
+
+梯度记录 raw kNN encoder 范数约 `0.44–0.72`，raw cosine 与 CE 约 `−0.07 至 −0.14`。乘 alpha=0.5 后，加权 kNN/CE 梯度比例随 epoch 约 `1.49%–3.20%`，比 alpha=0.1 高，但仍明显小于主要监督梯度。单 seed 不能据此断言最佳权重，也不能用该测试集选择参数。按预设计划，以完全相同的 alpha=0.5 配方在 seed=2032 做一次固定复核；不扫权重。若工作点 tradeoff 或 overlap 方向不稳定，则停止此分支。结果明细见 [`analysis/semantic_hard_knn_pu_full_pool_s2031_e4_w05_summary.json`](analysis/semantic_hard_knn_pu_full_pool_s2031_e4_w05_summary.json)。
+
+### 固定复核 seed=2032：full-pool kNN weight=0.5 未复制联合收益
+
+严格复用 seed=2031 的 alpha=0.5 配方，只换训练 seed 为 2032，并在该 seed 内与 alpha=0 baseline 成对。split、teacher、4-epoch budget、完整 mixed pool、soft-nnPU 参数、candidate gate 关闭、score mode、known validation-only 95% coverage calibration 均保持不变。两臂训练和 discovery 均完成，保存配置相符，测试标签未进入训练、校准或选择。
+
+| seed=2032 | AUROC | FPR95 | OSCR | 测试已知接受率 | 未知拒绝率 | 接受后已知准确率 | score KS | unknown below known-q95 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 0.78935 | 0.62717 | 0.58806 | 95.00% | 25.95% | 71.46% | 0.43200 | 73.93% |
+| full-pool kNN weight=0.5 | 0.78804 | 0.59633 | 0.58857 | 94.95% | 23.025% | 71.25% | 0.43867 | 77.15% |
+
+相对 baseline，AUROC `−0.00131`，FPR95 改善 `0.03083`，OSCR `+0.00052`；但工作点未知拒绝率下降 `2.925 pp`，接受后已知准确率下降 `0.208 pp`，KS 提高 `0.00667`，而 overlap proxy 恶化 `3.225 pp`。保存训练历史确认 kNN 项持续产生非零梯度；乘 alpha=0.5 后，kNN/CE encoder 梯度比例约 `0.93%–3.25%`，但这仍没有转化为稳定的分布与工作点收益。
+
+**两 seed 联合判断：**seed=2031 的 AUROC/OSCR/KS/overlap 点估计略正向，但未知拒绝率 `−3.05 pp`；seed=2032 的工作点未知拒绝率 `−2.925 pp`、overlap `+3.225 pp`，AUROC 也微降。只有 FPR95 两 seed 都改善，其他关键指标并未共同改善。因此“alpha=0.1 时梯度过弱”并不足以解释失败；增至 0.5 也没有达到预设联合成功标准。**停止 full-pool soft-nnPU kNN 权重路线，不改默认、不继续扫权重。**这是两个训练 seed 的探索性配对，不是跨 split 的确认性结论；其意义是该方法当前不值得投入更多算力，而不是证明 kNN support 方法在所有任务上都无效。
+
+后续优先转向共享表征与拒识支路的机制审计：从保存日志核对“raw gradient × loss coefficient”的真实量级、不同目标梯度夹角，并区分梯度作用于 shared encoder、classifier 还是独立 rejection head；随后依据训练/已知验证数据可合法获得的 class-conditional support 风险，设计一个结构不同的新表征目标。先做梯度/数据流检查和便宜的 smoke test，再决定是否值得跑完整配对训练。评估仍联合报告 AUROC、FPR95、OSCR、score KS/overlap、validation-calibrated 工作点和 known utility，不以阈值或单一指标替代核心目标。
+
+seed=2032 结果明细见 [`analysis/semantic_hard_knn_pu_full_pool_s2032_e4_w05_summary.json`](analysis/semantic_hard_knn_pu_full_pool_s2032_e4_w05_summary.json)；本轮不上传 GitHub。
+
+结果与保存配置见 [`analysis/semantic_hard_knn_pu_full_pool_s2030_e4_summary.json`](analysis/semantic_hard_knn_pu_full_pool_s2030_e4_summary.json)；可复跑脚本为 [`scripts/run_semantic_hard_knn_pu_full_pool_compare.py`](scripts/run_semantic_hard_knn_pu_full_pool_compare.py)。首次运行在 treatment 开始前中断，只留下完整 baseline；随后脚本调整为仅复用两臂均完整的既有产物、遇到不完整目录拒绝覆盖，并安全完成 treatment，因此上表为同一 seed/配置的完整配对结果。本轮未上传 GitHub。
+
+### 2026-10-19 semantic-hard rejection branch CE balance pilot
+
+**实验前假设与对比：**此前 rejection 分支梯度审计显示 known rejection CE 的梯度可能显著强于若干未知侧目标；semantic-isolated 上降低该 CE 的结果有弱正向但不完整的信号。因此在 semantic-hard 上固定 seed=2029、同一 split/teacher、4 epoch、mixed pool、其余训练目标及 detector/discovery/calibration 配置，仅比较 `alpha_rejection_known_ce=1.0`（已有 baseline）与 `0.25`。拒识器为 `feature_rejector + support_augmented`，仅用 known validation 校准到 95% coverage；测试标签不参与训练、选模或校准。训练与评估均使用 RTX 4060 CUDA。依据来源及旧审计见 [`analysis/rejection_branch_gradient_audit_20261013.md`](analysis/rejection_branch_gradient_audit_20261013.md)。
+
+| seed=2029 | AUROC | FPR95（低为好） | OSCR | 测试已知接受率 | 校准工作点未知拒绝率 | 接受后已知准确率 | 全部已知准确率 | score KS | unknown below known-q95 overlap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| CE=1.0 | 0.79551 | 0.60517 | 0.59105 | 94.7667% | 25.625% | 71.1748% | 69.6000% | 0.44683 | 74.900% |
+| CE=0.25 | 0.80304 | 0.60917 | 0.59326 | 94.7500% | 29.475% | 70.9235% | 69.3833% | 0.46375 | 72.000% |
+
+seed=2029 出现值得固定复核的混合信号后，按原计划在 seed=2030 完成一次 1.0 vs 0.25 配对复核，没有扫描中间权重。结果如下（每个 seed 都只与本 seed 内的 CE=1.0 对照比较）：
+
+| Seed / CE | AUROC | FPR95（低为好） | OSCR | 测试已知接受率 | 工作点未知拒绝率 | 接受后已知准确率 | 全部已知准确率 | KS | overlap proxy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2029 / 1.0 | 0.79551 | 0.60517 | 0.59105 | 94.7667% | 25.625% | 71.1748% | 69.6000% | 0.44683 | 74.900% |
+| 2029 / 0.25 | 0.80304 | 0.60917 | 0.59326 | 94.7500% | 29.475% | 70.9235% | 69.3833% | 0.46375 | 72.000% |
+| 2030 / 1.0 | 0.77163 | 0.65100 | 0.58540 | 95.4833% | 20.900% | 72.2290% | 70.9333% | 0.40242 | 77.475% |
+| 2030 / 0.25 | 0.78349 | 0.63850 | 0.58853 | 94.8667% | 26.250% | 72.0309% | 70.6833% | 0.42092 | 74.350% |
+
+在最初两个训练 seed（2029/2030）上，AUROC、OSCR、KS、overlap proxy 和 validation-calibrated 工作点未知拒绝率方向一致改善；FPR95 在 seed=2030 改善、seed=2029 略退。测试已知接受率变化较小，known accuracy 下降约 `0.2–0.25 pp`。但代码审计后来发现 semantic-hard split 生成器当时固定选取每个 superclass 排序后的前三类，因此这两个 seed **只是训练初始化不同，类别 split 并不独立**，不能把它们当作跨 split 复现。完整条件、产物位置见 [`analysis/semantic_hard_rejection_ce_balance_s2029_e4_20261019.md`](analysis/semantic_hard_rejection_ce_balance_s2029_e4_20261019.md)；运行脚本 [`scripts/run_rejection_ce_balance_pilot.py`](scripts/run_rejection_ce_balance_pilot.py)。
+
+### semantic-hard split 生成器修复与独立类别划分复核（2026-10-19）
+
+**审计发现：** `scripts/make_cifar100_splits.py` 原先虽然接收 `seed`，semantic-hard 却固定取每个 coarse superclass 排序后的前三个 fine class。现已修正为由独立 seeded RNG 在每个 superclass 内抽取 3/5 类；每组仍为 3 known / 2 novel，random 与 semantic-isolated 生成逻辑不变，现有 split JSON 未覆盖。新增测试确认相同 seed 可复现、不同 seed 会改变 class assignment，且每组数量仍正确。当前旧 semantic-hard 文件保留作为历史协议；新生成器创建的 seed-specific 文件构成新的、明确标记的协议版本，不应与旧版混写。
+
+使用 seed=2040 生成独立类别 split（60 known/40 novel），其 known 类与旧 hard split 仅重合 36/60；在该 split 上重新训练匹配的 5-epoch teacher，再按预注册方案只比较 CE=1.0 与 0.25，学生 4 epochs，其余训练/拒识/验证校准配置固定。测试标签不用于训练、选模、校准或权重选择。
+
+| seed=2040 新类别 split | AUROC | FPR95（低为好） | OSCR | 测试已知接受率 | 工作点未知拒绝率 | 接受后已知准确率 | 全部已知准确率 | KS | overlap proxy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| CE=1.0 | 0.80441 | 0.61100 | 0.60227 | 95.1833% | 25.250% | 71.9664% | 70.3167% | 0.46442 | 73.725% |
+| CE=0.25 | 0.81219 | 0.57067 | 0.60907 | 96.1167% | 24.025% | 72.0999% | 70.8500% | 0.47183 | 71.700% |
+
+独立 split 上 AUROC `+0.00778`、FPR95 改善 `0.04033`、OSCR `+0.00680`、KS `+0.00742`、overlap proxy 降低 `2.025 pp`，已知效用没有下降；但校准工作点未知拒绝率反而下降 `1.225 pp`。因此跨两个类别 split，降低 known CE 的排序/分布尾部信号有一定一致性，但**不能稳定提高固定 validation-known-coverage 下的未知拒绝率**。新 split 仍有 `71.7%` 未知分数低于 known q95，核心重叠仍突出。这条方法不能宣称有效解决核心问题，不改默认、不继续用测试指标调权重；下一步应先从训练与已知验证数据分析“ranking/overlap 改善为何未转成工作点收益”，再决定是否另设预注册训练目标。详细数值、seed=2029/2030/2040 条件与产物见 [`analysis/semantic_hard_rejection_ce_balance_s2029_e4_20261019.md`](analysis/semantic_hard_rejection_ce_balance_s2029_e4_20261019.md)。新 split 文件：`splits_cifar100_semantic_hard_seed2040/cifar100_60_40_semantic_hard.json`；复跑入口：[`scripts/run_semantic_hard_ce_balance_independent_split.py`](scripts/run_semantic_hard_ce_balance_independent_split.py)。本轮未上传 GitHub。
+
+### semantic-hard 第二个独立类别 split 复核（seed=2041，2026-10-20）
+
+针对 seed=2040 上“排序与 overlap 有改善，但工作点未知拒绝率下降”的混合结果，预先固定再做一次独立 split 配对复核：seed=2041、匹配 5-epoch teacher、学生 4 epochs、同一 mixed pool 与拒识/发现配置，唯一目标因素仍为 `alpha_rejection_known_ce=1.0 vs 0.25`，只用 known validation 校准至 95% coverage。最终测试标签只用于描述性评估。保存的训练配置核对确认除目标系数、输出路径及 validation 派生 checkpoint 字段外无其他配置差异。
+
+| seed=2041 新类别 split | AUROC | FPR95（低为好） | OSCR | 测试已知接受率 | 工作点未知拒绝率 | 接受后已知准确率 | 全部已知准确率 | KS | overlap proxy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| CE=1.0 | 0.79098 | 0.61367 | 0.58286 | 93.883% | 28.625% | 70.939% | 68.733% | 0.44192 | 75.075% |
+| CE=0.25 | 0.79337 | 0.60417 | 0.58375 | 94.967% | 24.875% | 70.762% | 69.100% | 0.43983 | 75.275% |
+
+**判断：** 排序指标仅小幅改善；KS 几乎不变，overlap proxy 反而恶化 `0.2 pp`。最重要的是工作点未知拒绝率下降 `3.75 pp`，尽管测试已知接受率增加 `1.083 pp`；两臂 validation calibration 均为 `94.977%`。因此降 CE 未通过预先设定的工作点复核标准，停止继续做该系数的测试集驱动试验，不改默认；约 `75%` 未知分数仍低于 known q95，核心重叠没有解决。后续转向训练期 class-conditional 局部几何与保守、label-free 候选选择，先审计训练/验证代理能否识别边界样本，再预注册单因素目标比较，联合看工作点拒识、known utility、排序和 overlap，并保留未触碰的最终测试协议。详细实验条件、报告路径见 [`analysis/semantic_hard_rejection_ce_balance_s2029_e4_20261019.md`](analysis/semantic_hard_rejection_ce_balance_s2029_e4_20261019.md)；split 为 `splits_cifar100_semantic_hard_seed2041/cifar100_60_40_semantic_hard.json`。本轮未上传 GitHub。
+
+### semantic-hard training-pool 候选 gate 的 fine-class 覆盖审计（seed=2041，2026-10-20）
+
+（旧版随机 MC-dropout 审计结果，已由下方“审计更正”取代；这里只留历史上下文。）为弄清候选 gate 是否真的覆盖未知边界，而不只看总体 purity，在同一冻结 CE=1.0 student、同一 5,400 样本训练期 mixed pool（known prior=0.2）上，对七种现有 label-free selector 做事后标签审计；pool label 仅用于计算污染与 per-class recall，不参与 selector、训练、校准或方法选择，最终 test 未被访问。25% 预算的随机选择期望 novel recall 为 25%；entropy+uncertainty 为 `28.43%`，distance consensus `28.75%`，prototype/support boundary 约 `28.3–28.4%`，也只有约 `3.2–3.8 pp` 绝对提升。总体 known contamination 为 `8.0–9.85%`。按 40 个 novel fine class 分解后更明显：entropy+uncertainty 的 median recall `29.03%`，最低 class 只有 `2.63%`；consensus 最低 `0.88%`；所有 selector 最低类 recall 都低于 `5%`。因此候选的总体纯度会掩盖严重的类别覆盖不均，当前 gate 并未可靠覆盖全体 novel 类边界；但这仍是单个冻结模型的机制审计，不等价于证明 class-balanced gate 一定能提升最终测试指标。
+
+**后续决定：** 不依据这次使用隐藏 pool 标签做过的事后审计调 selector，也不直接把标签喂入训练。下一步可研究仅按已知模型预测类别/类条件 support 形成的 label-free 候选配额；先在同一冻结训练池上核对最低分位的 per-class coverage 与 known contamination，再决定是否进行预注册的单因素训练配对。由于选样会改变 PU prior，若继续用 PU loss 必须同时审计 selection-conditional 风险校正，不能默认原先验仍适用。完整指标和限制见 [`analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md`](analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md) 与机器可读结果 [`analysis/semantic_hard_candidate_pool_audit_s2041_20261020.json`](analysis/semantic_hard_candidate_pool_audit_s2041_20261020.json)。本轮只更新审计代码和文档，未上传 GitHub。
+
+（旧版随机 MC-dropout 结果，已作废。）随后在同一冻结 seed=2041 checkpoint 上做了固定预算的 class-balanced selector 机制筛查：按预测 known class 分 bin，每个 bin 分配相等候选配额，bin 内按 entropy+uncertainty 排序，剩余名额由全局风险分补足。选择 pool 的 25% 后，最差 novel-class recall 从 `2.63%` 升至 `4.39%`，但 median recall 从 `29.03%` 降至 `28.08%`、总体 novel recall 从 `28.43%` 降至 `27.50%`，known contamination 从 `9.04%` 升至 `12.00%`。尾部只有有限改善且污染上升 2.96 pp，未达到预设共同标准；没有接入训练，也不值得直接跑完整训练。可继续探索的不是“均匀配额”本身，而是用独立 known validation 的各预测类风险分布校准每类选择阈值/配额，目标是在控制 known false selection 下改善长尾覆盖；先做纯 label-free 候选机制筛查，之后才考虑训练配对，并正确处理选择导致的 PU prior 变化。该方向仍是假设，不是有效性结论。
+
+（旧版随机 MC-dropout 结果，已作废。）进一步测试了一个区别于均匀配额的规则：只用 known validation 中每个预测类的 entropy+uncertainty 95 分位作为阈值（该类 validation 预测少于 20 个时回退到全局阈值），再应用于同一个 mixed training pool。选中 `15.43%` pool，known contamination `7.44%`、novel recall `17.85%`，较同预算随机选择期望 `15.43%` 高 `2.42 pp`；但 per-class median recall 仅 `17.01%`，最差类仍为 `2.63%`。known validation 各预测类实际接受率为 `91.3–95.1%`，显示 finite/discrete bin 的校准误差；两个 bin 回退到全局阈值。该法通过减少选择量降低污染，却没有修复 class-tail coverage，不接入训练。两种候选分配改动均未达到机制门槛，因此当前停止候选 selector 探索，不跑完整训练；所有 mixed-pool 标签只用于事后审计，未访问最终 test。详情见 [`analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md`](analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md)。
+
+**审计更正（2026-10-20）：** 上面首轮候选池数字及 class-balanced/q95 结论已被后续复核取代。审计调用 `extract_outputs(..., mc_samples=1)`，但该 helper 即使只采样一次也会启用随机 MC-dropout；先前将其称为确定性提取有误，导致类别统计复跑变化。现已改为普通 eval 前向，且加入重复提取一致性测试。按两个独立 semantic-hard split 的确定性结果，validation classwise empirical-CDF top-25% 在 seed 2041 将 contamination/novel recall/最差类 recall 从 `9.19%/28.38%/1.75%` 改为 `8.81%/28.50%/4.39%`；但 seed 2040 则从 `6.37%/29.26%/2.73%` 变为 `6.89%/29.10%/2.73%`，没有复现改善。因此该方法不接入训练、不跑完整实验；下一步先审计确定性训练池信号的跨 split 稳定性。更正后报告与 JSON：[`analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md`](analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md)、[`analysis/semantic_hard_candidate_pool_audit_s2041_deterministic_20261020.json`](analysis/semantic_hard_candidate_pool_audit_s2041_deterministic_20261020.json)、[`analysis/semantic_hard_candidate_pool_audit_s2040_deterministic_20261020.json`](analysis/semantic_hard_candidate_pool_audit_s2040_deterministic_20261020.json)。旧 JSON 保留供追溯，但不得再作为确定性结果引用。

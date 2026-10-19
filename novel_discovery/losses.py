@@ -11,6 +11,41 @@ from .uncertainty_kd import (
 )
 
 
+def selection_conditional_known_prior(
+    known_prior: float,
+    known_selection_rate: float,
+    mixed_selection_rate: float,
+    *,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Compute the known prior after applying a candidate-selection event.
+
+    If ``pi`` is the known prior before selection, ``s_k=P(S|known)`` and
+    ``s_m=P(S|mixed)``, then ``P(known|S) = pi*s_k/s_m``.  The selection rates
+    must be measured with the same rule and without using mixed-pool labels.
+    This helper is intentionally detached and does not silently repair an
+    invalid estimate caused by mismatched sampling frames.
+    """
+    prior = float(known_prior)
+    known_rate = float(known_selection_rate)
+    mixed_rate = float(mixed_selection_rate)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if not 0.0 <= known_rate <= 1.0:
+        raise ValueError("known_selection_rate must be in [0, 1]")
+    if not 0.0 <= mixed_rate <= 1.0:
+        raise ValueError("mixed_selection_rate must be in [0, 1]")
+    if mixed_rate <= float(eps):
+        raise ValueError("mixed_selection_rate must be positive")
+    effective_prior = prior * known_rate / mixed_rate
+    if effective_prior < -float(eps) or effective_prior > 1.0 + float(eps):
+        raise ValueError(
+            "selection rates imply an invalid selected known prior; "
+            "check that both rates use the same selection rule"
+        )
+    return torch.tensor(min(max(effective_prior, 0.0), 1.0), dtype=torch.float32)
+
+
 def uncertainty_weights(
     uncertainty: torch.Tensor,
     mode: str = "raw",
@@ -134,6 +169,30 @@ def weighted_energy_margin_loss(
     if denominator <= 0:
         return per_sample.sum() * 0.0
     return (per_sample * weight).sum() / denominator
+
+
+def weighted_unknown_bce(
+    values: torch.Tensor,
+    weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Binary unknown-target loss with optional per-sample selection weights.
+
+    Boundary-focused virtual-outlier supervision must use the same selection
+    mask for the classifier-side VOS term and the optional rejection head.
+    """
+    targets = torch.ones_like(values)
+    per_sample = F.binary_cross_entropy(
+        values.clamp(1e-5, 1.0 - 1e-5), targets, reduction="none"
+    ).reshape(-1)
+    if weight is None:
+        return per_sample.mean() if per_sample.numel() else values.new_tensor(0.0)
+    sample_weight = weight.reshape(-1).to(per_sample).clamp_min(0.0)
+    if sample_weight.numel() != per_sample.numel():
+        raise ValueError("weight must match the virtual-outlier batch size")
+    denominator = sample_weight.sum()
+    if denominator <= 0:
+        return per_sample.sum() * 0.0
+    return (per_sample * sample_weight).sum() / denominator
 
 
 def pu_unknown_energy_margin_loss(
@@ -673,6 +732,59 @@ def objectosphere_loss(
     return known_penalty + float(unknown_weight) * unknown_penalty
 
 
+def _knn_support_boundary_violations(
+    features: torch.Tensor,
+    support_features_by_class: list[torch.Tensor],
+    support_radii: torch.Tensor,
+    k: int = 5,
+    margin: float = 0.02,
+    aggregation: str = "max",
+    temperature: float = 0.1,
+) -> torch.Tensor:
+    """Return one support-boundary violation per feature.
+
+    The support bank is detached, while ``features`` remains differentiable.
+    Keeping the per-sample values separate makes it possible to apply a PU
+    correction when a candidate pool is known/unknown mixed.
+    """
+    if features.numel() == 0 or not support_features_by_class:
+        return features.new_empty(0)
+    if support_radii.ndim != 1 or support_radii.numel() != len(support_features_by_class):
+        raise ValueError("support_radii must contain one radius per class bank")
+    if int(k) <= 0 or float(margin) < 0.0:
+        raise ValueError("k must be positive and margin non-negative")
+    if aggregation not in {"max", "smoothmax"}:
+        raise ValueError("aggregation must be 'max' or 'smoothmax'")
+    if float(temperature) <= 0.0:
+        raise ValueError("temperature must be positive")
+
+    values = F.normalize(features, dim=-1)
+    radii = support_radii.detach().to(device=values.device, dtype=values.dtype)
+    class_violations = []
+    for class_index, bank in enumerate(support_features_by_class):
+        if bank.numel() == 0:
+            continue
+        normalized_bank = F.normalize(bank.detach().to(values), dim=-1)
+        similarities = values @ normalized_bank.T
+        neighbor_count = min(int(k), normalized_bank.size(0))
+        nearest_similarity = similarities.topk(neighbor_count, dim=-1).values.mean(dim=-1)
+        distance = 1.0 - nearest_similarity
+        class_violations.append(
+            F.relu(radii[class_index] + float(margin) - distance)
+        )
+    if not class_violations:
+        return features.new_zeros(features.size(0))
+    class_scores = torch.stack(class_violations, dim=1)
+    if aggregation == "max":
+        return class_scores.max(dim=1).values
+    tau = float(temperature)
+    violations = tau * (
+        torch.logsumexp(class_scores / tau, dim=1)
+        - torch.log(class_scores.new_tensor(float(class_scores.size(1))))
+    )
+    return violations.clamp_min(0.0)
+
+
 def knn_support_boundary_loss(
     unknown_features: torch.Tensor,
     support_features_by_class: list[torch.Tensor],
@@ -690,51 +802,20 @@ def knn_support_boundary_loss(
     features. This is a project-specific training adaptation, not a full OOD
     nearest-neighbor detector reproduction.
     """
-    if unknown_features.numel() == 0 or not support_features_by_class:
-        return unknown_features.new_tensor(0.0)
-    if support_radii.ndim != 1 or support_radii.numel() != len(support_features_by_class):
-        raise ValueError("support_radii must contain one radius per class bank")
-    if int(k) <= 0 or float(margin) < 0.0:
-        raise ValueError("k must be positive and margin non-negative")
-    if aggregation not in {"max", "smoothmax"}:
-        raise ValueError("aggregation must be 'max' or 'smoothmax'")
-    if float(temperature) <= 0.0:
-        raise ValueError("temperature must be positive")
-
-    unknown = F.normalize(unknown_features, dim=-1)
-    radii = support_radii.detach().to(device=unknown.device, dtype=unknown.dtype)
-    class_violations = []
-    for class_index, bank in enumerate(support_features_by_class):
-        if bank.numel() == 0:
-            continue
-        normalized_bank = F.normalize(bank.detach().to(unknown), dim=-1)
-        similarities = unknown @ normalized_bank.T
-        neighbor_count = min(int(k), normalized_bank.size(0))
-        nearest_similarity = similarities.topk(neighbor_count, dim=-1).values.mean(dim=-1)
-        distance = 1.0 - nearest_similarity
-        class_violations.append(
-            F.relu(radii[class_index] + float(margin) - distance)
-        )
-    if not class_violations:
+    violations = _knn_support_boundary_violations(
+        unknown_features,
+        support_features_by_class,
+        support_radii,
+        k=k,
+        margin=margin,
+        aggregation=aggregation,
+        temperature=temperature,
+    )
+    if violations.numel() == 0:
         return unknown_features.new_tensor(0.0)
     # A sample is penalized when it remains inside at least one known class
     # support region. Optional weights let reliable candidates contribute more
     # without changing the default hard-gated behavior.
-    class_scores = torch.stack(class_violations, dim=1)
-    if aggregation == "max":
-        violations = class_scores.max(dim=1).values
-    else:
-        # A smooth maximum gives nearby class supports a non-zero gradient,
-        # instead of routing every update through only the single most
-        # violating class.  Subtract log(C) to keep the scale comparable as
-        # the number of observed classes changes, then retain the boundary's
-        # non-negative penalty semantics.
-        tau = float(temperature)
-        violations = tau * (
-            torch.logsumexp(class_scores / tau, dim=1)
-            - torch.log(class_scores.new_tensor(float(class_scores.size(1))))
-        )
-        violations = violations.clamp_min(0.0)
     if sample_weights is None:
         return violations.mean()
     weights = sample_weights.to(device=violations.device, dtype=violations.dtype).flatten()
@@ -745,6 +826,67 @@ def knn_support_boundary_loss(
     if normalizer <= 0:
         return violations.new_tensor(0.0)
     return (violations * weights).sum() / normalizer
+
+
+def pu_knn_support_boundary_loss(
+    unlabeled_features: torch.Tensor,
+    support_features_by_class: list[torch.Tensor],
+    support_radii: torch.Tensor,
+    k: int = 5,
+    margin: float = 0.02,
+    sample_weights: torch.Tensor | None = None,
+    aggregation: str = "max",
+    temperature: float = 0.1,
+    known_features: torch.Tensor | None = None,
+    known_prior: float = 0.2,
+    risk_mode: str = "hard_nnpu",
+    softness: float = 0.05,
+) -> torch.Tensor:
+    """Apply nnPU correction to a mixed-pool kNN boundary risk.
+
+    ``unlabeled_features`` are candidates from a mixed discovery pool.  The
+    ordinary kNN boundary loss treats every candidate as unknown and therefore
+    repels known contamination as well.  This variant estimates the unknown
+    risk as ``(R_mix - pi*R_known)/(1-pi)`` using the labelled known batch as a
+    detached reference.  The default training path remains the historical
+    pure-unknown loss; this function is an explicit ablation for mixed pools.
+    """
+    if known_features is None:
+        raise ValueError("known_features is required for PU kNN boundary loss")
+    if unlabeled_features.numel() == 0 or known_features.numel() == 0:
+        reference = unlabeled_features if unlabeled_features.numel() else known_features
+        return reference.new_tensor(0.0)
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if risk_mode not in {"hard_nnpu", "soft_nnpu"}:
+        raise ValueError("risk_mode must be 'hard_nnpu' or 'soft_nnpu'")
+    if float(softness) <= 0.0:
+        raise ValueError("softness must be positive")
+
+    mixed = _knn_support_boundary_violations(
+        unlabeled_features, support_features_by_class, support_radii,
+        k=k, margin=margin, aggregation=aggregation, temperature=temperature,
+    )
+    known = _knn_support_boundary_violations(
+        known_features, support_features_by_class, support_radii,
+        k=k, margin=margin, aggregation=aggregation, temperature=temperature,
+    ).detach()
+    if mixed.numel() == 0 or known.numel() == 0:
+        return unlabeled_features.new_tensor(0.0)
+    if sample_weights is None:
+        mixed_risk = mixed.mean()
+    else:
+        weights = sample_weights.to(device=mixed.device, dtype=mixed.dtype).flatten().clamp_min(0.0)
+        if weights.numel() != mixed.numel():
+            raise ValueError("sample_weights must contain one value per unlabeled feature")
+        denominator = weights.sum()
+        mixed_risk = mixed.mean() if denominator <= 0 else (mixed * weights).sum() / denominator
+    corrected = (mixed_risk - prior * known.mean()) / (1.0 - prior)
+    if risk_mode == "hard_nnpu":
+        return corrected.clamp_min(0.0)
+    tau = float(softness)
+    return tau * F.softplus(corrected / tau)
 
 
 def proxy_contrastive_loss(

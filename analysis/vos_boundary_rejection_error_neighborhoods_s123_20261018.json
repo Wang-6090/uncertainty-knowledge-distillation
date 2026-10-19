@@ -1,0 +1,6380 @@
+{
+  "control_bce_off": {
+    "checkpoint": "runs/vos_boundary_rejection_matched_s123_e4_control/student.pt",
+    "detector_detail": "runs\\vos_boundary_rejection_matched_s123_e4_control_discover\\discovery_detail.json",
+    "protocol": {
+      "dataset": "cifar100",
+      "split_path": "splits_cifar100_protocols/cifar100_60_40_semantic_isolated.json",
+      "seed": 123,
+      "known_train_count": 21600,
+      "test_count": 10000,
+      "k": 10,
+      "discovery_pool_mode": "mixed",
+      "matched_pool_size": 5400,
+      "matched_known_prior": 0.2,
+      "mixed_known_pool_ratio": 0.2,
+      "threshold": 4.1317824602127065,
+      "threshold_source": "existing validation-calibrated discovery_report; not refit",
+      "note": "test labels are used only for post-hoc cohort summaries"
+    },
+    "cohorts": {
+      "known_correct_accepted": {
+        "count": 4055,
+        "mean_nearest_cosine_distance": 0.14209751784801483,
+        "median_nearest_cosine_distance": 0.13141828775405884,
+        "top1_neighbor_matches_predicted_class": 0.7430332922318126,
+        "mean_topk_purity_for_predicted_class": 0.6855240443896424,
+        "mean_topk_neighbor_class_entropy": 0.5965943954498741,
+        "mean_topk_neighbor_class_entropy_normalized": 0.2590976538782868
+      },
+      "known_wrong_accepted": {
+        "count": 1656,
+        "mean_nearest_cosine_distance": 0.1758611500263214,
+        "median_nearest_cosine_distance": 0.17549657821655273,
+        "top1_neighbor_matches_predicted_class": 0.24879227053140096,
+        "mean_topk_purity_for_predicted_class": 0.2634057971014493,
+        "mean_topk_neighbor_class_entropy": 1.0645496654089284,
+        "mean_topk_neighbor_class_entropy_normalized": 0.4623280453990506
+      },
+      "known_correct_rejected": {
+        "count": 123,
+        "mean_nearest_cosine_distance": 0.20666497945785522,
+        "median_nearest_cosine_distance": 0.21674585342407227,
+        "top1_neighbor_matches_predicted_class": 0.4878048780487805,
+        "mean_topk_purity_for_predicted_class": 0.4203252032520326,
+        "mean_topk_neighbor_class_entropy": 1.0586906218076075,
+        "mean_topk_neighbor_class_entropy_normalized": 0.45978349509376637
+      },
+      "known_wrong_rejected": {
+        "count": 166,
+        "mean_nearest_cosine_distance": 0.23323693871498108,
+        "median_nearest_cosine_distance": 0.23530066013336182,
+        "top1_neighbor_matches_predicted_class": 0.16265060240963855,
+        "mean_topk_purity_for_predicted_class": 0.1427710843373494,
+        "mean_topk_neighbor_class_entropy": 1.2390454094566115,
+        "mean_topk_neighbor_class_entropy_normalized": 0.5381105841545616
+      },
+      "unknown_false_accept": {
+        "count": 2072,
+        "mean_nearest_cosine_distance": 0.20898190140724182,
+        "median_nearest_cosine_distance": 0.20968377590179443,
+        "top1_neighbor_matches_predicted_class": 0.34025096525096526,
+        "mean_topk_purity_for_predicted_class": 0.32094594594594594,
+        "mean_topk_neighbor_class_entropy": 1.1473663816720265,
+        "mean_topk_neighbor_class_entropy_normalized": 0.4982948882814614
+      },
+      "unknown_rejected": {
+        "count": 1928,
+        "mean_nearest_cosine_distance": 0.23169372975826263,
+        "median_nearest_cosine_distance": 0.23212724924087524,
+        "top1_neighbor_matches_predicted_class": 0.2266597510373444,
+        "mean_topk_purity_for_predicted_class": 0.21021784232365145,
+        "mean_topk_neighbor_class_entropy": 1.2882880340699616,
+        "mean_topk_neighbor_class_entropy_normalized": 0.5594963842985727
+      }
+    },
+    "unknown_false_accept_local_support": {
+      "count": 2072,
+      "mean_topk_neighbor_support_for_predicted_class": 0.32094594594594594,
+      "score_components": {
+        "score": 0.7681611825255353,
+        "feature_rejector_score": 0.7681611825255353,
+        "proto_dist": 0.2702367386014765,
+        "knn_distance": 0.0,
+        "knn_predicted_class_distance": 0.0,
+        "knn_predicted_class_relative_distance": 0.0,
+        "knn_min_class_distance": 0.0,
+        "knn_min_class_relative_distance": 0.0,
+        "knn_predicted_class_support": 0.0,
+        "entropy": 1.6757421534543078,
+        "feature_norm": 29.998404122687674
+      },
+      "unknown_rejected_score_components": {
+        "score": 7.514695085677864,
+        "feature_rejector_score": 7.514695085677864,
+        "proto_dist": 0.3304628895835263,
+        "knn_distance": 0.0,
+        "knn_predicted_class_distance": 0.0,
+        "knn_predicted_class_relative_distance": 0.0,
+        "knn_min_class_distance": 0.0,
+        "knn_min_class_relative_distance": 0.0,
+        "knn_predicted_class_support": 0.0,
+        "entropy": 2.128401354674049,
+        "feature_norm": 29.240149324860315
+      },
+      "top_nearest_known_train_classes_over_all_false_accepts": [
+        {
+          "raw_class": 80,
+          "count": 152
+        },
+        {
+          "raw_class": 73,
+          "count": 120
+        },
+        {
+          "raw_class": 65,
+          "count": 103
+        },
+        {
+          "raw_class": 74,
+          "count": 102
+        },
+        {
+          "raw_class": 50,
+          "count": 77
+        },
+        {
+          "raw_class": 81,
+          "count": 69
+        },
+        {
+          "raw_class": 67,
+          "count": 65
+        },
+        {
+          "raw_class": 99,
+          "count": 62
+        },
+        {
+          "raw_class": 68,
+          "count": 56
+        },
+        {
+          "raw_class": 85,
+          "count": 56
+        }
+      ],
+      "unknown_class_breakdown": [
+        {
+          "raw_unknown_class": 33,
+          "count": 100,
+          "false_accept_count": 76,
+          "false_accept_rate": 0.76,
+          "accepted_unknown_score_components": {
+            "score": -0.5438966758941349,
+            "feature_rejector_score": -0.5438966758941349,
+            "proto_dist": 0.27529657514471756,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9005877320703708,
+            "feature_norm": 29.165419729132402
+          },
+          "rejected_unknown_score_components": {
+            "score": 5.788721978664398,
+            "feature_rejector_score": 5.788721978664398,
+            "proto_dist": 0.3428293317556381,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.569806089003881,
+            "feature_norm": 27.030730962753296
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 96,
+              "count": 23
+            },
+            {
+              "raw_class": 59,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 76,
+              "count": 4
+            },
+            {
+              "raw_class": 47,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 96,
+              "count": 22
+            },
+            {
+              "raw_class": 59,
+              "count": 8
+            },
+            {
+              "raw_class": 68,
+              "count": 6
+            },
+            {
+              "raw_class": 79,
+              "count": 3
+            },
+            {
+              "raw_class": 17,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 44,
+          "count": 100,
+          "false_accept_count": 75,
+          "false_accept_rate": 0.75,
+          "accepted_unknown_score_components": {
+            "score": 0.8227650570869446,
+            "feature_rejector_score": 0.8227650570869446,
+            "proto_dist": 0.3063391884167989,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.959399828314781,
+            "feature_norm": 30.68052284240723
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.905252933502197,
+            "feature_rejector_score": 6.905252933502197,
+            "proto_dist": 0.35976296186447143,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.576477704048157,
+            "feature_norm": 28.457647171020508
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 99,
+              "count": 9
+            },
+            {
+              "raw_class": 18,
+              "count": 8
+            },
+            {
+              "raw_class": 91,
+              "count": 7
+            },
+            {
+              "raw_class": 45,
+              "count": 6
+            },
+            {
+              "raw_class": 7,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 18,
+              "count": 16
+            },
+            {
+              "raw_class": 26,
+              "count": 9
+            },
+            {
+              "raw_class": 99,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 79,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 40,
+          "count": 100,
+          "false_accept_count": 72,
+          "false_accept_rate": 0.72,
+          "accepted_unknown_score_components": {
+            "score": -1.025457274582651,
+            "feature_rejector_score": -1.025457274582651,
+            "proto_dist": 0.327622238960531,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.5550940118846484,
+            "feature_norm": 31.57389561335246
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.87114109311785,
+            "feature_rejector_score": 6.87114109311785,
+            "proto_dist": 0.3771105727979115,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.2437753741230284,
+            "feature_norm": 29.8806950705392
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 28,
+              "count": 15
+            },
+            {
+              "raw_class": 76,
+              "count": 5
+            },
+            {
+              "raw_class": 84,
+              "count": 5
+            },
+            {
+              "raw_class": 69,
+              "count": 5
+            },
+            {
+              "raw_class": 9,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 28,
+              "count": 19
+            },
+            {
+              "raw_class": 76,
+              "count": 8
+            },
+            {
+              "raw_class": 9,
+              "count": 8
+            },
+            {
+              "raw_class": 84,
+              "count": 7
+            },
+            {
+              "raw_class": 57,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 27,
+          "count": 100,
+          "false_accept_count": 70,
+          "false_accept_rate": 0.7,
+          "accepted_unknown_score_components": {
+            "score": 1.1517731589930398,
+            "feature_rejector_score": 1.1517731589930398,
+            "proto_dist": 0.27368721195629664,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8449321120977402,
+            "feature_norm": 29.67437240055629
+          },
+          "rejected_unknown_score_components": {
+            "score": 5.882420873641967,
+            "feature_rejector_score": 5.882420873641967,
+            "proto_dist": 0.31300958395004275,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.2464111189047498,
+            "feature_norm": 29.23747590382894
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 91,
+              "count": 9
+            },
+            {
+              "raw_class": 85,
+              "count": 7
+            },
+            {
+              "raw_class": 67,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 91,
+              "count": 14
+            },
+            {
+              "raw_class": 74,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 85,
+              "count": 5
+            },
+            {
+              "raw_class": 77,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 38,
+          "count": 100,
+          "false_accept_count": 67,
+          "false_accept_rate": 0.67,
+          "accepted_unknown_score_components": {
+            "score": 1.3016319168147756,
+            "feature_rejector_score": 1.3016319168147756,
+            "proto_dist": 0.24254844081935598,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.639857712076671,
+            "feature_norm": 29.843863188330808
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.910718513257576,
+            "feature_rejector_score": 6.910718513257576,
+            "proto_dist": 0.30851142876075976,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.1967787435560515,
+            "feature_norm": 28.449413935343426
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 19
+            },
+            {
+              "raw_class": 65,
+              "count": 16
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 77,
+              "count": 4
+            },
+            {
+              "raw_class": 50,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 25
+            },
+            {
+              "raw_class": 65,
+              "count": 14
+            },
+            {
+              "raw_class": 74,
+              "count": 8
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 79,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 4,
+          "count": 100,
+          "false_accept_count": 64,
+          "false_accept_rate": 0.64,
+          "accepted_unknown_score_components": {
+            "score": 1.3038698360323906,
+            "feature_rejector_score": 1.3038698360323906,
+            "proto_dist": 0.23820532765239477,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.6044586575590074,
+            "feature_norm": 29.436264753341675
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.326835049523248,
+            "feature_rejector_score": 6.326835049523248,
+            "proto_dist": 0.28060001466009354,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.0463654001553855,
+            "feature_norm": 27.68587260776096
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 13
+            },
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 77,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 50,
+              "count": 22
+            },
+            {
+              "raw_class": 74,
+              "count": 12
+            },
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 77,
+              "count": 6
+            },
+            {
+              "raw_class": 6,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 78,
+          "count": 100,
+          "false_accept_count": 64,
+          "false_accept_rate": 0.64,
+          "accepted_unknown_score_components": {
+            "score": -0.6951369279995561,
+            "feature_rejector_score": -0.6951369279995561,
+            "proto_dist": 0.27906739991158247,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.1154097655671649,
+            "feature_norm": 35.41649830341339
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.958749691645305,
+            "feature_rejector_score": 6.958749691645305,
+            "proto_dist": 0.3447138898902469,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.933221999866267,
+            "feature_norm": 30.378150516086155
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 99,
+              "count": 30
+            },
+            {
+              "raw_class": 18,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 2
+            },
+            {
+              "raw_class": 74,
+              "count": 2
+            },
+            {
+              "raw_class": 65,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 99,
+              "count": 38
+            },
+            {
+              "raw_class": 18,
+              "count": 9
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            },
+            {
+              "raw_class": 26,
+              "count": 3
+            },
+            {
+              "raw_class": 7,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 30,
+          "count": 100,
+          "false_accept_count": 61,
+          "false_accept_rate": 0.61,
+          "accepted_unknown_score_components": {
+            "score": 0.5339367155168877,
+            "feature_rejector_score": 0.5339367155168877,
+            "proto_dist": 0.20249488705494365,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.4834959040411184,
+            "feature_norm": 30.158153221255443
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.057665103521103,
+            "feature_rejector_score": 6.057665103521103,
+            "proto_dist": 0.2856863859372261,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.146826426188151,
+            "feature_norm": 28.743056223942684
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 38
+            },
+            {
+              "raw_class": 67,
+              "count": 5
+            },
+            {
+              "raw_class": 91,
+              "count": 3
+            },
+            {
+              "raw_class": 32,
+              "count": 3
+            },
+            {
+              "raw_class": 45,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 38
+            },
+            {
+              "raw_class": 67,
+              "count": 9
+            },
+            {
+              "raw_class": 76,
+              "count": 4
+            },
+            {
+              "raw_class": 91,
+              "count": 2
+            },
+            {
+              "raw_class": 69,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 63,
+          "count": 100,
+          "false_accept_count": 61,
+          "false_accept_rate": 0.61,
+          "accepted_unknown_score_components": {
+            "score": 0.2895931435413048,
+            "feature_rejector_score": 0.2895931435413048,
+            "proto_dist": 0.22268041919489376,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.3726131751156243,
+            "feature_norm": 29.84431351208296
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.975804451184395,
+            "feature_rejector_score": 7.975804451184395,
+            "proto_dist": 0.34074319020295757,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.3318284933383646,
+            "feature_norm": 28.028692392202522
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 19
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 80,
+              "count": 4
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 32
+            },
+            {
+              "raw_class": 77,
+              "count": 6
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            },
+            {
+              "raw_class": 80,
+              "count": 3
+            },
+            {
+              "raw_class": 32,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 23,
+          "count": 100,
+          "false_accept_count": 60,
+          "false_accept_rate": 0.6,
+          "accepted_unknown_score_components": {
+            "score": 1.4832407106955847,
+            "feature_rejector_score": 1.4832407106955847,
+            "proto_dist": 0.28789493640263875,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.4676086445649466,
+            "feature_norm": 24.898203245798747
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.53409389257431,
+            "feature_rejector_score": 6.53409389257431,
+            "proto_dist": 0.32876884639263154,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.5497532725334167,
+            "feature_norm": 24.979939126968382
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 67,
+              "count": 13
+            },
+            {
+              "raw_class": 73,
+              "count": 11
+            },
+            {
+              "raw_class": 59,
+              "count": 7
+            },
+            {
+              "raw_class": 76,
+              "count": 6
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 67,
+              "count": 16
+            },
+            {
+              "raw_class": 59,
+              "count": 12
+            },
+            {
+              "raw_class": 76,
+              "count": 10
+            },
+            {
+              "raw_class": 28,
+              "count": 4
+            },
+            {
+              "raw_class": 99,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 60,
+          "count": 100,
+          "false_accept_count": 60,
+          "false_accept_rate": 0.6,
+          "accepted_unknown_score_components": {
+            "score": 1.351523181796074,
+            "feature_rejector_score": 1.351523181796074,
+            "proto_dist": 0.28297001123428345,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.2648570289214454,
+            "feature_norm": 26.843034553527833
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.382186484336853,
+            "feature_rejector_score": 7.382186484336853,
+            "proto_dist": 0.36143175065517424,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.8603979110717774,
+            "feature_norm": 24.492855405807497
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 68,
+              "count": 20
+            },
+            {
+              "raw_class": 89,
+              "count": 8
+            },
+            {
+              "raw_class": 17,
+              "count": 7
+            },
+            {
+              "raw_class": 96,
+              "count": 5
+            },
+            {
+              "raw_class": 59,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 96,
+              "count": 11
+            },
+            {
+              "raw_class": 17,
+              "count": 10
+            },
+            {
+              "raw_class": 68,
+              "count": 9
+            },
+            {
+              "raw_class": 59,
+              "count": 8
+            },
+            {
+              "raw_class": 82,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 87,
+          "count": 100,
+          "false_accept_count": 60,
+          "false_accept_rate": 0.6,
+          "accepted_unknown_score_components": {
+            "score": 0.682674057284991,
+            "feature_rejector_score": 0.682674057284991,
+            "proto_dist": 0.26033424933751426,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.5524270668625832,
+            "feature_norm": 29.830995432535808
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.057217979431153,
+            "feature_rejector_score": 7.057217979431153,
+            "proto_dist": 0.314925217628479,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.0594882294535637,
+            "feature_norm": 27.827595806121828
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 94,
+              "count": 12
+            },
+            {
+              "raw_class": 25,
+              "count": 8
+            },
+            {
+              "raw_class": 5,
+              "count": 6
+            },
+            {
+              "raw_class": 84,
+              "count": 6
+            },
+            {
+              "raw_class": 76,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 25,
+              "count": 13
+            },
+            {
+              "raw_class": 94,
+              "count": 9
+            },
+            {
+              "raw_class": 20,
+              "count": 9
+            },
+            {
+              "raw_class": 5,
+              "count": 8
+            },
+            {
+              "raw_class": 16,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 93,
+          "count": 100,
+          "false_accept_count": 60,
+          "false_accept_rate": 0.6,
+          "accepted_unknown_score_components": {
+            "score": 0.3236315190792084,
+            "feature_rejector_score": 0.3236315190792084,
+            "proto_dist": 0.276373890042305,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7955671434601148,
+            "feature_norm": 29.489403120676677
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.763565611839295,
+            "feature_rejector_score": 6.763565611839295,
+            "proto_dist": 0.3145976096391678,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.1862864419817924,
+            "feature_norm": 28.699175977706908
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 9
+            },
+            {
+              "raw_class": 91,
+              "count": 6
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 67,
+              "count": 5
+            },
+            {
+              "raw_class": 79,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 13
+            },
+            {
+              "raw_class": 26,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 67,
+              "count": 5
+            },
+            {
+              "raw_class": 32,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 95,
+          "count": 100,
+          "false_accept_count": 60,
+          "false_accept_rate": 0.6,
+          "accepted_unknown_score_components": {
+            "score": 0.48525845209757484,
+            "feature_rejector_score": 0.48525845209757484,
+            "proto_dist": 0.25170885821183525,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.5959418810904027,
+            "feature_norm": 30.64979289372762
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.501485240459442,
+            "feature_rejector_score": 6.501485240459442,
+            "proto_dist": 0.32454501241445544,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.273684450984001,
+            "feature_norm": 28.971197271347044
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 30
+            },
+            {
+              "raw_class": 67,
+              "count": 4
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            },
+            {
+              "raw_class": 76,
+              "count": 4
+            },
+            {
+              "raw_class": 91,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 26
+            },
+            {
+              "raw_class": 67,
+              "count": 8
+            },
+            {
+              "raw_class": 76,
+              "count": 6
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            },
+            {
+              "raw_class": 14,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 55,
+          "count": 100,
+          "false_accept_count": 59,
+          "false_accept_rate": 0.59,
+          "accepted_unknown_score_components": {
+            "score": 0.7580032116275722,
+            "feature_rejector_score": 0.7580032116275722,
+            "proto_dist": 0.28312228493771313,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8673197081533528,
+            "feature_norm": 28.667096315804173
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.534931392204471,
+            "feature_rejector_score": 6.534931392204471,
+            "proto_dist": 0.29083463913056906,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.1387161481671217,
+            "feature_norm": 28.067039210621903
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 73,
+              "count": 3
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 11
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 79,
+              "count": 5
+            },
+            {
+              "raw_class": 57,
+              "count": 5
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 64,
+          "count": 100,
+          "false_accept_count": 58,
+          "false_accept_rate": 0.58,
+          "accepted_unknown_score_components": {
+            "score": 0.7579811873107121,
+            "feature_rejector_score": 0.7579811873107121,
+            "proto_dist": 0.245792294370717,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.525718344696637,
+            "feature_norm": 29.51824638761323
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.036498841785249,
+            "feature_rejector_score": 7.036498841785249,
+            "proto_dist": 0.28592869355565026,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8858526405834017,
+            "feature_norm": 28.832821255638486
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 50,
+              "count": 11
+            },
+            {
+              "raw_class": 36,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 74,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 17
+            },
+            {
+              "raw_class": 50,
+              "count": 16
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 34,
+          "count": 100,
+          "false_accept_count": 57,
+          "false_accept_rate": 0.57,
+          "accepted_unknown_score_components": {
+            "score": 1.035273786176715,
+            "feature_rejector_score": 1.035273786176715,
+            "proto_dist": 0.27865241807803776,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.6315709781228451,
+            "feature_norm": 29.107276682268107
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.761341727057169,
+            "feature_rejector_score": 6.761341727057169,
+            "proto_dist": 0.30095628389092377,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.0067522470341173,
+            "feature_norm": 27.847053128619528
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 12
+            },
+            {
+              "raw_class": 36,
+              "count": 11
+            },
+            {
+              "raw_class": 65,
+              "count": 6
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            },
+            {
+              "raw_class": 1,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 22
+            },
+            {
+              "raw_class": 36,
+              "count": 8
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            },
+            {
+              "raw_class": 6,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 13,
+          "count": 100,
+          "false_accept_count": 56,
+          "false_accept_rate": 0.56,
+          "accepted_unknown_score_components": {
+            "score": 0.8419775537082127,
+            "feature_rejector_score": 0.8419775537082127,
+            "proto_dist": 0.2028808199933597,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.2303185628594033,
+            "feature_norm": 31.818016597202845
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.174936424602162,
+            "feature_rejector_score": 6.174936424602162,
+            "proto_dist": 0.2790147526697679,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.703335208648985,
+            "feature_norm": 30.598253293470904
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 81,
+              "count": 23
+            },
+            {
+              "raw_class": 89,
+              "count": 8
+            },
+            {
+              "raw_class": 85,
+              "count": 4
+            },
+            {
+              "raw_class": 37,
+              "count": 4
+            },
+            {
+              "raw_class": 16,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 81,
+              "count": 26
+            },
+            {
+              "raw_class": 85,
+              "count": 9
+            },
+            {
+              "raw_class": 37,
+              "count": 6
+            },
+            {
+              "raw_class": 89,
+              "count": 5
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 29,
+          "count": 100,
+          "false_accept_count": 56,
+          "false_accept_rate": 0.56,
+          "accepted_unknown_score_components": {
+            "score": 0.3381267264485359,
+            "feature_rejector_score": 0.3381267264485359,
+            "proto_dist": 0.3156291288988931,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8627390563488007,
+            "feature_norm": 29.283293655940465
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.577353390780362,
+            "feature_rejector_score": 6.577353390780362,
+            "proto_dist": 0.3674467165361751,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.5566045811230484,
+            "feature_norm": 28.088670903986152
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 91,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 4
+            },
+            {
+              "raw_class": 45,
+              "count": 4
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            },
+            {
+              "raw_class": 74,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 91,
+              "count": 12
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            },
+            {
+              "raw_class": 80,
+              "count": 4
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            },
+            {
+              "raw_class": 6,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 90,
+          "count": 100,
+          "false_accept_count": 54,
+          "false_accept_rate": 0.54,
+          "accepted_unknown_score_components": {
+            "score": 1.0341635313298967,
+            "feature_rejector_score": 1.0341635313298967,
+            "proto_dist": 0.23360290571495337,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.387156650217043,
+            "feature_norm": 31.203690493548358
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.256129627642424,
+            "feature_rejector_score": 6.256129627642424,
+            "proto_dist": 0.31001278110172437,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.117095355754313,
+            "feature_norm": 28.253866237142812
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 81,
+              "count": 26
+            },
+            {
+              "raw_class": 37,
+              "count": 6
+            },
+            {
+              "raw_class": 12,
+              "count": 4
+            },
+            {
+              "raw_class": 85,
+              "count": 3
+            },
+            {
+              "raw_class": 76,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 81,
+              "count": 26
+            },
+            {
+              "raw_class": 85,
+              "count": 8
+            },
+            {
+              "raw_class": 5,
+              "count": 3
+            },
+            {
+              "raw_class": 37,
+              "count": 2
+            },
+            {
+              "raw_class": 41,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 58,
+          "count": 100,
+          "false_accept_count": 53,
+          "false_accept_rate": 0.53,
+          "accepted_unknown_score_components": {
+            "score": 0.6766447582334842,
+            "feature_rejector_score": 0.6766447582334842,
+            "proto_dist": 0.22584251862651897,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.1525310729190987,
+            "feature_norm": 32.82201781362858
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.787549536278907,
+            "feature_rejector_score": 6.787549536278907,
+            "proto_dist": 0.29206956954712565,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7011707063685073,
+            "feature_norm": 31.90047929642048
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 89,
+              "count": 17
+            },
+            {
+              "raw_class": 85,
+              "count": 9
+            },
+            {
+              "raw_class": 81,
+              "count": 8
+            },
+            {
+              "raw_class": 41,
+              "count": 5
+            },
+            {
+              "raw_class": 37,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 85,
+              "count": 20
+            },
+            {
+              "raw_class": 89,
+              "count": 12
+            },
+            {
+              "raw_class": 41,
+              "count": 9
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            },
+            {
+              "raw_class": 81,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 72,
+          "count": 100,
+          "false_accept_count": 52,
+          "false_accept_rate": 0.52,
+          "accepted_unknown_score_components": {
+            "score": 0.2032312945677684,
+            "feature_rejector_score": 0.2032312945677684,
+            "proto_dist": 0.27655152861888593,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.740706592081831,
+            "feature_norm": 30.037900924682617
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.529274354378383,
+            "feature_rejector_score": 7.529274354378383,
+            "proto_dist": 0.3352949569622676,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.3077321648597717,
+            "feature_norm": 28.637386202812195
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 67,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 77,
+              "count": 5
+            },
+            {
+              "raw_class": 73,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 67,
+              "count": 7
+            },
+            {
+              "raw_class": 77,
+              "count": 6
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 57,
+              "count": 5
+            },
+            {
+              "raw_class": 14,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 21,
+          "count": 100,
+          "false_accept_count": 49,
+          "false_accept_rate": 0.49,
+          "accepted_unknown_score_components": {
+            "score": 0.13886041908848043,
+            "feature_rejector_score": 0.13886041908848043,
+            "proto_dist": 0.25016788195590584,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.6365195220830488,
+            "feature_norm": 29.379726332061146
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.182943288017722,
+            "feature_rejector_score": 8.182943288017722,
+            "proto_dist": 0.36249392172869516,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.3464954270451677,
+            "feature_norm": 29.159518484975777
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 46,
+              "count": 9
+            },
+            {
+              "raw_class": 98,
+              "count": 8
+            },
+            {
+              "raw_class": 35,
+              "count": 5
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 11,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 98,
+              "count": 15
+            },
+            {
+              "raw_class": 35,
+              "count": 11
+            },
+            {
+              "raw_class": 80,
+              "count": 6
+            },
+            {
+              "raw_class": 11,
+              "count": 3
+            },
+            {
+              "raw_class": 28,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 75,
+          "count": 100,
+          "false_accept_count": 48,
+          "false_accept_rate": 0.48,
+          "accepted_unknown_score_components": {
+            "score": 1.784788966178894,
+            "feature_rejector_score": 1.784788966178894,
+            "proto_dist": 0.29531318446000415,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8903860325614612,
+            "feature_norm": 29.89558271567027
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.039437037247878,
+            "feature_rejector_score": 7.039437037247878,
+            "proto_dist": 0.3449081744139011,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.2275815296631594,
+            "feature_norm": 29.544805710132305
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 91,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 7,
+              "count": 5
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            },
+            {
+              "raw_class": 85,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 14,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 22,
+          "count": 100,
+          "false_accept_count": 47,
+          "false_accept_rate": 0.47,
+          "accepted_unknown_score_components": {
+            "score": -0.4707324022942401,
+            "feature_rejector_score": -0.4707324022942401,
+            "proto_dist": 0.2835530347012459,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.2581638929017998,
+            "feature_norm": 31.97123077067923
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.452582944114253,
+            "feature_rejector_score": 8.452582944114253,
+            "proto_dist": 0.2963841793672094,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.2322075917332802,
+            "feature_norm": 34.58598388815826
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 61,
+              "count": 18
+            },
+            {
+              "raw_class": 10,
+              "count": 5
+            },
+            {
+              "raw_class": 69,
+              "count": 2
+            },
+            {
+              "raw_class": 36,
+              "count": 2
+            },
+            {
+              "raw_class": 53,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 61,
+              "count": 17
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            },
+            {
+              "raw_class": 57,
+              "count": 3
+            },
+            {
+              "raw_class": 26,
+              "count": 3
+            },
+            {
+              "raw_class": 10,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 88,
+          "count": 100,
+          "false_accept_count": 47,
+          "false_accept_rate": 0.47,
+          "accepted_unknown_score_components": {
+            "score": 1.1623789604673995,
+            "feature_rejector_score": 1.1623789604673995,
+            "proto_dist": 0.30086553350408024,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7449245142175795,
+            "feature_norm": 28.938581344929148
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.076684510932778,
+            "feature_rejector_score": 7.076684510932778,
+            "proto_dist": 0.3473840704504049,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.2917496269603945,
+            "feature_norm": 28.703384255463224
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 84,
+              "count": 5
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            },
+            {
+              "raw_class": 45,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 16
+            },
+            {
+              "raw_class": 6,
+              "count": 7
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            },
+            {
+              "raw_class": 26,
+              "count": 4
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 3,
+          "count": 100,
+          "false_accept_count": 45,
+          "false_accept_rate": 0.45,
+          "accepted_unknown_score_components": {
+            "score": 2.0837074412239924,
+            "feature_rejector_score": 2.0837074412239924,
+            "proto_dist": 0.2765958865483602,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7056884088863928,
+            "feature_norm": 30.2376644982232
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.754053861444647,
+            "feature_rejector_score": 6.754053861444647,
+            "proto_dist": 0.3220964182506908,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.2002739120613444,
+            "feature_norm": 29.047015380859374
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 65,
+              "count": 8
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            },
+            {
+              "raw_class": 74,
+              "count": 4
+            },
+            {
+              "raw_class": 80,
+              "count": 4
+            },
+            {
+              "raw_class": 36,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 11
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 14,
+              "count": 7
+            },
+            {
+              "raw_class": 36,
+              "count": 5
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 49,
+          "count": 100,
+          "false_accept_count": 44,
+          "false_accept_rate": 0.44,
+          "accepted_unknown_score_components": {
+            "score": 1.4003268534486943,
+            "feature_rejector_score": 1.4003268534486943,
+            "proto_dist": 0.24436593462120404,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.45904296153987,
+            "feature_norm": 31.78316844593395
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.791920585291726,
+            "feature_rejector_score": 6.791920585291726,
+            "proto_dist": 0.29548917391470503,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.048730107290404,
+            "feature_norm": 30.63895790917533
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 76,
+              "count": 10
+            },
+            {
+              "raw_class": 68,
+              "count": 7
+            },
+            {
+              "raw_class": 37,
+              "count": 4
+            },
+            {
+              "raw_class": 59,
+              "count": 4
+            },
+            {
+              "raw_class": 17,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 76,
+              "count": 18
+            },
+            {
+              "raw_class": 17,
+              "count": 10
+            },
+            {
+              "raw_class": 59,
+              "count": 5
+            },
+            {
+              "raw_class": 67,
+              "count": 4
+            },
+            {
+              "raw_class": 68,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 15,
+          "count": 100,
+          "false_accept_count": 43,
+          "false_accept_rate": 0.43,
+          "accepted_unknown_score_components": {
+            "score": 0.5572631871977518,
+            "feature_rejector_score": 0.5572631871977518,
+            "proto_dist": 0.3021272656529449,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.6486594389344371,
+            "feature_norm": 29.65751514878384
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.170761936589292,
+            "feature_rejector_score": 8.170761936589292,
+            "proto_dist": 0.34541462283385427,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.491001712648492,
+            "feature_norm": 27.261054323430645
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 12
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 17,
+              "count": 4
+            },
+            {
+              "raw_class": 20,
+              "count": 3
+            },
+            {
+              "raw_class": 37,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 17,
+              "count": 6
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 57,
+              "count": 5
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            },
+            {
+              "raw_class": 36,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 42,
+          "count": 100,
+          "false_accept_count": 43,
+          "false_accept_rate": 0.43,
+          "accepted_unknown_score_components": {
+            "score": 2.296998065571452,
+            "feature_rejector_score": 2.296998065571452,
+            "proto_dist": 0.2773869730705439,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9858029942179836,
+            "feature_norm": 30.19978545432867
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.0224408099525855,
+            "feature_rejector_score": 7.0224408099525855,
+            "proto_dist": 0.3224073083777177,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.322860504451551,
+            "feature_norm": 29.269218277512934
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 67,
+              "count": 5
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            },
+            {
+              "raw_class": 79,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 50,
+              "count": 11
+            },
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 74,
+              "count": 8
+            },
+            {
+              "raw_class": 79,
+              "count": 2
+            },
+            {
+              "raw_class": 17,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 66,
+          "count": 100,
+          "false_accept_count": 42,
+          "false_accept_rate": 0.42,
+          "accepted_unknown_score_components": {
+            "score": 1.1772844535963876,
+            "feature_rejector_score": 1.1772844535963876,
+            "proto_dist": 0.26606680098034086,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8777107071308863,
+            "feature_norm": 28.595457939874557
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.651589960887514,
+            "feature_rejector_score": 7.651589960887514,
+            "proto_dist": 0.3310180440031249,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.230317348678564,
+            "feature_norm": 28.731464090018438
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 74,
+              "count": 3
+            },
+            {
+              "raw_class": 80,
+              "count": 3
+            },
+            {
+              "raw_class": 14,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 12
+            },
+            {
+              "raw_class": 50,
+              "count": 12
+            },
+            {
+              "raw_class": 36,
+              "count": 3
+            },
+            {
+              "raw_class": 74,
+              "count": 3
+            },
+            {
+              "raw_class": 84,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 8,
+          "count": 100,
+          "false_accept_count": 39,
+          "false_accept_rate": 0.39,
+          "accepted_unknown_score_components": {
+            "score": 1.272673745950063,
+            "feature_rejector_score": 1.272673745950063,
+            "proto_dist": 0.3335934204932971,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.6683559339636793,
+            "feature_norm": 30.968668130727913
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.221900595993292,
+            "feature_rejector_score": 8.221900595993292,
+            "proto_dist": 0.37845036729437403,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8701868003509083,
+            "feature_norm": 32.97698239811131
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 12,
+              "count": 5
+            },
+            {
+              "raw_class": 56,
+              "count": 4
+            },
+            {
+              "raw_class": 46,
+              "count": 3
+            },
+            {
+              "raw_class": 84,
+              "count": 2
+            },
+            {
+              "raw_class": 45,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 41,
+              "count": 7
+            },
+            {
+              "raw_class": 61,
+              "count": 4
+            },
+            {
+              "raw_class": 25,
+              "count": 4
+            },
+            {
+              "raw_class": 85,
+              "count": 3
+            },
+            {
+              "raw_class": 26,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 19,
+          "count": 100,
+          "false_accept_count": 38,
+          "false_accept_rate": 0.38,
+          "accepted_unknown_score_components": {
+            "score": 1.4949542974170886,
+            "feature_rejector_score": 1.4949542974170886,
+            "proto_dist": 0.3133080366410707,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8194276612055928,
+            "feature_norm": 29.917484885767887
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.569243684891732,
+            "feature_rejector_score": 7.569243684891732,
+            "proto_dist": 0.35567099913474054,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.436056076518951,
+            "feature_norm": 27.302261075665875
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 4
+            },
+            {
+              "raw_class": 32,
+              "count": 4
+            },
+            {
+              "raw_class": 37,
+              "count": 3
+            },
+            {
+              "raw_class": 65,
+              "count": 2
+            },
+            {
+              "raw_class": 50,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 85,
+              "count": 5
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            },
+            {
+              "raw_class": 80,
+              "count": 3
+            },
+            {
+              "raw_class": 65,
+              "count": 3
+            },
+            {
+              "raw_class": 50,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 71,
+          "count": 100,
+          "false_accept_count": 38,
+          "false_accept_rate": 0.38,
+          "accepted_unknown_score_components": {
+            "score": 1.2366506174991005,
+            "feature_rejector_score": 1.2366506174991005,
+            "proto_dist": 0.26385921553561564,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9910335979963605,
+            "feature_norm": 27.366864656147204
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.736988652137018,
+            "feature_rejector_score": 6.736988652137018,
+            "proto_dist": 0.32968063316037577,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.6854395501075254,
+            "feature_norm": 24.547970556443737
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 69,
+              "count": 8
+            },
+            {
+              "raw_class": 73,
+              "count": 7
+            },
+            {
+              "raw_class": 68,
+              "count": 6
+            },
+            {
+              "raw_class": 76,
+              "count": 3
+            },
+            {
+              "raw_class": 67,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 69,
+              "count": 8
+            },
+            {
+              "raw_class": 73,
+              "count": 6
+            },
+            {
+              "raw_class": 76,
+              "count": 4
+            },
+            {
+              "raw_class": 68,
+              "count": 3
+            },
+            {
+              "raw_class": 12,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 97,
+          "count": 100,
+          "false_accept_count": 38,
+          "false_accept_rate": 0.38,
+          "accepted_unknown_score_components": {
+            "score": 2.620502049985685,
+            "feature_rejector_score": 2.620502049985685,
+            "proto_dist": 0.2531001112963024,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8754636959025734,
+            "feature_norm": 27.739446890981572
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.318443690576861,
+            "feature_rejector_score": 7.318443690576861,
+            "proto_dist": 0.3092631111221929,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.0073305503014596,
+            "feature_norm": 29.210419900955692
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 85,
+              "count": 1
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 50,
+              "count": 10
+            },
+            {
+              "raw_class": 65,
+              "count": 9
+            },
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 74,
+              "count": 2
+            },
+            {
+              "raw_class": 36,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 39,
+          "count": 100,
+          "false_accept_count": 35,
+          "false_accept_rate": 0.35,
+          "accepted_unknown_score_components": {
+            "score": 0.16281407049724034,
+            "feature_rejector_score": 0.16281407049724034,
+            "proto_dist": 0.3097575528281076,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.684702305495739,
+            "feature_norm": 29.524161747523717
+          },
+          "rejected_unknown_score_components": {
+            "score": 15.201433196434607,
+            "feature_rejector_score": 15.201433196434607,
+            "proto_dist": 0.4248393801542429,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.863318179662411,
+            "feature_norm": 33.45248647836539
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 25,
+              "count": 8
+            },
+            {
+              "raw_class": 12,
+              "count": 4
+            },
+            {
+              "raw_class": 45,
+              "count": 3
+            },
+            {
+              "raw_class": 85,
+              "count": 2
+            },
+            {
+              "raw_class": 5,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 25,
+              "count": 17
+            },
+            {
+              "raw_class": 81,
+              "count": 2
+            },
+            {
+              "raw_class": 83,
+              "count": 2
+            },
+            {
+              "raw_class": 76,
+              "count": 2
+            },
+            {
+              "raw_class": 2,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 86,
+          "count": 100,
+          "false_accept_count": 35,
+          "false_accept_rate": 0.35,
+          "accepted_unknown_score_components": {
+            "score": -0.35957354818071635,
+            "feature_rejector_score": -0.35957354818071635,
+            "proto_dist": 0.2881467478615897,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.433948330049004,
+            "feature_norm": 31.882485689435686
+          },
+          "rejected_unknown_score_components": {
+            "score": 9.527895421248216,
+            "feature_rejector_score": 9.527895421248216,
+            "proto_dist": 0.358511785360483,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.908368686070809,
+            "feature_norm": 29.523432364830605
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 16,
+              "count": 10
+            },
+            {
+              "raw_class": 94,
+              "count": 4
+            },
+            {
+              "raw_class": 28,
+              "count": 3
+            },
+            {
+              "raw_class": 85,
+              "count": 3
+            },
+            {
+              "raw_class": 76,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 16,
+              "count": 9
+            },
+            {
+              "raw_class": 28,
+              "count": 5
+            },
+            {
+              "raw_class": 94,
+              "count": 4
+            },
+            {
+              "raw_class": 25,
+              "count": 4
+            },
+            {
+              "raw_class": 9,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 43,
+          "count": 100,
+          "false_accept_count": 32,
+          "false_accept_rate": 0.32,
+          "accepted_unknown_score_components": {
+            "score": 0.8516084831207991,
+            "feature_rejector_score": 0.8516084831207991,
+            "proto_dist": 0.2496176641434431,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7719780262559652,
+            "feature_norm": 27.836360335350037
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.104255823528066,
+            "feature_rejector_score": 8.104255823528066,
+            "proto_dist": 0.3192679023041445,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.074213964974179,
+            "feature_norm": 28.45171583400053
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            },
+            {
+              "raw_class": 74,
+              "count": 3
+            },
+            {
+              "raw_class": 36,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 6,
+              "count": 3
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            },
+            {
+              "raw_class": 57,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 48,
+          "count": 100,
+          "false_accept_count": 31,
+          "false_accept_rate": 0.31,
+          "accepted_unknown_score_components": {
+            "score": 1.914918638044788,
+            "feature_rejector_score": 1.914918638044788,
+            "proto_dist": 0.26645208558728617,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 0.842389470627231,
+            "feature_norm": 35.35396059097782
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.295501715895059,
+            "feature_rejector_score": 7.295501715895059,
+            "proto_dist": 0.3058326900869176,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 0.9953347362469935,
+            "feature_norm": 35.67372485174649
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 89,
+              "count": 7
+            },
+            {
+              "raw_class": 41,
+              "count": 7
+            },
+            {
+              "raw_class": 46,
+              "count": 3
+            },
+            {
+              "raw_class": 81,
+              "count": 2
+            },
+            {
+              "raw_class": 7,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 41,
+              "count": 20
+            },
+            {
+              "raw_class": 89,
+              "count": 8
+            },
+            {
+              "raw_class": 45,
+              "count": 1
+            },
+            {
+              "raw_class": 81,
+              "count": 1
+            },
+            {
+              "raw_class": 6,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 31,
+          "count": 100,
+          "false_accept_count": 23,
+          "false_accept_rate": 0.23,
+          "accepted_unknown_score_components": {
+            "score": 1.1801826487416807,
+            "feature_rejector_score": 1.1801826487416807,
+            "proto_dist": 0.2897184750308161,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.096595665682917,
+            "feature_norm": 28.644656139871348
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.168971266065325,
+            "feature_rejector_score": 8.168971266065325,
+            "proto_dist": 0.3521421319478518,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.3141247142444956,
+            "feature_norm": 29.05450273489023
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 17,
+              "count": 3
+            },
+            {
+              "raw_class": 96,
+              "count": 2
+            },
+            {
+              "raw_class": 85,
+              "count": 2
+            },
+            {
+              "raw_class": 74,
+              "count": 2
+            },
+            {
+              "raw_class": 80,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 3
+            },
+            {
+              "raw_class": 32,
+              "count": 2
+            },
+            {
+              "raw_class": 17,
+              "count": 2
+            },
+            {
+              "raw_class": 81,
+              "count": 1
+            },
+            {
+              "raw_class": 65,
+              "count": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "treatment_bce_0p05": {
+    "checkpoint": "runs/vos_boundary_rejection_matched_s123_e4_interclass_mix/student.pt",
+    "detector_detail": "runs\\vos_boundary_rejection_matched_s123_e4_interclass_mix_discover\\discovery_detail.json",
+    "protocol": {
+      "dataset": "cifar100",
+      "split_path": "splits_cifar100_protocols/cifar100_60_40_semantic_isolated.json",
+      "seed": 123,
+      "known_train_count": 21600,
+      "test_count": 10000,
+      "k": 10,
+      "discovery_pool_mode": "mixed",
+      "matched_pool_size": 5400,
+      "matched_known_prior": 0.2,
+      "mixed_known_pool_ratio": 0.2,
+      "threshold": 4.631398200988762,
+      "threshold_source": "existing validation-calibrated discovery_report; not refit",
+      "note": "test labels are used only for post-hoc cohort summaries"
+    },
+    "cohorts": {
+      "known_correct_accepted": {
+        "count": 4044,
+        "mean_nearest_cosine_distance": 0.14602068066596985,
+        "median_nearest_cosine_distance": 0.13618811964988708,
+        "top1_neighbor_matches_predicted_class": 0.73837784371909,
+        "mean_topk_purity_for_predicted_class": 0.6853857566765579,
+        "mean_topk_neighbor_class_entropy": 0.5884626701893955,
+        "mean_topk_neighbor_class_entropy_normalized": 0.2555660904693076
+      },
+      "known_wrong_accepted": {
+        "count": 1700,
+        "mean_nearest_cosine_distance": 0.1816135197877884,
+        "median_nearest_cosine_distance": 0.18025293946266174,
+        "top1_neighbor_matches_predicted_class": 0.2664705882352941,
+        "mean_topk_purity_for_predicted_class": 0.2622941176470588,
+        "mean_topk_neighbor_class_entropy": 1.0547635885786721,
+        "mean_topk_neighbor_class_entropy_normalized": 0.45807800623218903
+      },
+      "known_correct_rejected": {
+        "count": 109,
+        "mean_nearest_cosine_distance": 0.18864108622074127,
+        "median_nearest_cosine_distance": 0.18645739555358887,
+        "top1_neighbor_matches_predicted_class": 0.6146788990825688,
+        "mean_topk_purity_for_predicted_class": 0.518348623853211,
+        "mean_topk_neighbor_class_entropy": 0.8886457316841343,
+        "mean_topk_neighbor_class_entropy_normalized": 0.3859339376372972
+      },
+      "known_wrong_rejected": {
+        "count": 147,
+        "mean_nearest_cosine_distance": 0.22415602207183838,
+        "median_nearest_cosine_distance": 0.23576056957244873,
+        "top1_neighbor_matches_predicted_class": 0.19727891156462585,
+        "mean_topk_purity_for_predicted_class": 0.18775510204081633,
+        "mean_topk_neighbor_class_entropy": 1.187258799094557,
+        "mean_topk_neighbor_class_entropy_normalized": 0.5156199450378475
+      },
+      "unknown_false_accept": {
+        "count": 2290,
+        "mean_nearest_cosine_distance": 0.2230362445116043,
+        "median_nearest_cosine_distance": 0.22324827313423157,
+        "top1_neighbor_matches_predicted_class": 0.3262008733624454,
+        "mean_topk_purity_for_predicted_class": 0.3158515283842795,
+        "mean_topk_neighbor_class_entropy": 1.1701981032011946,
+        "mean_topk_neighbor_class_entropy_normalized": 0.5082105789539307
+      },
+      "unknown_rejected": {
+        "count": 1710,
+        "mean_nearest_cosine_distance": 0.2303752303123474,
+        "median_nearest_cosine_distance": 0.23109865188598633,
+        "top1_neighbor_matches_predicted_class": 0.24619883040935672,
+        "mean_topk_purity_for_predicted_class": 0.22549707602339183,
+        "mean_topk_neighbor_class_entropy": 1.2615926687905692,
+        "mean_topk_neighbor_class_entropy_normalized": 0.547902734465341
+      }
+    },
+    "unknown_false_accept_local_support": {
+      "count": 2290,
+      "mean_topk_neighbor_support_for_predicted_class": 0.3158515283842795,
+      "score_components": {
+        "score": 1.152472767272891,
+        "feature_rejector_score": 1.152472767272891,
+        "proto_dist": 0.2925969582718012,
+        "knn_distance": 0.0,
+        "knn_predicted_class_distance": 0.0,
+        "knn_predicted_class_relative_distance": 0.0,
+        "knn_min_class_distance": 0.0,
+        "knn_min_class_relative_distance": 0.0,
+        "knn_predicted_class_support": 0.0,
+        "entropy": 1.6942111023881687,
+        "feature_norm": 29.14295842199867
+      },
+      "unknown_rejected_score_components": {
+        "score": 7.385863696204291,
+        "feature_rejector_score": 7.385863696204291,
+        "proto_dist": 0.3450497619938432,
+        "knn_distance": 0.0,
+        "knn_predicted_class_distance": 0.0,
+        "knn_predicted_class_relative_distance": 0.0,
+        "knn_min_class_distance": 0.0,
+        "knn_min_class_relative_distance": 0.0,
+        "knn_predicted_class_support": 0.0,
+        "entropy": 2.169131118721432,
+        "feature_norm": 27.68304495337414
+      },
+      "top_nearest_known_train_classes_over_all_false_accepts": [
+        {
+          "raw_class": 80,
+          "count": 204
+        },
+        {
+          "raw_class": 74,
+          "count": 124
+        },
+        {
+          "raw_class": 65,
+          "count": 113
+        },
+        {
+          "raw_class": 50,
+          "count": 99
+        },
+        {
+          "raw_class": 73,
+          "count": 93
+        },
+        {
+          "raw_class": 99,
+          "count": 65
+        },
+        {
+          "raw_class": 51,
+          "count": 63
+        },
+        {
+          "raw_class": 67,
+          "count": 63
+        },
+        {
+          "raw_class": 85,
+          "count": 62
+        },
+        {
+          "raw_class": 89,
+          "count": 62
+        }
+      ],
+      "unknown_class_breakdown": [
+        {
+          "raw_unknown_class": 40,
+          "count": 100,
+          "false_accept_count": 82,
+          "false_accept_rate": 0.82,
+          "accepted_unknown_score_components": {
+            "score": -1.1690907630978562,
+            "feature_rejector_score": -1.1690907630978562,
+            "proto_dist": 0.354620123781809,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.723199422854544,
+            "feature_norm": 30.022902558489545
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.05727317598131,
+            "feature_rejector_score": 7.05727317598131,
+            "proto_dist": 0.3927639987733629,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.3404316190216274,
+            "feature_norm": 26.941707399156357
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 28,
+              "count": 15
+            },
+            {
+              "raw_class": 84,
+              "count": 9
+            },
+            {
+              "raw_class": 69,
+              "count": 7
+            },
+            {
+              "raw_class": 76,
+              "count": 6
+            },
+            {
+              "raw_class": 9,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 28,
+              "count": 19
+            },
+            {
+              "raw_class": 9,
+              "count": 12
+            },
+            {
+              "raw_class": 57,
+              "count": 10
+            },
+            {
+              "raw_class": 76,
+              "count": 7
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 78,
+          "count": 100,
+          "false_accept_count": 81,
+          "false_accept_rate": 0.81,
+          "accepted_unknown_score_components": {
+            "score": -0.5719146213413756,
+            "feature_rejector_score": -0.5719146213413756,
+            "proto_dist": 0.300947266596335,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.2187695272588803,
+            "feature_norm": 33.768942797625506
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.350308794724314,
+            "feature_rejector_score": 6.350308794724314,
+            "proto_dist": 0.3680552369669864,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.137190279599867,
+            "feature_norm": 27.861975017346833
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 99,
+              "count": 31
+            },
+            {
+              "raw_class": 18,
+              "count": 12
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            },
+            {
+              "raw_class": 24,
+              "count": 3
+            },
+            {
+              "raw_class": 6,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 99,
+              "count": 47
+            },
+            {
+              "raw_class": 18,
+              "count": 6
+            },
+            {
+              "raw_class": 61,
+              "count": 3
+            },
+            {
+              "raw_class": 26,
+              "count": 3
+            },
+            {
+              "raw_class": 50,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 22,
+          "count": 100,
+          "false_accept_count": 78,
+          "false_accept_rate": 0.78,
+          "accepted_unknown_score_components": {
+            "score": -0.9023762276539435,
+            "feature_rejector_score": -0.9023762276539435,
+            "proto_dist": 0.2791716502262996,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.0928249336205995,
+            "feature_norm": 32.18432062100141
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.858908653259277,
+            "feature_rejector_score": 7.858908653259277,
+            "proto_dist": 0.3695281852375377,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7621071684089573,
+            "feature_norm": 29.29276145588268
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 61,
+              "count": 32
+            },
+            {
+              "raw_class": 10,
+              "count": 7
+            },
+            {
+              "raw_class": 53,
+              "count": 3
+            },
+            {
+              "raw_class": 16,
+              "count": 3
+            },
+            {
+              "raw_class": 7,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 61,
+              "count": 44
+            },
+            {
+              "raw_class": 25,
+              "count": 6
+            },
+            {
+              "raw_class": 10,
+              "count": 4
+            },
+            {
+              "raw_class": 99,
+              "count": 3
+            },
+            {
+              "raw_class": 57,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 38,
+          "count": 100,
+          "false_accept_count": 76,
+          "false_accept_rate": 0.76,
+          "accepted_unknown_score_components": {
+            "score": 2.335561741339533,
+            "feature_rejector_score": 2.335561741339533,
+            "proto_dist": 0.2749702318718559,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7672674789240486,
+            "feature_norm": 29.06733839135421
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.251775026321411,
+            "feature_rejector_score": 6.251775026321411,
+            "proto_dist": 0.3209264899293582,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.0813415745894113,
+            "feature_norm": 27.721790711085003
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 24
+            },
+            {
+              "raw_class": 65,
+              "count": 17
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 32,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 25
+            },
+            {
+              "raw_class": 65,
+              "count": 16
+            },
+            {
+              "raw_class": 74,
+              "count": 11
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 34,
+          "count": 100,
+          "false_accept_count": 74,
+          "false_accept_rate": 0.74,
+          "accepted_unknown_score_components": {
+            "score": 1.1728354885771468,
+            "feature_rejector_score": 1.1728354885771468,
+            "proto_dist": 0.2978457156065348,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7584260500766136,
+            "feature_norm": 28.363123120488346
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.219691826747014,
+            "feature_rejector_score": 7.219691826747014,
+            "proto_dist": 0.33276532934262204,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.138982355594635,
+            "feature_norm": 26.696371371929462
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 20
+            },
+            {
+              "raw_class": 50,
+              "count": 7
+            },
+            {
+              "raw_class": 36,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 51,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 33
+            },
+            {
+              "raw_class": 36,
+              "count": 11
+            },
+            {
+              "raw_class": 51,
+              "count": 6
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            },
+            {
+              "raw_class": 6,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 44,
+          "count": 100,
+          "false_accept_count": 74,
+          "false_accept_rate": 0.74,
+          "accepted_unknown_score_components": {
+            "score": 0.9364933379598566,
+            "feature_rejector_score": 0.9364933379598566,
+            "proto_dist": 0.3296683044046969,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.10265404952539,
+            "feature_norm": 29.04276059124921
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.15614128112793,
+            "feature_rejector_score": 7.15614128112793,
+            "proto_dist": 0.3884749160363124,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.5014025339713464,
+            "feature_norm": 27.368586466862606
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 45,
+              "count": 9
+            },
+            {
+              "raw_class": 18,
+              "count": 8
+            },
+            {
+              "raw_class": 99,
+              "count": 6
+            },
+            {
+              "raw_class": 91,
+              "count": 5
+            },
+            {
+              "raw_class": 51,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 99,
+              "count": 12
+            },
+            {
+              "raw_class": 18,
+              "count": 12
+            },
+            {
+              "raw_class": 91,
+              "count": 11
+            },
+            {
+              "raw_class": 74,
+              "count": 8
+            },
+            {
+              "raw_class": 26,
+              "count": 8
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 64,
+          "count": 100,
+          "false_accept_count": 71,
+          "false_accept_rate": 0.71,
+          "accepted_unknown_score_components": {
+            "score": 0.9582513495230339,
+            "feature_rejector_score": 0.9582513495230339,
+            "proto_dist": 0.2591940290491346,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.5570019286283305,
+            "feature_norm": 28.406543194408147
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.03735432131537,
+            "feature_rejector_score": 7.03735432131537,
+            "proto_dist": 0.3024232428649376,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9707204473429714,
+            "feature_norm": 26.45810554767477
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 18
+            },
+            {
+              "raw_class": 36,
+              "count": 14
+            },
+            {
+              "raw_class": 50,
+              "count": 13
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 74,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 36,
+              "count": 24
+            },
+            {
+              "raw_class": 50,
+              "count": 16
+            },
+            {
+              "raw_class": 74,
+              "count": 8
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 4,
+          "count": 100,
+          "false_accept_count": 70,
+          "false_accept_rate": 0.7,
+          "accepted_unknown_score_components": {
+            "score": 1.891559054170336,
+            "feature_rejector_score": 1.891559054170336,
+            "proto_dist": 0.2523503107683999,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.624060768527644,
+            "feature_norm": 28.51596611567906
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.702207644780477,
+            "feature_rejector_score": 6.702207644780477,
+            "proto_dist": 0.2964830716451009,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.2271892925103507,
+            "feature_norm": 27.01013902028402
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 15
+            },
+            {
+              "raw_class": 80,
+              "count": 13
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 36,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 50,
+              "count": 19
+            },
+            {
+              "raw_class": 74,
+              "count": 18
+            },
+            {
+              "raw_class": 80,
+              "count": 11
+            },
+            {
+              "raw_class": 77,
+              "count": 5
+            },
+            {
+              "raw_class": 36,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 33,
+          "count": 100,
+          "false_accept_count": 69,
+          "false_accept_rate": 0.69,
+          "accepted_unknown_score_components": {
+            "score": 0.45135939639547595,
+            "feature_rejector_score": 0.45135939639547595,
+            "proto_dist": 0.27761454167573346,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8247412153776141,
+            "feature_norm": 29.02441500235295
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.707038356411841,
+            "feature_rejector_score": 6.707038356411841,
+            "proto_dist": 0.3542349107803837,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.5018889461794207,
+            "feature_norm": 27.01314975369361
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 96,
+              "count": 18
+            },
+            {
+              "raw_class": 59,
+              "count": 8
+            },
+            {
+              "raw_class": 52,
+              "count": 6
+            },
+            {
+              "raw_class": 47,
+              "count": 5
+            },
+            {
+              "raw_class": 68,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 96,
+              "count": 23
+            },
+            {
+              "raw_class": 59,
+              "count": 7
+            },
+            {
+              "raw_class": 68,
+              "count": 6
+            },
+            {
+              "raw_class": 12,
+              "count": 4
+            },
+            {
+              "raw_class": 81,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 63,
+          "count": 100,
+          "false_accept_count": 67,
+          "false_accept_rate": 0.67,
+          "accepted_unknown_score_components": {
+            "score": 0.8038657530030208,
+            "feature_rejector_score": 0.8038657530030208,
+            "proto_dist": 0.25722143009527404,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.5096271754200778,
+            "feature_norm": 29.06080641675351
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.242015621878884,
+            "feature_rejector_score": 7.242015621878884,
+            "proto_dist": 0.3430620757016269,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.344946518088832,
+            "feature_norm": 27.34429388335257
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 22
+            },
+            {
+              "raw_class": 65,
+              "count": 11
+            },
+            {
+              "raw_class": 77,
+              "count": 4
+            },
+            {
+              "raw_class": 80,
+              "count": 4
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 30
+            },
+            {
+              "raw_class": 50,
+              "count": 9
+            },
+            {
+              "raw_class": 80,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 3
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 93,
+          "count": 100,
+          "false_accept_count": 67,
+          "false_accept_rate": 0.67,
+          "accepted_unknown_score_components": {
+            "score": 1.0660887743110088,
+            "feature_rejector_score": 1.0660887743110088,
+            "proto_dist": 0.2936076379534024,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8479821050345009,
+            "feature_norm": 28.176586321930387
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.225864135857784,
+            "feature_rejector_score": 7.225864135857784,
+            "proto_dist": 0.3230013901537115,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.1275199254353843,
+            "feature_norm": 27.599499904748164
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 11
+            },
+            {
+              "raw_class": 32,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 96,
+              "count": 3
+            },
+            {
+              "raw_class": 67,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 12
+            },
+            {
+              "raw_class": 67,
+              "count": 8
+            },
+            {
+              "raw_class": 32,
+              "count": 7
+            },
+            {
+              "raw_class": 74,
+              "count": 6
+            },
+            {
+              "raw_class": 26,
+              "count": 6
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 55,
+          "count": 100,
+          "false_accept_count": 66,
+          "false_accept_rate": 0.66,
+          "accepted_unknown_score_components": {
+            "score": 1.8438906651554685,
+            "feature_rejector_score": 1.8438906651554685,
+            "proto_dist": 0.29063173947912274,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9374228806206675,
+            "feature_norm": 27.71842369888768
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.857907379374785,
+            "feature_rejector_score": 6.857907379374785,
+            "proto_dist": 0.323389940402087,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.1884908693678238,
+            "feature_norm": 27.136025092181036
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 15
+            },
+            {
+              "raw_class": 74,
+              "count": 8
+            },
+            {
+              "raw_class": 73,
+              "count": 5
+            },
+            {
+              "raw_class": 91,
+              "count": 3
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 17
+            },
+            {
+              "raw_class": 74,
+              "count": 9
+            },
+            {
+              "raw_class": 57,
+              "count": 5
+            },
+            {
+              "raw_class": 77,
+              "count": 4
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 48,
+          "count": 100,
+          "false_accept_count": 65,
+          "false_accept_rate": 0.65,
+          "accepted_unknown_score_components": {
+            "score": 1.7209878930678735,
+            "feature_rejector_score": 1.7209878930678735,
+            "proto_dist": 0.28209788982684797,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 0.8053364635660099,
+            "feature_norm": 33.65878806480995
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.887076037270682,
+            "feature_rejector_score": 6.887076037270682,
+            "proto_dist": 0.31885395050048826,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.0195059267537934,
+            "feature_norm": 32.922987256731304
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 41,
+              "count": 17
+            },
+            {
+              "raw_class": 89,
+              "count": 14
+            },
+            {
+              "raw_class": 7,
+              "count": 5
+            },
+            {
+              "raw_class": 45,
+              "count": 4
+            },
+            {
+              "raw_class": 46,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 41,
+              "count": 51
+            },
+            {
+              "raw_class": 89,
+              "count": 6
+            },
+            {
+              "raw_class": 45,
+              "count": 4
+            },
+            {
+              "raw_class": 99,
+              "count": 1
+            },
+            {
+              "raw_class": 85,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 29,
+          "count": 100,
+          "false_accept_count": 63,
+          "false_accept_rate": 0.63,
+          "accepted_unknown_score_components": {
+            "score": 0.3758760141947913,
+            "feature_rejector_score": 0.3758760141947913,
+            "proto_dist": 0.3430442970896524,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9698565214399308,
+            "feature_norm": 28.132944833664666
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.744249047459783,
+            "feature_rejector_score": 6.744249047459783,
+            "proto_dist": 0.39496208687086365,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.596433797398129,
+            "feature_norm": 26.24800682067871
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 6,
+              "count": 5
+            },
+            {
+              "raw_class": 96,
+              "count": 4
+            },
+            {
+              "raw_class": 80,
+              "count": 4
+            },
+            {
+              "raw_class": 74,
+              "count": 4
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 91,
+              "count": 12
+            },
+            {
+              "raw_class": 45,
+              "count": 5
+            },
+            {
+              "raw_class": 26,
+              "count": 4
+            },
+            {
+              "raw_class": 80,
+              "count": 4
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 88,
+          "count": 100,
+          "false_accept_count": 63,
+          "false_accept_rate": 0.63,
+          "accepted_unknown_score_components": {
+            "score": 1.311763068040212,
+            "feature_rejector_score": 1.311763068040212,
+            "proto_dist": 0.3261028291687133,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9293120174653946,
+            "feature_norm": 27.918588971334792
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.121059520824535,
+            "feature_rejector_score": 7.121059520824535,
+            "proto_dist": 0.3737833918751897,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.4313054423074463,
+            "feature_norm": 27.41797369879645
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 11
+            },
+            {
+              "raw_class": 6,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 20
+            },
+            {
+              "raw_class": 6,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 26,
+              "count": 7
+            },
+            {
+              "raw_class": 36,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 27,
+          "count": 100,
+          "false_accept_count": 62,
+          "false_accept_rate": 0.62,
+          "accepted_unknown_score_components": {
+            "score": 2.0522663266428056,
+            "feature_rejector_score": 2.0522663266428056,
+            "proto_dist": 0.2904491991766037,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8494625718843551,
+            "feature_norm": 28.58105677943076
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.23799383012872,
+            "feature_rejector_score": 6.23799383012872,
+            "proto_dist": 0.3255485170765927,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.2551399986994896,
+            "feature_norm": 28.392357976813067
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 67,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 91,
+              "count": 5
+            },
+            {
+              "raw_class": 77,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 91,
+              "count": 11
+            },
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 8
+            },
+            {
+              "raw_class": 99,
+              "count": 4
+            },
+            {
+              "raw_class": 73,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 21,
+          "count": 100,
+          "false_accept_count": 60,
+          "false_accept_rate": 0.6,
+          "accepted_unknown_score_components": {
+            "score": -0.36034964422384896,
+            "feature_rejector_score": -0.36034964422384896,
+            "proto_dist": 0.2879845082759857,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7329756850997606,
+            "feature_norm": 28.28051649729411
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.597758412361145,
+            "feature_rejector_score": 7.597758412361145,
+            "proto_dist": 0.3734788134694099,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.275665658712387,
+            "feature_norm": 28.548816013336182
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 98,
+              "count": 9
+            },
+            {
+              "raw_class": 46,
+              "count": 8
+            },
+            {
+              "raw_class": 35,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 6
+            },
+            {
+              "raw_class": 11,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 98,
+              "count": 14
+            },
+            {
+              "raw_class": 35,
+              "count": 11
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 11,
+              "count": 6
+            },
+            {
+              "raw_class": 14,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 87,
+          "count": 100,
+          "false_accept_count": 59,
+          "false_accept_rate": 0.59,
+          "accepted_unknown_score_components": {
+            "score": -0.5611411686670982,
+            "feature_rejector_score": -0.5611411686670982,
+            "proto_dist": 0.2904574608398696,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.6445194866697668,
+            "feature_norm": 27.618957002284162
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.131233994553728,
+            "feature_rejector_score": 8.131233994553728,
+            "proto_dist": 0.3372389863177044,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.1728262654164943,
+            "feature_norm": 26.00512839526665
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 94,
+              "count": 12
+            },
+            {
+              "raw_class": 25,
+              "count": 7
+            },
+            {
+              "raw_class": 16,
+              "count": 5
+            },
+            {
+              "raw_class": 84,
+              "count": 4
+            },
+            {
+              "raw_class": 46,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 25,
+              "count": 14
+            },
+            {
+              "raw_class": 16,
+              "count": 10
+            },
+            {
+              "raw_class": 20,
+              "count": 9
+            },
+            {
+              "raw_class": 94,
+              "count": 6
+            },
+            {
+              "raw_class": 28,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 8,
+          "count": 100,
+          "false_accept_count": 58,
+          "false_accept_rate": 0.58,
+          "accepted_unknown_score_components": {
+            "score": 1.5656952847694527,
+            "feature_rejector_score": 1.5656952847694527,
+            "proto_dist": 0.35478513713540705,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.6899762855328877,
+            "feature_norm": 30.31743187739931
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.068672588893345,
+            "feature_rejector_score": 7.068672588893345,
+            "proto_dist": 0.3972659437429337,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9135208271798634,
+            "feature_norm": 30.32507224310012
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 89,
+              "count": 8
+            },
+            {
+              "raw_class": 41,
+              "count": 7
+            },
+            {
+              "raw_class": 20,
+              "count": 5
+            },
+            {
+              "raw_class": 84,
+              "count": 4
+            },
+            {
+              "raw_class": 12,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 41,
+              "count": 17
+            },
+            {
+              "raw_class": 99,
+              "count": 7
+            },
+            {
+              "raw_class": 61,
+              "count": 5
+            },
+            {
+              "raw_class": 89,
+              "count": 5
+            },
+            {
+              "raw_class": 85,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 66,
+          "count": 100,
+          "false_accept_count": 57,
+          "false_accept_rate": 0.57,
+          "accepted_unknown_score_components": {
+            "score": 1.978621942955151,
+            "feature_rejector_score": 1.978621942955151,
+            "proto_dist": 0.3023663550092463,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9264436531485172,
+            "feature_norm": 27.695018868697318
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.165397122848866,
+            "feature_rejector_score": 7.165397122848866,
+            "proto_dist": 0.34032932409020356,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.1966416814992593,
+            "feature_norm": 27.934005648590798
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 65,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 6
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 50,
+              "count": 5
+            },
+            {
+              "raw_class": 18,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 50,
+              "count": 12
+            },
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 65,
+              "count": 7
+            },
+            {
+              "raw_class": 74,
+              "count": 7
+            },
+            {
+              "raw_class": 26,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 42,
+          "count": 100,
+          "false_accept_count": 56,
+          "false_accept_rate": 0.56,
+          "accepted_unknown_score_components": {
+            "score": 2.682657390832901,
+            "feature_rejector_score": 2.682657390832901,
+            "proto_dist": 0.3063886229481016,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.034901890371527,
+            "feature_norm": 29.706891536712646
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.250551754778082,
+            "feature_rejector_score": 7.250551754778082,
+            "proto_dist": 0.3483800684863871,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.3184513693506066,
+            "feature_norm": 27.596075318076394
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 74,
+              "count": 14
+            },
+            {
+              "raw_class": 51,
+              "count": 5
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            },
+            {
+              "raw_class": 79,
+              "count": 4
+            },
+            {
+              "raw_class": 85,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 15
+            },
+            {
+              "raw_class": 80,
+              "count": 15
+            },
+            {
+              "raw_class": 50,
+              "count": 12
+            },
+            {
+              "raw_class": 26,
+              "count": 3
+            },
+            {
+              "raw_class": 51,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 95,
+          "count": 100,
+          "false_accept_count": 54,
+          "false_accept_rate": 0.54,
+          "accepted_unknown_score_components": {
+            "score": 1.5927362497206088,
+            "feature_rejector_score": 1.5927362497206088,
+            "proto_dist": 0.2674815798247302,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.5651479953968968,
+            "feature_norm": 29.28068514223452
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.370916957440584,
+            "feature_rejector_score": 7.370916957440584,
+            "proto_dist": 0.3135290599387625,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.085157820064089,
+            "feature_norm": 28.316958220108695
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 24
+            },
+            {
+              "raw_class": 67,
+              "count": 8
+            },
+            {
+              "raw_class": 91,
+              "count": 5
+            },
+            {
+              "raw_class": 69,
+              "count": 3
+            },
+            {
+              "raw_class": 12,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 25
+            },
+            {
+              "raw_class": 67,
+              "count": 8
+            },
+            {
+              "raw_class": 76,
+              "count": 5
+            },
+            {
+              "raw_class": 91,
+              "count": 4
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 3,
+          "count": 100,
+          "false_accept_count": 53,
+          "false_accept_rate": 0.53,
+          "accepted_unknown_score_components": {
+            "score": 1.746104972542457,
+            "feature_rejector_score": 1.746104972542457,
+            "proto_dist": 0.30668399019061393,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.857058346130938,
+            "feature_norm": 28.58135478901413
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.904634719199323,
+            "feature_rejector_score": 6.904634719199323,
+            "proto_dist": 0.3354696732886294,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.106111724325951,
+            "feature_norm": 28.09810950908255
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 36,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 13
+            },
+            {
+              "raw_class": 80,
+              "count": 11
+            },
+            {
+              "raw_class": 36,
+              "count": 4
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            },
+            {
+              "raw_class": 14,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 19,
+          "count": 100,
+          "false_accept_count": 53,
+          "false_accept_rate": 0.53,
+          "accepted_unknown_score_components": {
+            "score": 1.753695839980863,
+            "feature_rejector_score": 1.753695839980863,
+            "proto_dist": 0.34206672209613725,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9919701876505367,
+            "feature_norm": 28.36904658911363
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.507324553550558,
+            "feature_rejector_score": 7.507324553550558,
+            "proto_dist": 0.3756329835729396,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.460618096463224,
+            "feature_norm": 26.874822535413376
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 5
+            },
+            {
+              "raw_class": 51,
+              "count": 5
+            },
+            {
+              "raw_class": 37,
+              "count": 5
+            },
+            {
+              "raw_class": 32,
+              "count": 4
+            },
+            {
+              "raw_class": 56,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 51,
+              "count": 9
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 85,
+              "count": 5
+            },
+            {
+              "raw_class": 77,
+              "count": 4
+            },
+            {
+              "raw_class": 41,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 58,
+          "count": 100,
+          "false_accept_count": 53,
+          "false_accept_rate": 0.53,
+          "accepted_unknown_score_components": {
+            "score": 1.9387356110338896,
+            "feature_rejector_score": 1.9387356110338896,
+            "proto_dist": 0.24686438519999665,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.1892883850982026,
+            "feature_norm": 31.68372938767919
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.1487023475322315,
+            "feature_rejector_score": 7.1487023475322315,
+            "proto_dist": 0.29599725946466976,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.6068664763836151,
+            "feature_norm": 30.968331032610955
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 89,
+              "count": 11
+            },
+            {
+              "raw_class": 85,
+              "count": 8
+            },
+            {
+              "raw_class": 81,
+              "count": 8
+            },
+            {
+              "raw_class": 41,
+              "count": 6
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 85,
+              "count": 17
+            },
+            {
+              "raw_class": 41,
+              "count": 14
+            },
+            {
+              "raw_class": 25,
+              "count": 8
+            },
+            {
+              "raw_class": 89,
+              "count": 7
+            },
+            {
+              "raw_class": 81,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 75,
+          "count": 100,
+          "false_accept_count": 53,
+          "false_accept_rate": 0.53,
+          "accepted_unknown_score_components": {
+            "score": 1.9610725911158435,
+            "feature_rejector_score": 1.9610725911158435,
+            "proto_dist": 0.31149798519206495,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.90624246029359,
+            "feature_norm": 28.48755480208487
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.039855307721077,
+            "feature_rejector_score": 7.039855307721077,
+            "proto_dist": 0.38275582105555433,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.4091926901898484,
+            "feature_norm": 27.08096954670358
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 91,
+              "count": 9
+            },
+            {
+              "raw_class": 85,
+              "count": 7
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 74,
+              "count": 4
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 16
+            },
+            {
+              "raw_class": 51,
+              "count": 5
+            },
+            {
+              "raw_class": 77,
+              "count": 3
+            },
+            {
+              "raw_class": 99,
+              "count": 3
+            },
+            {
+              "raw_class": 7,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 30,
+          "count": 100,
+          "false_accept_count": 51,
+          "false_accept_rate": 0.51,
+          "accepted_unknown_score_components": {
+            "score": 1.7660072738049077,
+            "feature_rejector_score": 1.7660072738049077,
+            "proto_dist": 0.2074740821239995,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.365926774109111,
+            "feature_norm": 29.46082717297124
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.877800445167386,
+            "feature_rejector_score": 6.877800445167386,
+            "proto_dist": 0.28673071642311254,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9858400991984777,
+            "feature_norm": 28.18036106654576
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 73,
+              "count": 27
+            },
+            {
+              "raw_class": 67,
+              "count": 8
+            },
+            {
+              "raw_class": 69,
+              "count": 5
+            },
+            {
+              "raw_class": 32,
+              "count": 3
+            },
+            {
+              "raw_class": 91,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 73,
+              "count": 31
+            },
+            {
+              "raw_class": 67,
+              "count": 8
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            },
+            {
+              "raw_class": 76,
+              "count": 3
+            },
+            {
+              "raw_class": 74,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 86,
+          "count": 100,
+          "false_accept_count": 51,
+          "false_accept_rate": 0.51,
+          "accepted_unknown_score_components": {
+            "score": -0.05612864564446842,
+            "feature_rejector_score": -0.05612864564446842,
+            "proto_dist": 0.3098633230901232,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.510376062171132,
+            "feature_norm": 29.105448666740866
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.464036017048116,
+            "feature_rejector_score": 8.464036017048116,
+            "proto_dist": 0.38796181459816137,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.821757360380523,
+            "feature_norm": 28.539206485359035
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 16,
+              "count": 8
+            },
+            {
+              "raw_class": 94,
+              "count": 7
+            },
+            {
+              "raw_class": 5,
+              "count": 4
+            },
+            {
+              "raw_class": 76,
+              "count": 4
+            },
+            {
+              "raw_class": 28,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 16,
+              "count": 18
+            },
+            {
+              "raw_class": 25,
+              "count": 9
+            },
+            {
+              "raw_class": 41,
+              "count": 6
+            },
+            {
+              "raw_class": 94,
+              "count": 4
+            },
+            {
+              "raw_class": 28,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 97,
+          "count": 100,
+          "false_accept_count": 51,
+          "false_accept_rate": 0.51,
+          "accepted_unknown_score_components": {
+            "score": 2.240122968075322,
+            "feature_rejector_score": 2.240122968075322,
+            "proto_dist": 0.27848757598914353,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9150516986846924,
+            "feature_norm": 27.247061037549784
+          },
+          "rejected_unknown_score_components": {
+            "score": 6.91263299085656,
+            "feature_rejector_score": 6.91263299085656,
+            "proto_dist": 0.3201851601503333,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.0229845217296054,
+            "feature_norm": 27.78062532386001
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 65,
+              "count": 10
+            },
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 9
+            },
+            {
+              "raw_class": 74,
+              "count": 5
+            },
+            {
+              "raw_class": 26,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 19
+            },
+            {
+              "raw_class": 50,
+              "count": 13
+            },
+            {
+              "raw_class": 65,
+              "count": 7
+            },
+            {
+              "raw_class": 36,
+              "count": 4
+            },
+            {
+              "raw_class": 74,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 15,
+          "count": 100,
+          "false_accept_count": 50,
+          "false_accept_rate": 0.5,
+          "accepted_unknown_score_components": {
+            "score": 1.062481573820114,
+            "feature_rejector_score": 1.062481573820114,
+            "proto_dist": 0.32561327576637267,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8566503228247166,
+            "feature_norm": 28.96943500518799
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.536852025985718,
+            "feature_rejector_score": 7.536852025985718,
+            "proto_dist": 0.3387825071811676,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.3407786798477175,
+            "feature_norm": 26.880532112121582
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 51,
+              "count": 4
+            },
+            {
+              "raw_class": 98,
+              "count": 3
+            },
+            {
+              "raw_class": 17,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 57,
+              "count": 6
+            },
+            {
+              "raw_class": 17,
+              "count": 5
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 50,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 72,
+          "count": 100,
+          "false_accept_count": 50,
+          "false_accept_rate": 0.5,
+          "accepted_unknown_score_components": {
+            "score": 0.849085967540741,
+            "feature_rejector_score": 0.849085967540741,
+            "proto_dist": 0.2914721894264221,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.7905602969229222,
+            "feature_norm": 29.01700309753418
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.2119948673248295,
+            "feature_rejector_score": 7.2119948673248295,
+            "proto_dist": 0.3576615190505981,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.4221338725090025,
+            "feature_norm": 27.28536754608154
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 9
+            },
+            {
+              "raw_class": 65,
+              "count": 5
+            },
+            {
+              "raw_class": 73,
+              "count": 4
+            },
+            {
+              "raw_class": 77,
+              "count": 4
+            },
+            {
+              "raw_class": 50,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 67,
+              "count": 8
+            },
+            {
+              "raw_class": 80,
+              "count": 7
+            },
+            {
+              "raw_class": 57,
+              "count": 5
+            },
+            {
+              "raw_class": 74,
+              "count": 4
+            },
+            {
+              "raw_class": 36,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 13,
+          "count": 100,
+          "false_accept_count": 49,
+          "false_accept_rate": 0.49,
+          "accepted_unknown_score_components": {
+            "score": 1.6010639107957179,
+            "feature_rejector_score": 1.6010639107957179,
+            "proto_dist": 0.22251659266802729,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.2531092537148876,
+            "feature_norm": 31.012252418362365
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.072728222491694,
+            "feature_rejector_score": 7.072728222491694,
+            "proto_dist": 0.2713753066810907,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.513037599769293,
+            "feature_norm": 29.80136059779747
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 81,
+              "count": 18
+            },
+            {
+              "raw_class": 37,
+              "count": 5
+            },
+            {
+              "raw_class": 12,
+              "count": 5
+            },
+            {
+              "raw_class": 89,
+              "count": 4
+            },
+            {
+              "raw_class": 16,
+              "count": 4
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 81,
+              "count": 20
+            },
+            {
+              "raw_class": 85,
+              "count": 8
+            },
+            {
+              "raw_class": 89,
+              "count": 5
+            },
+            {
+              "raw_class": 25,
+              "count": 5
+            },
+            {
+              "raw_class": 41,
+              "count": 4
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 43,
+          "count": 100,
+          "false_accept_count": 47,
+          "false_accept_rate": 0.47,
+          "accepted_unknown_score_components": {
+            "score": 1.5336396960501975,
+            "feature_rejector_score": 1.5336396960501975,
+            "proto_dist": 0.28262636762984256,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.762830968866957,
+            "feature_norm": 27.755634551352642
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.51419333691867,
+            "feature_rejector_score": 8.51419333691867,
+            "proto_dist": 0.34791064824698104,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.039860534218122,
+            "feature_norm": 27.05789314126069
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 10
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 36,
+              "count": 6
+            },
+            {
+              "raw_class": 65,
+              "count": 4
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 80,
+              "count": 16
+            },
+            {
+              "raw_class": 50,
+              "count": 8
+            },
+            {
+              "raw_class": 36,
+              "count": 6
+            },
+            {
+              "raw_class": 6,
+              "count": 4
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 60,
+          "count": 100,
+          "false_accept_count": 41,
+          "false_accept_rate": 0.41,
+          "accepted_unknown_score_components": {
+            "score": 1.6826557415287668,
+            "feature_rejector_score": 1.6826557415287668,
+            "proto_dist": 0.2881882699524484,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.094793070016838,
+            "feature_norm": 26.34700756538205
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.31811385235544,
+            "feature_rejector_score": 7.31811385235544,
+            "proto_dist": 0.36092704837605105,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.8567166469864924,
+            "feature_norm": 22.978013394242627
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 68,
+              "count": 10
+            },
+            {
+              "raw_class": 17,
+              "count": 7
+            },
+            {
+              "raw_class": 96,
+              "count": 5
+            },
+            {
+              "raw_class": 52,
+              "count": 3
+            },
+            {
+              "raw_class": 56,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 68,
+              "count": 8
+            },
+            {
+              "raw_class": 59,
+              "count": 8
+            },
+            {
+              "raw_class": 96,
+              "count": 7
+            },
+            {
+              "raw_class": 17,
+              "count": 5
+            },
+            {
+              "raw_class": 82,
+              "count": 3
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 90,
+          "count": 100,
+          "false_accept_count": 40,
+          "false_accept_rate": 0.4,
+          "accepted_unknown_score_components": {
+            "score": 2.0567143261432648,
+            "feature_rejector_score": 2.0567143261432648,
+            "proto_dist": 0.23556841611862184,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.3696094579063356,
+            "feature_norm": 30.389230728149414
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.100795499483744,
+            "feature_rejector_score": 7.100795499483744,
+            "proto_dist": 0.30014063318570455,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9361310039957365,
+            "feature_norm": 27.972919972737632
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 81,
+              "count": 18
+            },
+            {
+              "raw_class": 89,
+              "count": 5
+            },
+            {
+              "raw_class": 37,
+              "count": 5
+            },
+            {
+              "raw_class": 85,
+              "count": 3
+            },
+            {
+              "raw_class": 12,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 81,
+              "count": 19
+            },
+            {
+              "raw_class": 85,
+              "count": 6
+            },
+            {
+              "raw_class": 17,
+              "count": 3
+            },
+            {
+              "raw_class": 89,
+              "count": 2
+            },
+            {
+              "raw_class": 91,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 31,
+          "count": 100,
+          "false_accept_count": 39,
+          "false_accept_rate": 0.39,
+          "accepted_unknown_score_components": {
+            "score": 1.7332451893733098,
+            "feature_rejector_score": 1.7332451893733098,
+            "proto_dist": 0.3131474485764137,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9672915790325556,
+            "feature_norm": 27.80074364099747
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.992782921087547,
+            "feature_rejector_score": 7.992782921087547,
+            "proto_dist": 0.37447589635849,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.3033773390973202,
+            "feature_norm": 28.279174335667346
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 80,
+              "count": 8
+            },
+            {
+              "raw_class": 74,
+              "count": 3
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            },
+            {
+              "raw_class": 89,
+              "count": 2
+            },
+            {
+              "raw_class": 65,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 74,
+              "count": 8
+            },
+            {
+              "raw_class": 80,
+              "count": 6
+            },
+            {
+              "raw_class": 51,
+              "count": 3
+            },
+            {
+              "raw_class": 85,
+              "count": 2
+            },
+            {
+              "raw_class": 57,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 23,
+          "count": 100,
+          "false_accept_count": 38,
+          "false_accept_rate": 0.38,
+          "accepted_unknown_score_components": {
+            "score": 2.175409866006751,
+            "feature_rejector_score": 2.175409866006751,
+            "proto_dist": 0.3108680358058528,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.3571365663879797,
+            "feature_norm": 23.929239925585296
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.179070395808066,
+            "feature_rejector_score": 7.179070395808066,
+            "proto_dist": 0.3468248517282547,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.5946425362940757,
+            "feature_norm": 23.59566302453318
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 76,
+              "count": 7
+            },
+            {
+              "raw_class": 73,
+              "count": 5
+            },
+            {
+              "raw_class": 67,
+              "count": 5
+            },
+            {
+              "raw_class": 99,
+              "count": 3
+            },
+            {
+              "raw_class": 69,
+              "count": 3
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 67,
+              "count": 9
+            },
+            {
+              "raw_class": 76,
+              "count": 5
+            },
+            {
+              "raw_class": 69,
+              "count": 4
+            },
+            {
+              "raw_class": 59,
+              "count": 3
+            },
+            {
+              "raw_class": 96,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 39,
+          "count": 100,
+          "false_accept_count": 34,
+          "false_accept_rate": 0.34,
+          "accepted_unknown_score_components": {
+            "score": 0.7788602218908423,
+            "feature_rejector_score": 0.7788602218908423,
+            "proto_dist": 0.3364960305831012,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.645698777454741,
+            "feature_norm": 30.07721777523265
+          },
+          "rejected_unknown_score_components": {
+            "score": 9.611649188128384,
+            "feature_rejector_score": 9.611649188128384,
+            "proto_dist": 0.4374967127135306,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.8377329752300724,
+            "feature_norm": 31.568189563173235
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 25,
+              "count": 7
+            },
+            {
+              "raw_class": 5,
+              "count": 3
+            },
+            {
+              "raw_class": 84,
+              "count": 2
+            },
+            {
+              "raw_class": 83,
+              "count": 2
+            },
+            {
+              "raw_class": 14,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 25,
+              "count": 12
+            },
+            {
+              "raw_class": 57,
+              "count": 5
+            },
+            {
+              "raw_class": 16,
+              "count": 3
+            },
+            {
+              "raw_class": 76,
+              "count": 2
+            },
+            {
+              "raw_class": 2,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 71,
+          "count": 100,
+          "false_accept_count": 34,
+          "false_accept_rate": 0.34,
+          "accepted_unknown_score_components": {
+            "score": 2.274826337309445,
+            "feature_rejector_score": 2.274826337309445,
+            "proto_dist": 0.29135024372269125,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.0991950613610886,
+            "feature_norm": 26.511265642502728
+          },
+          "rejected_unknown_score_components": {
+            "score": 8.215531956065785,
+            "feature_rejector_score": 8.215531956065785,
+            "proto_dist": 0.34327969858140656,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 2.6656365954514705,
+            "feature_norm": 23.636935262969047
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 69,
+              "count": 9
+            },
+            {
+              "raw_class": 68,
+              "count": 8
+            },
+            {
+              "raw_class": 73,
+              "count": 4
+            },
+            {
+              "raw_class": 76,
+              "count": 2
+            },
+            {
+              "raw_class": 67,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 69,
+              "count": 9
+            },
+            {
+              "raw_class": 67,
+              "count": 5
+            },
+            {
+              "raw_class": 59,
+              "count": 4
+            },
+            {
+              "raw_class": 68,
+              "count": 3
+            },
+            {
+              "raw_class": 56,
+              "count": 2
+            }
+          ]
+        },
+        {
+          "raw_unknown_class": 49,
+          "count": 100,
+          "false_accept_count": 31,
+          "false_accept_rate": 0.31,
+          "accepted_unknown_score_components": {
+            "score": 2.0632602630123014,
+            "feature_rejector_score": 2.0632602630123014,
+            "proto_dist": 0.24598578099281557,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.2317932285368443,
+            "feature_norm": 31.37966445184523
+          },
+          "rejected_unknown_score_components": {
+            "score": 7.523220235022945,
+            "feature_rejector_score": 7.523220235022945,
+            "proto_dist": 0.3130688736404198,
+            "knn_distance": 0.0,
+            "knn_predicted_class_distance": 0.0,
+            "knn_predicted_class_relative_distance": 0.0,
+            "knn_min_class_distance": 0.0,
+            "knn_min_class_relative_distance": 0.0,
+            "knn_predicted_class_support": 0.0,
+            "entropy": 1.9926585961079253,
+            "feature_norm": 29.861651931983836
+          },
+          "top_nearest_known_train_classes": [
+            {
+              "raw_class": 76,
+              "count": 10
+            },
+            {
+              "raw_class": 68,
+              "count": 4
+            },
+            {
+              "raw_class": 59,
+              "count": 3
+            },
+            {
+              "raw_class": 69,
+              "count": 2
+            },
+            {
+              "raw_class": 17,
+              "count": 2
+            }
+          ],
+          "top_predicted_known_classes": [
+            {
+              "raw_class": 76,
+              "count": 15
+            },
+            {
+              "raw_class": 17,
+              "count": 8
+            },
+            {
+              "raw_class": 67,
+              "count": 2
+            },
+            {
+              "raw_class": 68,
+              "count": 2
+            },
+            {
+              "raw_class": 59,
+              "count": 1
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

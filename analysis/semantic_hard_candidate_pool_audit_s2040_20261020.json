@@ -1,0 +1,5661 @@
+{
+  "protocol": {
+    "seed": 2040,
+    "pool_size": 5400,
+    "known_fraction": 0.2,
+    "selector_ratio": 0.25,
+    "selector_mode_from_config": "entropy_uncertainty",
+    "support_k": 5,
+    "support_quantile": 0.95,
+    "labels_used_only_for_audit": true,
+    "validation_known_labels_used_only_for_calibration": true,
+    "selector_count": 10
+  },
+  "validation_classwise_calibration": {
+    "target_known_coverage": 0.95,
+    "global_fallback_threshold": 3.539121150970459,
+    "per_predicted_class_thresholds": {
+      "0": 3.324918508529663,
+      "1": 3.6543591022491455,
+      "2": 3.7618000507354736,
+      "3": 2.979273557662964,
+      "4": 3.184040069580078,
+      "5": 3.8008010387420654,
+      "6": 3.3757922649383545,
+      "7": 3.372164249420166,
+      "8": 2.621882200241089,
+      "9": 3.576338291168213,
+      "10": 3.598738193511963,
+      "11": 2.8587398529052734,
+      "12": 2.2848737239837646,
+      "13": 3.7316088676452637,
+      "14": 3.00984525680542,
+      "15": 3.728868246078491,
+      "16": 3.961757183074951,
+      "17": 3.729928493499756,
+      "18": 3.1854968070983887,
+      "19": 3.627547264099121,
+      "20": 3.7260754108428955,
+      "21": 3.539121150970459,
+      "22": 3.552325487136841,
+      "23": 3.6801836490631104,
+      "24": 3.8185908794403076,
+      "25": 3.343735933303833,
+      "26": 3.7753231525421143,
+      "27": 2.4808709621429443,
+      "28": 3.201643466949463,
+      "29": 2.13901948928833,
+      "30": 2.172964572906494,
+      "31": 3.2045888900756836,
+      "32": 2.6433749198913574,
+      "33": 2.2168307304382324,
+      "34": 2.1271612644195557,
+      "35": 3.7780158519744873,
+      "36": 3.9110870361328125,
+      "37": 3.5284416675567627,
+      "38": 3.358935594558716,
+      "39": 2.144129753112793,
+      "40": 3.4107213020324707,
+      "41": 2.724522352218628,
+      "42": 2.868032217025757,
+      "43": 3.8363752365112305,
+      "44": 3.1203293800354004,
+      "45": 3.8603920936584473,
+      "46": 2.597529649734497,
+      "47": 3.3272252082824707,
+      "48": 2.958448648452759,
+      "49": 3.3890843391418457,
+      "50": 3.6224069595336914,
+      "51": 3.191296100616455,
+      "52": 3.8570175170898438,
+      "53": 3.787242889404297,
+      "54": 2.7793405055999756,
+      "55": 3.8790645599365234,
+      "56": 2.545950412750244,
+      "57": 3.3403449058532715,
+      "58": 3.375896453857422,
+      "59": 3.142488479614258
+    },
+    "fallback_classes": [
+      21
+    ],
+    "validation_sample_count": 2700,
+    "validation_classwise_acceptance": {
+      "0": 0.9473684210526315,
+      "1": 0.9433962264150944,
+      "2": 0.9259259259259259,
+      "3": 0.9387755102040817,
+      "4": 0.9285714285714286,
+      "5": 0.9375,
+      "6": 0.95,
+      "7": 0.9333333333333333,
+      "8": 0.9130434782608695,
+      "9": 0.9487179487179487,
+      "10": 0.94,
+      "11": 0.9473684210526315,
+      "12": 0.94,
+      "13": 0.9473684210526315,
+      "14": 0.9259259259259259,
+      "15": 0.9433962264150944,
+      "16": 0.9428571428571428,
+      "17": 0.9459459459459459,
+      "18": 0.9318181818181818,
+      "19": 0.9285714285714286,
+      "20": 0.9333333333333333,
+      "21": 1.0,
+      "22": 0.9473684210526315,
+      "23": 0.9375,
+      "24": 0.9482758620689655,
+      "25": 0.92,
+      "26": 0.9285714285714286,
+      "27": 0.9166666666666666,
+      "28": 0.9387755102040817,
+      "29": 0.9302325581395349,
+      "30": 0.9464285714285714,
+      "31": 0.9473684210526315,
+      "32": 0.9482758620689655,
+      "33": 0.9473684210526315,
+      "34": 0.9428571428571428,
+      "35": 0.9166666666666666,
+      "36": 0.9375,
+      "37": 0.9347826086956522,
+      "38": 0.9482758620689655,
+      "39": 0.9464285714285714,
+      "40": 0.9393939393939394,
+      "41": 0.9361702127659575,
+      "42": 0.9384615384615385,
+      "43": 0.9482758620689655,
+      "44": 0.9393939393939394,
+      "45": 0.9333333333333333,
+      "46": 0.9454545454545454,
+      "47": 0.9375,
+      "48": 0.9375,
+      "49": 0.9512195121951219,
+      "50": 0.9411764705882353,
+      "51": 0.9411764705882353,
+      "52": 0.9508196721311475,
+      "53": 0.9230769230769231,
+      "54": 0.9466666666666667,
+      "55": 0.9393939393939394,
+      "56": 0.9459459459459459,
+      "57": 0.9512195121951219,
+      "58": 0.9318181818181818,
+      "59": 0.9390243902439024
+    }
+  },
+  "validation_classwise_percentile_calibration": {
+    "target_selected_ratio": 0.25,
+    "selected_count": 1350,
+    "predicted_classes_with_global_fallback": [
+      21
+    ],
+    "known_validation_count_by_predicted_class": {
+      "0": 38,
+      "1": 53,
+      "2": 27,
+      "3": 49,
+      "4": 28,
+      "5": 32,
+      "6": 60,
+      "7": 45,
+      "8": 23,
+      "9": 39,
+      "10": 50,
+      "11": 57,
+      "12": 50,
+      "13": 57,
+      "14": 27,
+      "15": 53,
+      "16": 35,
+      "17": 74,
+      "18": 44,
+      "19": 42,
+      "20": 45,
+      "21": 5,
+      "22": 38,
+      "23": 64,
+      "24": 58,
+      "25": 25,
+      "26": 28,
+      "27": 24,
+      "28": 49,
+      "29": 43,
+      "30": 56,
+      "31": 76,
+      "32": 58,
+      "33": 38,
+      "34": 35,
+      "35": 24,
+      "36": 32,
+      "37": 46,
+      "38": 58,
+      "39": 56,
+      "40": 66,
+      "41": 47,
+      "42": 65,
+      "43": 58,
+      "44": 33,
+      "45": 30,
+      "46": 55,
+      "47": 48,
+      "48": 32,
+      "49": 41,
+      "50": 51,
+      "51": 34,
+      "52": 61,
+      "53": 26,
+      "54": 75,
+      "55": 33,
+      "56": 37,
+      "57": 41,
+      "58": 44,
+      "59": 82
+    },
+    "validation_empirical_percentile_range_by_predicted_class": {
+      "0": {
+        "min": 0.02631578947368421,
+        "max": 1.0
+      },
+      "1": {
+        "min": 0.018867924528301886,
+        "max": 1.0
+      },
+      "2": {
+        "min": 0.037037037037037035,
+        "max": 1.0
+      },
+      "3": {
+        "min": 0.02040816326530612,
+        "max": 1.0
+      },
+      "4": {
+        "min": 0.03571428571428571,
+        "max": 1.0
+      },
+      "5": {
+        "min": 0.03125,
+        "max": 1.0
+      },
+      "6": {
+        "min": 0.016666666666666666,
+        "max": 1.0
+      },
+      "7": {
+        "min": 0.022222222222222223,
+        "max": 1.0
+      },
+      "8": {
+        "min": 0.043478260869565216,
+        "max": 1.0
+      },
+      "9": {
+        "min": 0.02564102564102564,
+        "max": 1.0
+      },
+      "10": {
+        "min": 0.02,
+        "max": 1.0
+      },
+      "11": {
+        "min": 0.017543859649122806,
+        "max": 1.0
+      },
+      "12": {
+        "min": 0.02,
+        "max": 1.0
+      },
+      "13": {
+        "min": 0.017543859649122806,
+        "max": 1.0
+      },
+      "14": {
+        "min": 0.037037037037037035,
+        "max": 1.0
+      },
+      "15": {
+        "min": 0.018867924528301886,
+        "max": 1.0
+      },
+      "16": {
+        "min": 0.02857142857142857,
+        "max": 1.0
+      },
+      "17": {
+        "min": 0.013513513513513514,
+        "max": 1.0
+      },
+      "18": {
+        "min": 0.022727272727272728,
+        "max": 1.0
+      },
+      "19": {
+        "min": 0.023809523809523808,
+        "max": 1.0
+      },
+      "20": {
+        "min": 0.022222222222222223,
+        "max": 1.0
+      },
+      "21": {
+        "min": 0.00037037037037037035,
+        "max": 1.0
+      },
+      "22": {
+        "min": 0.02631578947368421,
+        "max": 1.0
+      },
+      "23": {
+        "min": 0.015625,
+        "max": 1.0
+      },
+      "24": {
+        "min": 0.017241379310344827,
+        "max": 1.0
+      },
+      "25": {
+        "min": 0.04,
+        "max": 1.0
+      },
+      "26": {
+        "min": 0.03571428571428571,
+        "max": 1.0
+      },
+      "27": {
+        "min": 0.041666666666666664,
+        "max": 1.0
+      },
+      "28": {
+        "min": 0.02040816326530612,
+        "max": 1.0
+      },
+      "29": {
+        "min": 0.023255813953488372,
+        "max": 1.0
+      },
+      "30": {
+        "min": 0.017857142857142856,
+        "max": 1.0
+      },
+      "31": {
+        "min": 0.013157894736842105,
+        "max": 1.0
+      },
+      "32": {
+        "min": 0.017241379310344827,
+        "max": 1.0
+      },
+      "33": {
+        "min": 0.02631578947368421,
+        "max": 1.0
+      },
+      "34": {
+        "min": 0.02857142857142857,
+        "max": 1.0
+      },
+      "35": {
+        "min": 0.041666666666666664,
+        "max": 1.0
+      },
+      "36": {
+        "min": 0.03125,
+        "max": 1.0
+      },
+      "37": {
+        "min": 0.021739130434782608,
+        "max": 1.0
+      },
+      "38": {
+        "min": 0.017241379310344827,
+        "max": 1.0
+      },
+      "39": {
+        "min": 0.017857142857142856,
+        "max": 1.0
+      },
+      "40": {
+        "min": 0.015151515151515152,
+        "max": 1.0
+      },
+      "41": {
+        "min": 0.02127659574468085,
+        "max": 1.0
+      },
+      "42": {
+        "min": 0.015384615384615385,
+        "max": 1.0
+      },
+      "43": {
+        "min": 0.017241379310344827,
+        "max": 1.0
+      },
+      "44": {
+        "min": 0.030303030303030304,
+        "max": 1.0
+      },
+      "45": {
+        "min": 0.03333333333333333,
+        "max": 1.0
+      },
+      "46": {
+        "min": 0.01818181818181818,
+        "max": 1.0
+      },
+      "47": {
+        "min": 0.020833333333333332,
+        "max": 1.0
+      },
+      "48": {
+        "min": 0.03125,
+        "max": 1.0
+      },
+      "49": {
+        "min": 0.024390243902439025,
+        "max": 1.0
+      },
+      "50": {
+        "min": 0.0196078431372549,
+        "max": 1.0
+      },
+      "51": {
+        "min": 0.029411764705882353,
+        "max": 1.0
+      },
+      "52": {
+        "min": 0.01639344262295082,
+        "max": 1.0
+      },
+      "53": {
+        "min": 0.038461538461538464,
+        "max": 1.0
+      },
+      "54": {
+        "min": 0.013333333333333334,
+        "max": 1.0
+      },
+      "55": {
+        "min": 0.030303030303030304,
+        "max": 1.0
+      },
+      "56": {
+        "min": 0.02702702702702703,
+        "max": 1.0
+      },
+      "57": {
+        "min": 0.024390243902439025,
+        "max": 1.0
+      },
+      "58": {
+        "min": 0.022727272727272728,
+        "max": 1.0
+      },
+      "59": {
+        "min": 0.012195121951219513,
+        "max": 1.0
+      }
+    }
+  },
+  "candidate_audit": {
+    "shared_entropy_uncertainty": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.06222222222222222,
+      "unknown_purity": 0.9377777777777778,
+      "unknown_recall": 0.29305555555555557
+    },
+    "shared_consensus": {
+      "selected": 1056,
+      "selected_ratio": 0.19555555555555557,
+      "known_contamination": 0.06818181818181818,
+      "unknown_purity": 0.9318181818181818,
+      "unknown_recall": 0.22777777777777777
+    },
+    "shared_prototype_distance": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.10296296296296296,
+      "unknown_purity": 0.8970370370370371,
+      "unknown_recall": 0.28032407407407406
+    },
+    "shared_distance_consensus": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.06074074074074074,
+      "unknown_purity": 0.9392592592592592,
+      "unknown_recall": 0.2935185185185185
+    },
+    "class_balanced_entropy_uncertainty": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.12074074074074075,
+      "unknown_purity": 0.8792592592592593,
+      "unknown_recall": 0.2747685185185185
+    },
+    "prototype_boundary": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.07407407407407407,
+      "unknown_purity": 0.9259259259259259,
+      "unknown_recall": 0.28935185185185186
+    },
+    "support_boundary": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.07481481481481482,
+      "unknown_purity": 0.9251851851851852,
+      "unknown_recall": 0.28912037037037036
+    },
+    "support_distance": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.07111111111111111,
+      "unknown_purity": 0.9288888888888889,
+      "unknown_recall": 0.2902777777777778
+    },
+    "validation_predicted_class_q95": {
+      "selected": 1049,
+      "selected_ratio": 0.19425925925925927,
+      "known_contamination": 0.0667302192564347,
+      "unknown_purity": 0.9332697807435653,
+      "unknown_recall": 0.22662037037037036
+    },
+    "validation_predicted_class_percentile_top25": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.06444444444444444,
+      "unknown_purity": 0.9355555555555556,
+      "unknown_recall": 0.2923611111111111
+    }
+  },
+  "classwise_candidate_audit": {
+    "shared_entropy_uncertainty": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 4,
+          "total": 106,
+          "recall": 0.03773584905660377
+        },
+        "3": {
+          "selected": 39,
+          "total": 101,
+          "recall": 0.38613861386138615
+        },
+        "8": {
+          "selected": 61,
+          "total": 113,
+          "recall": 0.5398230088495575
+        },
+        "11": {
+          "selected": 17,
+          "total": 99,
+          "recall": 0.1717171717171717
+        },
+        "12": {
+          "selected": 21,
+          "total": 91,
+          "recall": 0.23076923076923078
+        },
+        "14": {
+          "selected": 41,
+          "total": 123,
+          "recall": 0.3333333333333333
+        },
+        "18": {
+          "selected": 54,
+          "total": 120,
+          "recall": 0.45
+        },
+        "19": {
+          "selected": 41,
+          "total": 94,
+          "recall": 0.43617021276595747
+        },
+        "23": {
+          "selected": 16,
+          "total": 101,
+          "recall": 0.15841584158415842
+        },
+        "25": {
+          "selected": 42,
+          "total": 97,
+          "recall": 0.4329896907216495
+        },
+        "26": {
+          "selected": 34,
+          "total": 112,
+          "recall": 0.30357142857142855
+        },
+        "28": {
+          "selected": 5,
+          "total": 110,
+          "recall": 0.045454545454545456
+        },
+        "31": {
+          "selected": 26,
+          "total": 108,
+          "recall": 0.24074074074074073
+        },
+        "32": {
+          "selected": 43,
+          "total": 121,
+          "recall": 0.35537190082644626
+        },
+        "37": {
+          "selected": 14,
+          "total": 118,
+          "recall": 0.11864406779661017
+        },
+        "39": {
+          "selected": 60,
+          "total": 113,
+          "recall": 0.5309734513274337
+        },
+        "41": {
+          "selected": 34,
+          "total": 103,
+          "recall": 0.3300970873786408
+        },
+        "43": {
+          "selected": 33,
+          "total": 114,
+          "recall": 0.2894736842105263
+        },
+        "44": {
+          "selected": 42,
+          "total": 97,
+          "recall": 0.4329896907216495
+        },
+        "46": {
+          "selected": 14,
+          "total": 104,
+          "recall": 0.1346153846153846
+        },
+        "48": {
+          "selected": 24,
+          "total": 105,
+          "recall": 0.22857142857142856
+        },
+        "49": {
+          "selected": 10,
+          "total": 110,
+          "recall": 0.09090909090909091
+        },
+        "50": {
+          "selected": 48,
+          "total": 104,
+          "recall": 0.46153846153846156
+        },
+        "53": {
+          "selected": 4,
+          "total": 101,
+          "recall": 0.039603960396039604
+        },
+        "54": {
+          "selected": 11,
+          "total": 110,
+          "recall": 0.1
+        },
+        "55": {
+          "selected": 29,
+          "total": 107,
+          "recall": 0.27102803738317754
+        },
+        "59": {
+          "selected": 16,
+          "total": 104,
+          "recall": 0.15384615384615385
+        },
+        "61": {
+          "selected": 13,
+          "total": 114,
+          "recall": 0.11403508771929824
+        },
+        "64": {
+          "selected": 60,
+          "total": 116,
+          "recall": 0.5172413793103449
+        },
+        "70": {
+          "selected": 10,
+          "total": 103,
+          "recall": 0.0970873786407767
+        },
+        "72": {
+          "selected": 38,
+          "total": 100,
+          "recall": 0.38
+        },
+        "73": {
+          "selected": 10,
+          "total": 124,
+          "recall": 0.08064516129032258
+        },
+        "74": {
+          "selected": 54,
+          "total": 101,
+          "recall": 0.5346534653465347
+        },
+        "75": {
+          "selected": 60,
+          "total": 113,
+          "recall": 0.5309734513274337
+        },
+        "78": {
+          "selected": 79,
+          "total": 137,
+          "recall": 0.5766423357664233
+        },
+        "84": {
+          "selected": 34,
+          "total": 97,
+          "recall": 0.35051546391752575
+        },
+        "85": {
+          "selected": 33,
+          "total": 108,
+          "recall": 0.3055555555555556
+        },
+        "86": {
+          "selected": 35,
+          "total": 104,
+          "recall": 0.33653846153846156
+        },
+        "96": {
+          "selected": 11,
+          "total": 113,
+          "recall": 0.09734513274336283
+        },
+        "99": {
+          "selected": 46,
+          "total": 104,
+          "recall": 0.4423076923076923
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 1,
+          "total": 24,
+          "selection_rate": 0.041666666666666664
+        },
+        "2": {
+          "selected": 1,
+          "total": 23,
+          "selection_rate": 0.043478260869565216
+        },
+        "4": {
+          "selected": 7,
+          "total": 15,
+          "selection_rate": 0.4666666666666667
+        },
+        "5": {
+          "selected": 4,
+          "total": 17,
+          "selection_rate": 0.23529411764705882
+        },
+        "6": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "7": {
+          "selected": 4,
+          "total": 16,
+          "selection_rate": 0.25
+        },
+        "9": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "10": {
+          "selected": 2,
+          "total": 17,
+          "selection_rate": 0.11764705882352941
+        },
+        "13": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "15": {
+          "selected": 2,
+          "total": 19,
+          "selection_rate": 0.10526315789473684
+        },
+        "16": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "17": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "20": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "21": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "22": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "24": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "27": {
+          "selected": 5,
+          "total": 18,
+          "selection_rate": 0.2777777777777778
+        },
+        "29": {
+          "selected": 5,
+          "total": 18,
+          "selection_rate": 0.2777777777777778
+        },
+        "30": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "33": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "34": {
+          "selected": 3,
+          "total": 19,
+          "selection_rate": 0.15789473684210525
+        },
+        "35": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "36": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "38": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "40": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "42": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "45": {
+          "selected": 6,
+          "total": 19,
+          "selection_rate": 0.3157894736842105
+        },
+        "47": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "51": {
+          "selected": 0,
+          "total": 10,
+          "selection_rate": 0.0
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "57": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "58": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "60": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "62": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "63": {
+          "selected": 3,
+          "total": 11,
+          "selection_rate": 0.2727272727272727
+        },
+        "65": {
+          "selected": 5,
+          "total": 16,
+          "selection_rate": 0.3125
+        },
+        "66": {
+          "selected": 2,
+          "total": 27,
+          "selection_rate": 0.07407407407407407
+        },
+        "67": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "71": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "76": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "77": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "79": {
+          "selected": 3,
+          "total": 14,
+          "selection_rate": 0.21428571428571427
+        },
+        "80": {
+          "selected": 6,
+          "total": 21,
+          "selection_rate": 0.2857142857142857
+        },
+        "81": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "82": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "83": {
+          "selected": 2,
+          "total": 23,
+          "selection_rate": 0.08695652173913043
+        },
+        "87": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "88": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "89": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "90": {
+          "selected": 1,
+          "total": 20,
+          "selection_rate": 0.05
+        },
+        "91": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "92": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "93": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "94": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "95": {
+          "selected": 1,
+          "total": 27,
+          "selection_rate": 0.037037037037037035
+        },
+        "97": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "98": {
+          "selected": 1,
+          "total": 26,
+          "selection_rate": 0.038461538461538464
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.03773584905660377,
+        "median": 0.3045634920634921,
+        "max": 0.5766423357664233,
+        "zero_recall_classes": 0
+      }
+    },
+    "shared_consensus": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 1,
+          "total": 106,
+          "recall": 0.009433962264150943
+        },
+        "3": {
+          "selected": 31,
+          "total": 101,
+          "recall": 0.3069306930693069
+        },
+        "8": {
+          "selected": 46,
+          "total": 113,
+          "recall": 0.40707964601769914
+        },
+        "11": {
+          "selected": 15,
+          "total": 99,
+          "recall": 0.15151515151515152
+        },
+        "12": {
+          "selected": 11,
+          "total": 91,
+          "recall": 0.12087912087912088
+        },
+        "14": {
+          "selected": 30,
+          "total": 123,
+          "recall": 0.24390243902439024
+        },
+        "18": {
+          "selected": 44,
+          "total": 120,
+          "recall": 0.36666666666666664
+        },
+        "19": {
+          "selected": 31,
+          "total": 94,
+          "recall": 0.32978723404255317
+        },
+        "23": {
+          "selected": 9,
+          "total": 101,
+          "recall": 0.0891089108910891
+        },
+        "25": {
+          "selected": 35,
+          "total": 97,
+          "recall": 0.36082474226804123
+        },
+        "26": {
+          "selected": 26,
+          "total": 112,
+          "recall": 0.23214285714285715
+        },
+        "28": {
+          "selected": 2,
+          "total": 110,
+          "recall": 0.01818181818181818
+        },
+        "31": {
+          "selected": 22,
+          "total": 108,
+          "recall": 0.2037037037037037
+        },
+        "32": {
+          "selected": 36,
+          "total": 121,
+          "recall": 0.2975206611570248
+        },
+        "37": {
+          "selected": 12,
+          "total": 118,
+          "recall": 0.1016949152542373
+        },
+        "39": {
+          "selected": 42,
+          "total": 113,
+          "recall": 0.37168141592920356
+        },
+        "41": {
+          "selected": 24,
+          "total": 103,
+          "recall": 0.23300970873786409
+        },
+        "43": {
+          "selected": 29,
+          "total": 114,
+          "recall": 0.2543859649122807
+        },
+        "44": {
+          "selected": 34,
+          "total": 97,
+          "recall": 0.35051546391752575
+        },
+        "46": {
+          "selected": 11,
+          "total": 104,
+          "recall": 0.10576923076923077
+        },
+        "48": {
+          "selected": 17,
+          "total": 105,
+          "recall": 0.1619047619047619
+        },
+        "49": {
+          "selected": 8,
+          "total": 110,
+          "recall": 0.07272727272727272
+        },
+        "50": {
+          "selected": 40,
+          "total": 104,
+          "recall": 0.38461538461538464
+        },
+        "53": {
+          "selected": 3,
+          "total": 101,
+          "recall": 0.0297029702970297
+        },
+        "54": {
+          "selected": 10,
+          "total": 110,
+          "recall": 0.09090909090909091
+        },
+        "55": {
+          "selected": 23,
+          "total": 107,
+          "recall": 0.21495327102803738
+        },
+        "59": {
+          "selected": 13,
+          "total": 104,
+          "recall": 0.125
+        },
+        "61": {
+          "selected": 9,
+          "total": 114,
+          "recall": 0.07894736842105263
+        },
+        "64": {
+          "selected": 45,
+          "total": 116,
+          "recall": 0.3879310344827586
+        },
+        "70": {
+          "selected": 8,
+          "total": 103,
+          "recall": 0.07766990291262135
+        },
+        "72": {
+          "selected": 30,
+          "total": 100,
+          "recall": 0.3
+        },
+        "73": {
+          "selected": 8,
+          "total": 124,
+          "recall": 0.06451612903225806
+        },
+        "74": {
+          "selected": 46,
+          "total": 101,
+          "recall": 0.45544554455445546
+        },
+        "75": {
+          "selected": 50,
+          "total": 113,
+          "recall": 0.4424778761061947
+        },
+        "78": {
+          "selected": 60,
+          "total": 137,
+          "recall": 0.43795620437956206
+        },
+        "84": {
+          "selected": 28,
+          "total": 97,
+          "recall": 0.28865979381443296
+        },
+        "85": {
+          "selected": 28,
+          "total": 108,
+          "recall": 0.25925925925925924
+        },
+        "86": {
+          "selected": 26,
+          "total": 104,
+          "recall": 0.25
+        },
+        "96": {
+          "selected": 7,
+          "total": 113,
+          "recall": 0.061946902654867256
+        },
+        "99": {
+          "selected": 34,
+          "total": 104,
+          "recall": 0.3269230769230769
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 0,
+          "total": 24,
+          "selection_rate": 0.0
+        },
+        "2": {
+          "selected": 1,
+          "total": 23,
+          "selection_rate": 0.043478260869565216
+        },
+        "4": {
+          "selected": 4,
+          "total": 15,
+          "selection_rate": 0.26666666666666666
+        },
+        "5": {
+          "selected": 3,
+          "total": 17,
+          "selection_rate": 0.17647058823529413
+        },
+        "6": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "7": {
+          "selected": 4,
+          "total": 16,
+          "selection_rate": 0.25
+        },
+        "9": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "10": {
+          "selected": 2,
+          "total": 17,
+          "selection_rate": 0.11764705882352941
+        },
+        "13": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "15": {
+          "selected": 2,
+          "total": 19,
+          "selection_rate": 0.10526315789473684
+        },
+        "16": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "17": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "20": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "21": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "22": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "24": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "27": {
+          "selected": 3,
+          "total": 18,
+          "selection_rate": 0.16666666666666666
+        },
+        "29": {
+          "selected": 4,
+          "total": 18,
+          "selection_rate": 0.2222222222222222
+        },
+        "30": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "33": {
+          "selected": 2,
+          "total": 14,
+          "selection_rate": 0.14285714285714285
+        },
+        "34": {
+          "selected": 2,
+          "total": 19,
+          "selection_rate": 0.10526315789473684
+        },
+        "35": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "36": {
+          "selected": 2,
+          "total": 19,
+          "selection_rate": 0.10526315789473684
+        },
+        "38": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "40": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "42": {
+          "selected": 3,
+          "total": 15,
+          "selection_rate": 0.2
+        },
+        "45": {
+          "selected": 6,
+          "total": 19,
+          "selection_rate": 0.3157894736842105
+        },
+        "47": {
+          "selected": 1,
+          "total": 22,
+          "selection_rate": 0.045454545454545456
+        },
+        "51": {
+          "selected": 0,
+          "total": 10,
+          "selection_rate": 0.0
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "57": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "58": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "60": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "62": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "63": {
+          "selected": 5,
+          "total": 11,
+          "selection_rate": 0.45454545454545453
+        },
+        "65": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "66": {
+          "selected": 3,
+          "total": 27,
+          "selection_rate": 0.1111111111111111
+        },
+        "67": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "71": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "76": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "77": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "79": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "80": {
+          "selected": 6,
+          "total": 21,
+          "selection_rate": 0.2857142857142857
+        },
+        "81": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "82": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "83": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "87": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "88": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "89": {
+          "selected": 1,
+          "total": 24,
+          "selection_rate": 0.041666666666666664
+        },
+        "90": {
+          "selected": 1,
+          "total": 20,
+          "selection_rate": 0.05
+        },
+        "91": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "92": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "93": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "94": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "95": {
+          "selected": 1,
+          "total": 27,
+          "selection_rate": 0.037037037037037035
+        },
+        "97": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "98": {
+          "selected": 1,
+          "total": 26,
+          "selection_rate": 0.038461538461538464
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.009433962264150943,
+        "median": 0.23845607388112716,
+        "max": 0.45544554455445546,
+        "zero_recall_classes": 0
+      }
+    },
+    "shared_prototype_distance": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 1,
+          "total": 106,
+          "recall": 0.009433962264150943
+        },
+        "3": {
+          "selected": 43,
+          "total": 101,
+          "recall": 0.42574257425742573
+        },
+        "8": {
+          "selected": 58,
+          "total": 113,
+          "recall": 0.5132743362831859
+        },
+        "11": {
+          "selected": 10,
+          "total": 99,
+          "recall": 0.10101010101010101
+        },
+        "12": {
+          "selected": 19,
+          "total": 91,
+          "recall": 0.2087912087912088
+        },
+        "14": {
+          "selected": 41,
+          "total": 123,
+          "recall": 0.3333333333333333
+        },
+        "18": {
+          "selected": 63,
+          "total": 120,
+          "recall": 0.525
+        },
+        "19": {
+          "selected": 36,
+          "total": 94,
+          "recall": 0.3829787234042553
+        },
+        "23": {
+          "selected": 19,
+          "total": 101,
+          "recall": 0.18811881188118812
+        },
+        "25": {
+          "selected": 29,
+          "total": 97,
+          "recall": 0.29896907216494845
+        },
+        "26": {
+          "selected": 32,
+          "total": 112,
+          "recall": 0.2857142857142857
+        },
+        "28": {
+          "selected": 0,
+          "total": 110,
+          "recall": 0.0
+        },
+        "31": {
+          "selected": 26,
+          "total": 108,
+          "recall": 0.24074074074074073
+        },
+        "32": {
+          "selected": 30,
+          "total": 121,
+          "recall": 0.24793388429752067
+        },
+        "37": {
+          "selected": 25,
+          "total": 118,
+          "recall": 0.211864406779661
+        },
+        "39": {
+          "selected": 45,
+          "total": 113,
+          "recall": 0.39823008849557523
+        },
+        "41": {
+          "selected": 26,
+          "total": 103,
+          "recall": 0.2524271844660194
+        },
+        "43": {
+          "selected": 49,
+          "total": 114,
+          "recall": 0.4298245614035088
+        },
+        "44": {
+          "selected": 43,
+          "total": 97,
+          "recall": 0.44329896907216493
+        },
+        "46": {
+          "selected": 8,
+          "total": 104,
+          "recall": 0.07692307692307693
+        },
+        "48": {
+          "selected": 39,
+          "total": 105,
+          "recall": 0.37142857142857144
+        },
+        "49": {
+          "selected": 16,
+          "total": 110,
+          "recall": 0.14545454545454545
+        },
+        "50": {
+          "selected": 45,
+          "total": 104,
+          "recall": 0.4326923076923077
+        },
+        "53": {
+          "selected": 1,
+          "total": 101,
+          "recall": 0.009900990099009901
+        },
+        "54": {
+          "selected": 11,
+          "total": 110,
+          "recall": 0.1
+        },
+        "55": {
+          "selected": 37,
+          "total": 107,
+          "recall": 0.34579439252336447
+        },
+        "59": {
+          "selected": 20,
+          "total": 104,
+          "recall": 0.19230769230769232
+        },
+        "61": {
+          "selected": 3,
+          "total": 114,
+          "recall": 0.02631578947368421
+        },
+        "64": {
+          "selected": 60,
+          "total": 116,
+          "recall": 0.5172413793103449
+        },
+        "70": {
+          "selected": 8,
+          "total": 103,
+          "recall": 0.07766990291262135
+        },
+        "72": {
+          "selected": 32,
+          "total": 100,
+          "recall": 0.32
+        },
+        "73": {
+          "selected": 7,
+          "total": 124,
+          "recall": 0.056451612903225805
+        },
+        "74": {
+          "selected": 65,
+          "total": 101,
+          "recall": 0.6435643564356436
+        },
+        "75": {
+          "selected": 58,
+          "total": 113,
+          "recall": 0.5132743362831859
+        },
+        "78": {
+          "selected": 69,
+          "total": 137,
+          "recall": 0.5036496350364964
+        },
+        "84": {
+          "selected": 25,
+          "total": 97,
+          "recall": 0.25773195876288657
+        },
+        "85": {
+          "selected": 46,
+          "total": 108,
+          "recall": 0.42592592592592593
+        },
+        "86": {
+          "selected": 13,
+          "total": 104,
+          "recall": 0.125
+        },
+        "96": {
+          "selected": 19,
+          "total": 113,
+          "recall": 0.168141592920354
+        },
+        "99": {
+          "selected": 34,
+          "total": 104,
+          "recall": 0.3269230769230769
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 1,
+          "total": 24,
+          "selection_rate": 0.041666666666666664
+        },
+        "2": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "4": {
+          "selected": 5,
+          "total": 15,
+          "selection_rate": 0.3333333333333333
+        },
+        "5": {
+          "selected": 4,
+          "total": 17,
+          "selection_rate": 0.23529411764705882
+        },
+        "6": {
+          "selected": 3,
+          "total": 13,
+          "selection_rate": 0.23076923076923078
+        },
+        "7": {
+          "selected": 3,
+          "total": 16,
+          "selection_rate": 0.1875
+        },
+        "9": {
+          "selected": 0,
+          "total": 19,
+          "selection_rate": 0.0
+        },
+        "10": {
+          "selected": 2,
+          "total": 17,
+          "selection_rate": 0.11764705882352941
+        },
+        "13": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "15": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "16": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "17": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "20": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "21": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "22": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "24": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "27": {
+          "selected": 7,
+          "total": 18,
+          "selection_rate": 0.3888888888888889
+        },
+        "29": {
+          "selected": 6,
+          "total": 18,
+          "selection_rate": 0.3333333333333333
+        },
+        "30": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "33": {
+          "selected": 3,
+          "total": 14,
+          "selection_rate": 0.21428571428571427
+        },
+        "34": {
+          "selected": 4,
+          "total": 19,
+          "selection_rate": 0.21052631578947367
+        },
+        "35": {
+          "selected": 1,
+          "total": 20,
+          "selection_rate": 0.05
+        },
+        "36": {
+          "selected": 12,
+          "total": 19,
+          "selection_rate": 0.631578947368421
+        },
+        "38": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "40": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "42": {
+          "selected": 5,
+          "total": 15,
+          "selection_rate": 0.3333333333333333
+        },
+        "45": {
+          "selected": 10,
+          "total": 19,
+          "selection_rate": 0.5263157894736842
+        },
+        "47": {
+          "selected": 4,
+          "total": 22,
+          "selection_rate": 0.18181818181818182
+        },
+        "51": {
+          "selected": 1,
+          "total": 10,
+          "selection_rate": 0.1
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "57": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "58": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "60": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "62": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "63": {
+          "selected": 8,
+          "total": 11,
+          "selection_rate": 0.7272727272727273
+        },
+        "65": {
+          "selected": 6,
+          "total": 16,
+          "selection_rate": 0.375
+        },
+        "66": {
+          "selected": 8,
+          "total": 27,
+          "selection_rate": 0.2962962962962963
+        },
+        "67": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "71": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "76": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "77": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "79": {
+          "selected": 2,
+          "total": 14,
+          "selection_rate": 0.14285714285714285
+        },
+        "80": {
+          "selected": 10,
+          "total": 21,
+          "selection_rate": 0.47619047619047616
+        },
+        "81": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "82": {
+          "selected": 4,
+          "total": 20,
+          "selection_rate": 0.2
+        },
+        "83": {
+          "selected": 1,
+          "total": 23,
+          "selection_rate": 0.043478260869565216
+        },
+        "87": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "88": {
+          "selected": 5,
+          "total": 20,
+          "selection_rate": 0.25
+        },
+        "89": {
+          "selected": 3,
+          "total": 24,
+          "selection_rate": 0.125
+        },
+        "90": {
+          "selected": 1,
+          "total": 20,
+          "selection_rate": 0.05
+        },
+        "91": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "92": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "93": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "94": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "95": {
+          "selected": 0,
+          "total": 27,
+          "selection_rate": 0.0
+        },
+        "97": {
+          "selected": 5,
+          "total": 18,
+          "selection_rate": 0.2777777777777778
+        },
+        "98": {
+          "selected": 1,
+          "total": 26,
+          "selection_rate": 0.038461538461538464
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.0,
+        "median": 0.27172312223858613,
+        "max": 0.6435643564356436,
+        "zero_recall_classes": 1
+      }
+    },
+    "shared_distance_consensus": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 2,
+          "total": 106,
+          "recall": 0.018867924528301886
+        },
+        "3": {
+          "selected": 37,
+          "total": 101,
+          "recall": 0.36633663366336633
+        },
+        "8": {
+          "selected": 68,
+          "total": 113,
+          "recall": 0.6017699115044248
+        },
+        "11": {
+          "selected": 12,
+          "total": 99,
+          "recall": 0.12121212121212122
+        },
+        "12": {
+          "selected": 25,
+          "total": 91,
+          "recall": 0.27472527472527475
+        },
+        "14": {
+          "selected": 37,
+          "total": 123,
+          "recall": 0.3008130081300813
+        },
+        "18": {
+          "selected": 52,
+          "total": 120,
+          "recall": 0.43333333333333335
+        },
+        "19": {
+          "selected": 39,
+          "total": 94,
+          "recall": 0.4148936170212766
+        },
+        "23": {
+          "selected": 16,
+          "total": 101,
+          "recall": 0.15841584158415842
+        },
+        "25": {
+          "selected": 40,
+          "total": 97,
+          "recall": 0.41237113402061853
+        },
+        "26": {
+          "selected": 36,
+          "total": 112,
+          "recall": 0.32142857142857145
+        },
+        "28": {
+          "selected": 3,
+          "total": 110,
+          "recall": 0.02727272727272727
+        },
+        "31": {
+          "selected": 28,
+          "total": 108,
+          "recall": 0.25925925925925924
+        },
+        "32": {
+          "selected": 37,
+          "total": 121,
+          "recall": 0.30578512396694213
+        },
+        "37": {
+          "selected": 20,
+          "total": 118,
+          "recall": 0.1694915254237288
+        },
+        "39": {
+          "selected": 60,
+          "total": 113,
+          "recall": 0.5309734513274337
+        },
+        "41": {
+          "selected": 34,
+          "total": 103,
+          "recall": 0.3300970873786408
+        },
+        "43": {
+          "selected": 38,
+          "total": 114,
+          "recall": 0.3333333333333333
+        },
+        "44": {
+          "selected": 41,
+          "total": 97,
+          "recall": 0.422680412371134
+        },
+        "46": {
+          "selected": 11,
+          "total": 104,
+          "recall": 0.10576923076923077
+        },
+        "48": {
+          "selected": 37,
+          "total": 105,
+          "recall": 0.3523809523809524
+        },
+        "49": {
+          "selected": 14,
+          "total": 110,
+          "recall": 0.12727272727272726
+        },
+        "50": {
+          "selected": 43,
+          "total": 104,
+          "recall": 0.41346153846153844
+        },
+        "53": {
+          "selected": 4,
+          "total": 101,
+          "recall": 0.039603960396039604
+        },
+        "54": {
+          "selected": 9,
+          "total": 110,
+          "recall": 0.08181818181818182
+        },
+        "55": {
+          "selected": 27,
+          "total": 107,
+          "recall": 0.2523364485981308
+        },
+        "59": {
+          "selected": 18,
+          "total": 104,
+          "recall": 0.17307692307692307
+        },
+        "61": {
+          "selected": 10,
+          "total": 114,
+          "recall": 0.08771929824561403
+        },
+        "64": {
+          "selected": 58,
+          "total": 116,
+          "recall": 0.5
+        },
+        "70": {
+          "selected": 10,
+          "total": 103,
+          "recall": 0.0970873786407767
+        },
+        "72": {
+          "selected": 32,
+          "total": 100,
+          "recall": 0.32
+        },
+        "73": {
+          "selected": 8,
+          "total": 124,
+          "recall": 0.06451612903225806
+        },
+        "74": {
+          "selected": 58,
+          "total": 101,
+          "recall": 0.5742574257425742
+        },
+        "75": {
+          "selected": 61,
+          "total": 113,
+          "recall": 0.5398230088495575
+        },
+        "78": {
+          "selected": 78,
+          "total": 137,
+          "recall": 0.5693430656934306
+        },
+        "84": {
+          "selected": 32,
+          "total": 97,
+          "recall": 0.32989690721649484
+        },
+        "85": {
+          "selected": 37,
+          "total": 108,
+          "recall": 0.3425925925925926
+        },
+        "86": {
+          "selected": 35,
+          "total": 104,
+          "recall": 0.33653846153846156
+        },
+        "96": {
+          "selected": 14,
+          "total": 113,
+          "recall": 0.12389380530973451
+        },
+        "99": {
+          "selected": 47,
+          "total": 104,
+          "recall": 0.4519230769230769
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 0,
+          "total": 24,
+          "selection_rate": 0.0
+        },
+        "2": {
+          "selected": 1,
+          "total": 23,
+          "selection_rate": 0.043478260869565216
+        },
+        "4": {
+          "selected": 5,
+          "total": 15,
+          "selection_rate": 0.3333333333333333
+        },
+        "5": {
+          "selected": 4,
+          "total": 17,
+          "selection_rate": 0.23529411764705882
+        },
+        "6": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "7": {
+          "selected": 4,
+          "total": 16,
+          "selection_rate": 0.25
+        },
+        "9": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "10": {
+          "selected": 3,
+          "total": 17,
+          "selection_rate": 0.17647058823529413
+        },
+        "13": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "15": {
+          "selected": 2,
+          "total": 19,
+          "selection_rate": 0.10526315789473684
+        },
+        "16": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "17": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "20": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "21": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "22": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "24": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "27": {
+          "selected": 5,
+          "total": 18,
+          "selection_rate": 0.2777777777777778
+        },
+        "29": {
+          "selected": 4,
+          "total": 18,
+          "selection_rate": 0.2222222222222222
+        },
+        "30": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "33": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "34": {
+          "selected": 3,
+          "total": 19,
+          "selection_rate": 0.15789473684210525
+        },
+        "35": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "36": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "38": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "40": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "42": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "45": {
+          "selected": 5,
+          "total": 19,
+          "selection_rate": 0.2631578947368421
+        },
+        "47": {
+          "selected": 2,
+          "total": 22,
+          "selection_rate": 0.09090909090909091
+        },
+        "51": {
+          "selected": 0,
+          "total": 10,
+          "selection_rate": 0.0
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "57": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "58": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "60": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "62": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "63": {
+          "selected": 4,
+          "total": 11,
+          "selection_rate": 0.36363636363636365
+        },
+        "65": {
+          "selected": 5,
+          "total": 16,
+          "selection_rate": 0.3125
+        },
+        "66": {
+          "selected": 2,
+          "total": 27,
+          "selection_rate": 0.07407407407407407
+        },
+        "67": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "71": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "76": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "77": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "79": {
+          "selected": 2,
+          "total": 14,
+          "selection_rate": 0.14285714285714285
+        },
+        "80": {
+          "selected": 6,
+          "total": 21,
+          "selection_rate": 0.2857142857142857
+        },
+        "81": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "82": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "83": {
+          "selected": 1,
+          "total": 23,
+          "selection_rate": 0.043478260869565216
+        },
+        "87": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "88": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "89": {
+          "selected": 3,
+          "total": 24,
+          "selection_rate": 0.125
+        },
+        "90": {
+          "selected": 1,
+          "total": 20,
+          "selection_rate": 0.05
+        },
+        "91": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "92": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "93": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "94": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "95": {
+          "selected": 1,
+          "total": 27,
+          "selection_rate": 0.037037037037037035
+        },
+        "97": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "98": {
+          "selected": 1,
+          "total": 26,
+          "selection_rate": 0.038461538461538464
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.018867924528301886,
+        "median": 0.32071428571428573,
+        "max": 0.6017699115044248,
+        "zero_recall_classes": 0
+      }
+    },
+    "class_balanced_entropy_uncertainty": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 8,
+          "total": 106,
+          "recall": 0.07547169811320754
+        },
+        "3": {
+          "selected": 35,
+          "total": 101,
+          "recall": 0.3465346534653465
+        },
+        "8": {
+          "selected": 46,
+          "total": 113,
+          "recall": 0.40707964601769914
+        },
+        "11": {
+          "selected": 10,
+          "total": 99,
+          "recall": 0.10101010101010101
+        },
+        "12": {
+          "selected": 24,
+          "total": 91,
+          "recall": 0.26373626373626374
+        },
+        "14": {
+          "selected": 46,
+          "total": 123,
+          "recall": 0.37398373983739835
+        },
+        "18": {
+          "selected": 47,
+          "total": 120,
+          "recall": 0.39166666666666666
+        },
+        "19": {
+          "selected": 32,
+          "total": 94,
+          "recall": 0.3404255319148936
+        },
+        "23": {
+          "selected": 16,
+          "total": 101,
+          "recall": 0.15841584158415842
+        },
+        "25": {
+          "selected": 40,
+          "total": 97,
+          "recall": 0.41237113402061853
+        },
+        "26": {
+          "selected": 31,
+          "total": 112,
+          "recall": 0.2767857142857143
+        },
+        "28": {
+          "selected": 6,
+          "total": 110,
+          "recall": 0.05454545454545454
+        },
+        "31": {
+          "selected": 21,
+          "total": 108,
+          "recall": 0.19444444444444445
+        },
+        "32": {
+          "selected": 34,
+          "total": 121,
+          "recall": 0.2809917355371901
+        },
+        "37": {
+          "selected": 27,
+          "total": 118,
+          "recall": 0.2288135593220339
+        },
+        "39": {
+          "selected": 53,
+          "total": 113,
+          "recall": 0.4690265486725664
+        },
+        "41": {
+          "selected": 28,
+          "total": 103,
+          "recall": 0.27184466019417475
+        },
+        "43": {
+          "selected": 34,
+          "total": 114,
+          "recall": 0.2982456140350877
+        },
+        "44": {
+          "selected": 33,
+          "total": 97,
+          "recall": 0.3402061855670103
+        },
+        "46": {
+          "selected": 14,
+          "total": 104,
+          "recall": 0.1346153846153846
+        },
+        "48": {
+          "selected": 18,
+          "total": 105,
+          "recall": 0.17142857142857143
+        },
+        "49": {
+          "selected": 26,
+          "total": 110,
+          "recall": 0.23636363636363636
+        },
+        "50": {
+          "selected": 42,
+          "total": 104,
+          "recall": 0.40384615384615385
+        },
+        "53": {
+          "selected": 6,
+          "total": 101,
+          "recall": 0.0594059405940594
+        },
+        "54": {
+          "selected": 15,
+          "total": 110,
+          "recall": 0.13636363636363635
+        },
+        "55": {
+          "selected": 19,
+          "total": 107,
+          "recall": 0.17757009345794392
+        },
+        "59": {
+          "selected": 41,
+          "total": 104,
+          "recall": 0.3942307692307692
+        },
+        "61": {
+          "selected": 10,
+          "total": 114,
+          "recall": 0.08771929824561403
+        },
+        "64": {
+          "selected": 51,
+          "total": 116,
+          "recall": 0.4396551724137931
+        },
+        "70": {
+          "selected": 21,
+          "total": 103,
+          "recall": 0.20388349514563106
+        },
+        "72": {
+          "selected": 28,
+          "total": 100,
+          "recall": 0.28
+        },
+        "73": {
+          "selected": 8,
+          "total": 124,
+          "recall": 0.06451612903225806
+        },
+        "74": {
+          "selected": 38,
+          "total": 101,
+          "recall": 0.37623762376237624
+        },
+        "75": {
+          "selected": 45,
+          "total": 113,
+          "recall": 0.39823008849557523
+        },
+        "78": {
+          "selected": 60,
+          "total": 137,
+          "recall": 0.43795620437956206
+        },
+        "84": {
+          "selected": 39,
+          "total": 97,
+          "recall": 0.4020618556701031
+        },
+        "85": {
+          "selected": 40,
+          "total": 108,
+          "recall": 0.37037037037037035
+        },
+        "86": {
+          "selected": 27,
+          "total": 104,
+          "recall": 0.25961538461538464
+        },
+        "96": {
+          "selected": 33,
+          "total": 113,
+          "recall": 0.2920353982300885
+        },
+        "99": {
+          "selected": 35,
+          "total": 104,
+          "recall": 0.33653846153846156
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "2": {
+          "selected": 2,
+          "total": 23,
+          "selection_rate": 0.08695652173913043
+        },
+        "4": {
+          "selected": 4,
+          "total": 15,
+          "selection_rate": 0.26666666666666666
+        },
+        "5": {
+          "selected": 4,
+          "total": 17,
+          "selection_rate": 0.23529411764705882
+        },
+        "6": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "7": {
+          "selected": 4,
+          "total": 16,
+          "selection_rate": 0.25
+        },
+        "9": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "10": {
+          "selected": 2,
+          "total": 17,
+          "selection_rate": 0.11764705882352941
+        },
+        "13": {
+          "selected": 4,
+          "total": 16,
+          "selection_rate": 0.25
+        },
+        "15": {
+          "selected": 3,
+          "total": 19,
+          "selection_rate": 0.15789473684210525
+        },
+        "16": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "17": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "20": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "21": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "22": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "24": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "27": {
+          "selected": 3,
+          "total": 18,
+          "selection_rate": 0.16666666666666666
+        },
+        "29": {
+          "selected": 4,
+          "total": 18,
+          "selection_rate": 0.2222222222222222
+        },
+        "30": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "33": {
+          "selected": 3,
+          "total": 14,
+          "selection_rate": 0.21428571428571427
+        },
+        "34": {
+          "selected": 4,
+          "total": 19,
+          "selection_rate": 0.21052631578947367
+        },
+        "35": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "36": {
+          "selected": 12,
+          "total": 19,
+          "selection_rate": 0.631578947368421
+        },
+        "38": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "40": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "42": {
+          "selected": 11,
+          "total": 15,
+          "selection_rate": 0.7333333333333333
+        },
+        "45": {
+          "selected": 5,
+          "total": 19,
+          "selection_rate": 0.2631578947368421
+        },
+        "47": {
+          "selected": 5,
+          "total": 22,
+          "selection_rate": 0.22727272727272727
+        },
+        "51": {
+          "selected": 0,
+          "total": 10,
+          "selection_rate": 0.0
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "57": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "58": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "60": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "62": {
+          "selected": 4,
+          "total": 13,
+          "selection_rate": 0.3076923076923077
+        },
+        "63": {
+          "selected": 10,
+          "total": 11,
+          "selection_rate": 0.9090909090909091
+        },
+        "65": {
+          "selected": 3,
+          "total": 16,
+          "selection_rate": 0.1875
+        },
+        "66": {
+          "selected": 3,
+          "total": 27,
+          "selection_rate": 0.1111111111111111
+        },
+        "67": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "71": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "76": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "77": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "79": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "80": {
+          "selected": 5,
+          "total": 21,
+          "selection_rate": 0.23809523809523808
+        },
+        "81": {
+          "selected": 3,
+          "total": 14,
+          "selection_rate": 0.21428571428571427
+        },
+        "82": {
+          "selected": 18,
+          "total": 20,
+          "selection_rate": 0.9
+        },
+        "83": {
+          "selected": 2,
+          "total": 23,
+          "selection_rate": 0.08695652173913043
+        },
+        "87": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "88": {
+          "selected": 4,
+          "total": 20,
+          "selection_rate": 0.2
+        },
+        "89": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "90": {
+          "selected": 5,
+          "total": 20,
+          "selection_rate": 0.25
+        },
+        "91": {
+          "selected": 3,
+          "total": 21,
+          "selection_rate": 0.14285714285714285
+        },
+        "92": {
+          "selected": 2,
+          "total": 23,
+          "selection_rate": 0.08695652173913043
+        },
+        "93": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "94": {
+          "selected": 7,
+          "total": 13,
+          "selection_rate": 0.5384615384615384
+        },
+        "95": {
+          "selected": 1,
+          "total": 27,
+          "selection_rate": 0.037037037037037035
+        },
+        "97": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "98": {
+          "selected": 1,
+          "total": 26,
+          "selection_rate": 0.038461538461538464
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.05454545454545454,
+        "median": 0.28049586776859503,
+        "max": 0.4690265486725664,
+        "zero_recall_classes": 0
+      }
+    },
+    "prototype_boundary": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 6,
+          "total": 106,
+          "recall": 0.05660377358490566
+        },
+        "3": {
+          "selected": 20,
+          "total": 101,
+          "recall": 0.19801980198019803
+        },
+        "8": {
+          "selected": 65,
+          "total": 113,
+          "recall": 0.5752212389380531
+        },
+        "11": {
+          "selected": 19,
+          "total": 99,
+          "recall": 0.1919191919191919
+        },
+        "12": {
+          "selected": 33,
+          "total": 91,
+          "recall": 0.3626373626373626
+        },
+        "14": {
+          "selected": 44,
+          "total": 123,
+          "recall": 0.35772357723577236
+        },
+        "18": {
+          "selected": 44,
+          "total": 120,
+          "recall": 0.36666666666666664
+        },
+        "19": {
+          "selected": 36,
+          "total": 94,
+          "recall": 0.3829787234042553
+        },
+        "23": {
+          "selected": 35,
+          "total": 101,
+          "recall": 0.3465346534653465
+        },
+        "25": {
+          "selected": 58,
+          "total": 97,
+          "recall": 0.5979381443298969
+        },
+        "26": {
+          "selected": 20,
+          "total": 112,
+          "recall": 0.17857142857142858
+        },
+        "28": {
+          "selected": 7,
+          "total": 110,
+          "recall": 0.06363636363636363
+        },
+        "31": {
+          "selected": 17,
+          "total": 108,
+          "recall": 0.1574074074074074
+        },
+        "32": {
+          "selected": 39,
+          "total": 121,
+          "recall": 0.32231404958677684
+        },
+        "37": {
+          "selected": 31,
+          "total": 118,
+          "recall": 0.2627118644067797
+        },
+        "39": {
+          "selected": 85,
+          "total": 113,
+          "recall": 0.7522123893805309
+        },
+        "41": {
+          "selected": 64,
+          "total": 103,
+          "recall": 0.6213592233009708
+        },
+        "43": {
+          "selected": 21,
+          "total": 114,
+          "recall": 0.18421052631578946
+        },
+        "44": {
+          "selected": 26,
+          "total": 97,
+          "recall": 0.26804123711340205
+        },
+        "46": {
+          "selected": 19,
+          "total": 104,
+          "recall": 0.18269230769230768
+        },
+        "48": {
+          "selected": 45,
+          "total": 105,
+          "recall": 0.42857142857142855
+        },
+        "49": {
+          "selected": 46,
+          "total": 110,
+          "recall": 0.41818181818181815
+        },
+        "50": {
+          "selected": 21,
+          "total": 104,
+          "recall": 0.20192307692307693
+        },
+        "53": {
+          "selected": 11,
+          "total": 101,
+          "recall": 0.10891089108910891
+        },
+        "54": {
+          "selected": 20,
+          "total": 110,
+          "recall": 0.18181818181818182
+        },
+        "55": {
+          "selected": 21,
+          "total": 107,
+          "recall": 0.19626168224299065
+        },
+        "59": {
+          "selected": 19,
+          "total": 104,
+          "recall": 0.18269230769230768
+        },
+        "61": {
+          "selected": 10,
+          "total": 114,
+          "recall": 0.08771929824561403
+        },
+        "64": {
+          "selected": 26,
+          "total": 116,
+          "recall": 0.22413793103448276
+        },
+        "70": {
+          "selected": 14,
+          "total": 103,
+          "recall": 0.13592233009708737
+        },
+        "72": {
+          "selected": 20,
+          "total": 100,
+          "recall": 0.2
+        },
+        "73": {
+          "selected": 10,
+          "total": 124,
+          "recall": 0.08064516129032258
+        },
+        "74": {
+          "selected": 9,
+          "total": 101,
+          "recall": 0.0891089108910891
+        },
+        "75": {
+          "selected": 39,
+          "total": 113,
+          "recall": 0.34513274336283184
+        },
+        "78": {
+          "selected": 57,
+          "total": 137,
+          "recall": 0.41605839416058393
+        },
+        "84": {
+          "selected": 43,
+          "total": 97,
+          "recall": 0.44329896907216493
+        },
+        "85": {
+          "selected": 40,
+          "total": 108,
+          "recall": 0.37037037037037035
+        },
+        "86": {
+          "selected": 57,
+          "total": 104,
+          "recall": 0.5480769230769231
+        },
+        "96": {
+          "selected": 3,
+          "total": 113,
+          "recall": 0.02654867256637168
+        },
+        "99": {
+          "selected": 50,
+          "total": 104,
+          "recall": 0.4807692307692308
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 3,
+          "total": 24,
+          "selection_rate": 0.125
+        },
+        "2": {
+          "selected": 2,
+          "total": 23,
+          "selection_rate": 0.08695652173913043
+        },
+        "4": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "5": {
+          "selected": 6,
+          "total": 17,
+          "selection_rate": 0.35294117647058826
+        },
+        "6": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "7": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "9": {
+          "selected": 4,
+          "total": 19,
+          "selection_rate": 0.21052631578947367
+        },
+        "10": {
+          "selected": 1,
+          "total": 17,
+          "selection_rate": 0.058823529411764705
+        },
+        "13": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "15": {
+          "selected": 5,
+          "total": 19,
+          "selection_rate": 0.2631578947368421
+        },
+        "16": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "17": {
+          "selected": 1,
+          "total": 25,
+          "selection_rate": 0.04
+        },
+        "20": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "21": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "22": {
+          "selected": 4,
+          "total": 25,
+          "selection_rate": 0.16
+        },
+        "24": {
+          "selected": 3,
+          "total": 15,
+          "selection_rate": 0.2
+        },
+        "27": {
+          "selected": 2,
+          "total": 18,
+          "selection_rate": 0.1111111111111111
+        },
+        "29": {
+          "selected": 3,
+          "total": 18,
+          "selection_rate": 0.16666666666666666
+        },
+        "30": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "33": {
+          "selected": 2,
+          "total": 14,
+          "selection_rate": 0.14285714285714285
+        },
+        "34": {
+          "selected": 0,
+          "total": 19,
+          "selection_rate": 0.0
+        },
+        "35": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "36": {
+          "selected": 0,
+          "total": 19,
+          "selection_rate": 0.0
+        },
+        "38": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "40": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "42": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "45": {
+          "selected": 5,
+          "total": 19,
+          "selection_rate": 0.2631578947368421
+        },
+        "47": {
+          "selected": 2,
+          "total": 22,
+          "selection_rate": 0.09090909090909091
+        },
+        "51": {
+          "selected": 1,
+          "total": 10,
+          "selection_rate": 0.1
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "57": {
+          "selected": 1,
+          "total": 20,
+          "selection_rate": 0.05
+        },
+        "58": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "60": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "62": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "63": {
+          "selected": 1,
+          "total": 11,
+          "selection_rate": 0.09090909090909091
+        },
+        "65": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "66": {
+          "selected": 2,
+          "total": 27,
+          "selection_rate": 0.07407407407407407
+        },
+        "67": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 2,
+          "total": 17,
+          "selection_rate": 0.11764705882352941
+        },
+        "71": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "76": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "77": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "79": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "80": {
+          "selected": 4,
+          "total": 21,
+          "selection_rate": 0.19047619047619047
+        },
+        "81": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "82": {
+          "selected": 3,
+          "total": 20,
+          "selection_rate": 0.15
+        },
+        "83": {
+          "selected": 3,
+          "total": 23,
+          "selection_rate": 0.13043478260869565
+        },
+        "87": {
+          "selected": 0,
+          "total": 21,
+          "selection_rate": 0.0
+        },
+        "88": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "89": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "90": {
+          "selected": 3,
+          "total": 20,
+          "selection_rate": 0.15
+        },
+        "91": {
+          "selected": 0,
+          "total": 21,
+          "selection_rate": 0.0
+        },
+        "92": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "93": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "94": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "95": {
+          "selected": 4,
+          "total": 27,
+          "selection_rate": 0.14814814814814814
+        },
+        "97": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "98": {
+          "selected": 0,
+          "total": 26,
+          "selection_rate": 0.0
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.02654867256637168,
+        "median": 0.24342489772063122,
+        "max": 0.7522123893805309,
+        "zero_recall_classes": 0
+      }
+    },
+    "support_boundary": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 5,
+          "total": 106,
+          "recall": 0.04716981132075472
+        },
+        "3": {
+          "selected": 24,
+          "total": 101,
+          "recall": 0.2376237623762376
+        },
+        "8": {
+          "selected": 64,
+          "total": 113,
+          "recall": 0.5663716814159292
+        },
+        "11": {
+          "selected": 24,
+          "total": 99,
+          "recall": 0.24242424242424243
+        },
+        "12": {
+          "selected": 26,
+          "total": 91,
+          "recall": 0.2857142857142857
+        },
+        "14": {
+          "selected": 51,
+          "total": 123,
+          "recall": 0.4146341463414634
+        },
+        "18": {
+          "selected": 54,
+          "total": 120,
+          "recall": 0.45
+        },
+        "19": {
+          "selected": 36,
+          "total": 94,
+          "recall": 0.3829787234042553
+        },
+        "23": {
+          "selected": 20,
+          "total": 101,
+          "recall": 0.19801980198019803
+        },
+        "25": {
+          "selected": 56,
+          "total": 97,
+          "recall": 0.5773195876288659
+        },
+        "26": {
+          "selected": 28,
+          "total": 112,
+          "recall": 0.25
+        },
+        "28": {
+          "selected": 8,
+          "total": 110,
+          "recall": 0.07272727272727272
+        },
+        "31": {
+          "selected": 24,
+          "total": 108,
+          "recall": 0.2222222222222222
+        },
+        "32": {
+          "selected": 45,
+          "total": 121,
+          "recall": 0.371900826446281
+        },
+        "37": {
+          "selected": 26,
+          "total": 118,
+          "recall": 0.22033898305084745
+        },
+        "39": {
+          "selected": 49,
+          "total": 113,
+          "recall": 0.4336283185840708
+        },
+        "41": {
+          "selected": 56,
+          "total": 103,
+          "recall": 0.5436893203883495
+        },
+        "43": {
+          "selected": 25,
+          "total": 114,
+          "recall": 0.21929824561403508
+        },
+        "44": {
+          "selected": 31,
+          "total": 97,
+          "recall": 0.31958762886597936
+        },
+        "46": {
+          "selected": 21,
+          "total": 104,
+          "recall": 0.20192307692307693
+        },
+        "48": {
+          "selected": 38,
+          "total": 105,
+          "recall": 0.3619047619047619
+        },
+        "49": {
+          "selected": 14,
+          "total": 110,
+          "recall": 0.12727272727272726
+        },
+        "50": {
+          "selected": 31,
+          "total": 104,
+          "recall": 0.2980769230769231
+        },
+        "53": {
+          "selected": 5,
+          "total": 101,
+          "recall": 0.04950495049504951
+        },
+        "54": {
+          "selected": 23,
+          "total": 110,
+          "recall": 0.20909090909090908
+        },
+        "55": {
+          "selected": 27,
+          "total": 107,
+          "recall": 0.2523364485981308
+        },
+        "59": {
+          "selected": 7,
+          "total": 104,
+          "recall": 0.0673076923076923
+        },
+        "61": {
+          "selected": 9,
+          "total": 114,
+          "recall": 0.07894736842105263
+        },
+        "64": {
+          "selected": 33,
+          "total": 116,
+          "recall": 0.28448275862068967
+        },
+        "70": {
+          "selected": 20,
+          "total": 103,
+          "recall": 0.1941747572815534
+        },
+        "72": {
+          "selected": 33,
+          "total": 100,
+          "recall": 0.33
+        },
+        "73": {
+          "selected": 12,
+          "total": 124,
+          "recall": 0.0967741935483871
+        },
+        "74": {
+          "selected": 14,
+          "total": 101,
+          "recall": 0.13861386138613863
+        },
+        "75": {
+          "selected": 49,
+          "total": 113,
+          "recall": 0.4336283185840708
+        },
+        "78": {
+          "selected": 74,
+          "total": 137,
+          "recall": 0.5401459854014599
+        },
+        "84": {
+          "selected": 54,
+          "total": 97,
+          "recall": 0.5567010309278351
+        },
+        "85": {
+          "selected": 40,
+          "total": 108,
+          "recall": 0.37037037037037035
+        },
+        "86": {
+          "selected": 39,
+          "total": 104,
+          "recall": 0.375
+        },
+        "96": {
+          "selected": 5,
+          "total": 113,
+          "recall": 0.04424778761061947
+        },
+        "99": {
+          "selected": 49,
+          "total": 104,
+          "recall": 0.47115384615384615
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "2": {
+          "selected": 1,
+          "total": 23,
+          "selection_rate": 0.043478260869565216
+        },
+        "4": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "5": {
+          "selected": 3,
+          "total": 17,
+          "selection_rate": 0.17647058823529413
+        },
+        "6": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "7": {
+          "selected": 3,
+          "total": 16,
+          "selection_rate": 0.1875
+        },
+        "9": {
+          "selected": 4,
+          "total": 19,
+          "selection_rate": 0.21052631578947367
+        },
+        "10": {
+          "selected": 4,
+          "total": 17,
+          "selection_rate": 0.23529411764705882
+        },
+        "13": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "15": {
+          "selected": 5,
+          "total": 19,
+          "selection_rate": 0.2631578947368421
+        },
+        "16": {
+          "selected": 3,
+          "total": 13,
+          "selection_rate": 0.23076923076923078
+        },
+        "17": {
+          "selected": 2,
+          "total": 25,
+          "selection_rate": 0.08
+        },
+        "20": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "21": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "22": {
+          "selected": 2,
+          "total": 25,
+          "selection_rate": 0.08
+        },
+        "24": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "27": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "29": {
+          "selected": 3,
+          "total": 18,
+          "selection_rate": 0.16666666666666666
+        },
+        "30": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "33": {
+          "selected": 4,
+          "total": 14,
+          "selection_rate": 0.2857142857142857
+        },
+        "34": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "35": {
+          "selected": 1,
+          "total": 20,
+          "selection_rate": 0.05
+        },
+        "36": {
+          "selected": 0,
+          "total": 19,
+          "selection_rate": 0.0
+        },
+        "38": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "40": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "42": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "45": {
+          "selected": 6,
+          "total": 19,
+          "selection_rate": 0.3157894736842105
+        },
+        "47": {
+          "selected": 2,
+          "total": 22,
+          "selection_rate": 0.09090909090909091
+        },
+        "51": {
+          "selected": 0,
+          "total": 10,
+          "selection_rate": 0.0
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "57": {
+          "selected": 1,
+          "total": 20,
+          "selection_rate": 0.05
+        },
+        "58": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "60": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "62": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "63": {
+          "selected": 2,
+          "total": 11,
+          "selection_rate": 0.18181818181818182
+        },
+        "65": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "66": {
+          "selected": 2,
+          "total": 27,
+          "selection_rate": 0.07407407407407407
+        },
+        "67": {
+          "selected": 3,
+          "total": 18,
+          "selection_rate": 0.16666666666666666
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 1,
+          "total": 17,
+          "selection_rate": 0.058823529411764705
+        },
+        "71": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "76": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "77": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "79": {
+          "selected": 2,
+          "total": 14,
+          "selection_rate": 0.14285714285714285
+        },
+        "80": {
+          "selected": 4,
+          "total": 21,
+          "selection_rate": 0.19047619047619047
+        },
+        "81": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "82": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "83": {
+          "selected": 3,
+          "total": 23,
+          "selection_rate": 0.13043478260869565
+        },
+        "87": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "88": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "89": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "90": {
+          "selected": 3,
+          "total": 20,
+          "selection_rate": 0.15
+        },
+        "91": {
+          "selected": 0,
+          "total": 21,
+          "selection_rate": 0.0
+        },
+        "92": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "93": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "94": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "95": {
+          "selected": 4,
+          "total": 27,
+          "selection_rate": 0.14814814814814814
+        },
+        "97": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "98": {
+          "selected": 2,
+          "total": 26,
+          "selection_rate": 0.07692307692307693
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.04424778761061947,
+        "median": 0.26840960360941024,
+        "max": 0.5773195876288659,
+        "zero_recall_classes": 0
+      }
+    },
+    "support_distance": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 4,
+          "total": 106,
+          "recall": 0.03773584905660377
+        },
+        "3": {
+          "selected": 22,
+          "total": 101,
+          "recall": 0.21782178217821782
+        },
+        "8": {
+          "selected": 64,
+          "total": 113,
+          "recall": 0.5663716814159292
+        },
+        "11": {
+          "selected": 23,
+          "total": 99,
+          "recall": 0.23232323232323232
+        },
+        "12": {
+          "selected": 28,
+          "total": 91,
+          "recall": 0.3076923076923077
+        },
+        "14": {
+          "selected": 48,
+          "total": 123,
+          "recall": 0.3902439024390244
+        },
+        "18": {
+          "selected": 56,
+          "total": 120,
+          "recall": 0.4666666666666667
+        },
+        "19": {
+          "selected": 35,
+          "total": 94,
+          "recall": 0.3723404255319149
+        },
+        "23": {
+          "selected": 19,
+          "total": 101,
+          "recall": 0.18811881188118812
+        },
+        "25": {
+          "selected": 59,
+          "total": 97,
+          "recall": 0.6082474226804123
+        },
+        "26": {
+          "selected": 26,
+          "total": 112,
+          "recall": 0.23214285714285715
+        },
+        "28": {
+          "selected": 8,
+          "total": 110,
+          "recall": 0.07272727272727272
+        },
+        "31": {
+          "selected": 20,
+          "total": 108,
+          "recall": 0.18518518518518517
+        },
+        "32": {
+          "selected": 46,
+          "total": 121,
+          "recall": 0.38016528925619836
+        },
+        "37": {
+          "selected": 22,
+          "total": 118,
+          "recall": 0.1864406779661017
+        },
+        "39": {
+          "selected": 89,
+          "total": 113,
+          "recall": 0.7876106194690266
+        },
+        "41": {
+          "selected": 61,
+          "total": 103,
+          "recall": 0.5922330097087378
+        },
+        "43": {
+          "selected": 23,
+          "total": 114,
+          "recall": 0.20175438596491227
+        },
+        "44": {
+          "selected": 30,
+          "total": 97,
+          "recall": 0.30927835051546393
+        },
+        "46": {
+          "selected": 21,
+          "total": 104,
+          "recall": 0.20192307692307693
+        },
+        "48": {
+          "selected": 37,
+          "total": 105,
+          "recall": 0.3523809523809524
+        },
+        "49": {
+          "selected": 13,
+          "total": 110,
+          "recall": 0.11818181818181818
+        },
+        "50": {
+          "selected": 28,
+          "total": 104,
+          "recall": 0.2692307692307692
+        },
+        "53": {
+          "selected": 4,
+          "total": 101,
+          "recall": 0.039603960396039604
+        },
+        "54": {
+          "selected": 24,
+          "total": 110,
+          "recall": 0.21818181818181817
+        },
+        "55": {
+          "selected": 24,
+          "total": 107,
+          "recall": 0.22429906542056074
+        },
+        "59": {
+          "selected": 6,
+          "total": 104,
+          "recall": 0.057692307692307696
+        },
+        "61": {
+          "selected": 7,
+          "total": 114,
+          "recall": 0.06140350877192982
+        },
+        "64": {
+          "selected": 31,
+          "total": 116,
+          "recall": 0.2672413793103448
+        },
+        "70": {
+          "selected": 16,
+          "total": 103,
+          "recall": 0.1553398058252427
+        },
+        "72": {
+          "selected": 29,
+          "total": 100,
+          "recall": 0.29
+        },
+        "73": {
+          "selected": 12,
+          "total": 124,
+          "recall": 0.0967741935483871
+        },
+        "74": {
+          "selected": 13,
+          "total": 101,
+          "recall": 0.12871287128712872
+        },
+        "75": {
+          "selected": 47,
+          "total": 113,
+          "recall": 0.415929203539823
+        },
+        "78": {
+          "selected": 72,
+          "total": 137,
+          "recall": 0.5255474452554745
+        },
+        "84": {
+          "selected": 56,
+          "total": 97,
+          "recall": 0.5773195876288659
+        },
+        "85": {
+          "selected": 38,
+          "total": 108,
+          "recall": 0.35185185185185186
+        },
+        "86": {
+          "selected": 39,
+          "total": 104,
+          "recall": 0.375
+        },
+        "96": {
+          "selected": 3,
+          "total": 113,
+          "recall": 0.02654867256637168
+        },
+        "99": {
+          "selected": 51,
+          "total": 104,
+          "recall": 0.49038461538461536
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "2": {
+          "selected": 1,
+          "total": 23,
+          "selection_rate": 0.043478260869565216
+        },
+        "4": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "5": {
+          "selected": 4,
+          "total": 17,
+          "selection_rate": 0.23529411764705882
+        },
+        "6": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "7": {
+          "selected": 3,
+          "total": 16,
+          "selection_rate": 0.1875
+        },
+        "9": {
+          "selected": 4,
+          "total": 19,
+          "selection_rate": 0.21052631578947367
+        },
+        "10": {
+          "selected": 3,
+          "total": 17,
+          "selection_rate": 0.17647058823529413
+        },
+        "13": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "15": {
+          "selected": 5,
+          "total": 19,
+          "selection_rate": 0.2631578947368421
+        },
+        "16": {
+          "selected": 4,
+          "total": 13,
+          "selection_rate": 0.3076923076923077
+        },
+        "17": {
+          "selected": 2,
+          "total": 25,
+          "selection_rate": 0.08
+        },
+        "20": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "21": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "22": {
+          "selected": 1,
+          "total": 25,
+          "selection_rate": 0.04
+        },
+        "24": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "27": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "29": {
+          "selected": 3,
+          "total": 18,
+          "selection_rate": 0.16666666666666666
+        },
+        "30": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "33": {
+          "selected": 4,
+          "total": 14,
+          "selection_rate": 0.2857142857142857
+        },
+        "34": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "35": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "36": {
+          "selected": 0,
+          "total": 19,
+          "selection_rate": 0.0
+        },
+        "38": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "40": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "42": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "45": {
+          "selected": 6,
+          "total": 19,
+          "selection_rate": 0.3157894736842105
+        },
+        "47": {
+          "selected": 2,
+          "total": 22,
+          "selection_rate": 0.09090909090909091
+        },
+        "51": {
+          "selected": 0,
+          "total": 10,
+          "selection_rate": 0.0
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "57": {
+          "selected": 1,
+          "total": 20,
+          "selection_rate": 0.05
+        },
+        "58": {
+          "selected": 1,
+          "total": 16,
+          "selection_rate": 0.0625
+        },
+        "60": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "62": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "63": {
+          "selected": 1,
+          "total": 11,
+          "selection_rate": 0.09090909090909091
+        },
+        "65": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "66": {
+          "selected": 2,
+          "total": 27,
+          "selection_rate": 0.07407407407407407
+        },
+        "67": {
+          "selected": 2,
+          "total": 18,
+          "selection_rate": 0.1111111111111111
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 1,
+          "total": 17,
+          "selection_rate": 0.058823529411764705
+        },
+        "71": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "76": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "77": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "79": {
+          "selected": 2,
+          "total": 14,
+          "selection_rate": 0.14285714285714285
+        },
+        "80": {
+          "selected": 3,
+          "total": 21,
+          "selection_rate": 0.14285714285714285
+        },
+        "81": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "82": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "83": {
+          "selected": 3,
+          "total": 23,
+          "selection_rate": 0.13043478260869565
+        },
+        "87": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "88": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "89": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "90": {
+          "selected": 3,
+          "total": 20,
+          "selection_rate": 0.15
+        },
+        "91": {
+          "selected": 0,
+          "total": 21,
+          "selection_rate": 0.0
+        },
+        "92": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "93": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "94": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "95": {
+          "selected": 4,
+          "total": 27,
+          "selection_rate": 0.14814814814814814
+        },
+        "97": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "98": {
+          "selected": 2,
+          "total": 26,
+          "selection_rate": 0.07692307692307693
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.02654867256637168,
+        "median": 0.24978230581678856,
+        "max": 0.7876106194690266,
+        "zero_recall_classes": 0
+      }
+    },
+    "validation_predicted_class_q95": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 5,
+          "total": 106,
+          "recall": 0.04716981132075472
+        },
+        "3": {
+          "selected": 18,
+          "total": 101,
+          "recall": 0.1782178217821782
+        },
+        "8": {
+          "selected": 53,
+          "total": 113,
+          "recall": 0.4690265486725664
+        },
+        "11": {
+          "selected": 14,
+          "total": 99,
+          "recall": 0.1414141414141414
+        },
+        "12": {
+          "selected": 25,
+          "total": 91,
+          "recall": 0.27472527472527475
+        },
+        "14": {
+          "selected": 30,
+          "total": 123,
+          "recall": 0.24390243902439024
+        },
+        "18": {
+          "selected": 38,
+          "total": 120,
+          "recall": 0.31666666666666665
+        },
+        "19": {
+          "selected": 23,
+          "total": 94,
+          "recall": 0.24468085106382978
+        },
+        "23": {
+          "selected": 20,
+          "total": 101,
+          "recall": 0.19801980198019803
+        },
+        "25": {
+          "selected": 36,
+          "total": 97,
+          "recall": 0.3711340206185567
+        },
+        "26": {
+          "selected": 18,
+          "total": 112,
+          "recall": 0.16071428571428573
+        },
+        "28": {
+          "selected": 2,
+          "total": 110,
+          "recall": 0.01818181818181818
+        },
+        "31": {
+          "selected": 20,
+          "total": 108,
+          "recall": 0.18518518518518517
+        },
+        "32": {
+          "selected": 31,
+          "total": 121,
+          "recall": 0.256198347107438
+        },
+        "37": {
+          "selected": 30,
+          "total": 118,
+          "recall": 0.2542372881355932
+        },
+        "39": {
+          "selected": 57,
+          "total": 113,
+          "recall": 0.504424778761062
+        },
+        "41": {
+          "selected": 24,
+          "total": 103,
+          "recall": 0.23300970873786409
+        },
+        "43": {
+          "selected": 21,
+          "total": 114,
+          "recall": 0.18421052631578946
+        },
+        "44": {
+          "selected": 19,
+          "total": 97,
+          "recall": 0.1958762886597938
+        },
+        "46": {
+          "selected": 11,
+          "total": 104,
+          "recall": 0.10576923076923077
+        },
+        "48": {
+          "selected": 19,
+          "total": 105,
+          "recall": 0.18095238095238095
+        },
+        "49": {
+          "selected": 31,
+          "total": 110,
+          "recall": 0.2818181818181818
+        },
+        "50": {
+          "selected": 25,
+          "total": 104,
+          "recall": 0.2403846153846154
+        },
+        "53": {
+          "selected": 6,
+          "total": 101,
+          "recall": 0.0594059405940594
+        },
+        "54": {
+          "selected": 16,
+          "total": 110,
+          "recall": 0.14545454545454545
+        },
+        "55": {
+          "selected": 14,
+          "total": 107,
+          "recall": 0.1308411214953271
+        },
+        "59": {
+          "selected": 33,
+          "total": 104,
+          "recall": 0.3173076923076923
+        },
+        "61": {
+          "selected": 9,
+          "total": 114,
+          "recall": 0.07894736842105263
+        },
+        "64": {
+          "selected": 27,
+          "total": 116,
+          "recall": 0.23275862068965517
+        },
+        "70": {
+          "selected": 11,
+          "total": 103,
+          "recall": 0.10679611650485436
+        },
+        "72": {
+          "selected": 27,
+          "total": 100,
+          "recall": 0.27
+        },
+        "73": {
+          "selected": 8,
+          "total": 124,
+          "recall": 0.06451612903225806
+        },
+        "74": {
+          "selected": 26,
+          "total": 101,
+          "recall": 0.25742574257425743
+        },
+        "75": {
+          "selected": 33,
+          "total": 113,
+          "recall": 0.2920353982300885
+        },
+        "78": {
+          "selected": 45,
+          "total": 137,
+          "recall": 0.3284671532846715
+        },
+        "84": {
+          "selected": 38,
+          "total": 97,
+          "recall": 0.3917525773195876
+        },
+        "85": {
+          "selected": 27,
+          "total": 108,
+          "recall": 0.25
+        },
+        "86": {
+          "selected": 28,
+          "total": 104,
+          "recall": 0.2692307692307692
+        },
+        "96": {
+          "selected": 31,
+          "total": 113,
+          "recall": 0.2743362831858407
+        },
+        "99": {
+          "selected": 30,
+          "total": 104,
+          "recall": 0.28846153846153844
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 1,
+          "total": 24,
+          "selection_rate": 0.041666666666666664
+        },
+        "2": {
+          "selected": 1,
+          "total": 23,
+          "selection_rate": 0.043478260869565216
+        },
+        "4": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "5": {
+          "selected": 3,
+          "total": 17,
+          "selection_rate": 0.17647058823529413
+        },
+        "6": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "7": {
+          "selected": 3,
+          "total": 16,
+          "selection_rate": 0.1875
+        },
+        "9": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "10": {
+          "selected": 2,
+          "total": 17,
+          "selection_rate": 0.11764705882352941
+        },
+        "13": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "15": {
+          "selected": 2,
+          "total": 19,
+          "selection_rate": 0.10526315789473684
+        },
+        "16": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "17": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "20": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "21": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "22": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "24": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "27": {
+          "selected": 3,
+          "total": 18,
+          "selection_rate": 0.16666666666666666
+        },
+        "29": {
+          "selected": 2,
+          "total": 18,
+          "selection_rate": 0.1111111111111111
+        },
+        "30": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "33": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "34": {
+          "selected": 0,
+          "total": 19,
+          "selection_rate": 0.0
+        },
+        "35": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "36": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "38": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "40": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "42": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "45": {
+          "selected": 4,
+          "total": 19,
+          "selection_rate": 0.21052631578947367
+        },
+        "47": {
+          "selected": 5,
+          "total": 22,
+          "selection_rate": 0.22727272727272727
+        },
+        "51": {
+          "selected": 0,
+          "total": 10,
+          "selection_rate": 0.0
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "57": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "58": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "60": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "62": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "63": {
+          "selected": 2,
+          "total": 11,
+          "selection_rate": 0.18181818181818182
+        },
+        "65": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "66": {
+          "selected": 2,
+          "total": 27,
+          "selection_rate": 0.07407407407407407
+        },
+        "67": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "71": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "76": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "77": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "79": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "80": {
+          "selected": 3,
+          "total": 21,
+          "selection_rate": 0.14285714285714285
+        },
+        "81": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "82": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "83": {
+          "selected": 2,
+          "total": 23,
+          "selection_rate": 0.08695652173913043
+        },
+        "87": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "88": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "89": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "90": {
+          "selected": 4,
+          "total": 20,
+          "selection_rate": 0.2
+        },
+        "91": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "92": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "93": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "94": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "95": {
+          "selected": 1,
+          "total": 27,
+          "selection_rate": 0.037037037037037035
+        },
+        "97": {
+          "selected": 2,
+          "total": 18,
+          "selection_rate": 0.1111111111111111
+        },
+        "98": {
+          "selected": 0,
+          "total": 26,
+          "selection_rate": 0.0
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.01818181818181818,
+        "median": 0.24214352720450283,
+        "max": 0.504424778761062,
+        "zero_recall_classes": 0
+      }
+    },
+    "validation_predicted_class_percentile_top25": {
+      "novel_recall_by_raw_label": {
+        "0": {
+          "selected": 7,
+          "total": 106,
+          "recall": 0.0660377358490566
+        },
+        "3": {
+          "selected": 27,
+          "total": 101,
+          "recall": 0.26732673267326734
+        },
+        "8": {
+          "selected": 61,
+          "total": 113,
+          "recall": 0.5398230088495575
+        },
+        "11": {
+          "selected": 15,
+          "total": 99,
+          "recall": 0.15151515151515152
+        },
+        "12": {
+          "selected": 31,
+          "total": 91,
+          "recall": 0.34065934065934067
+        },
+        "14": {
+          "selected": 45,
+          "total": 123,
+          "recall": 0.36585365853658536
+        },
+        "18": {
+          "selected": 52,
+          "total": 120,
+          "recall": 0.43333333333333335
+        },
+        "19": {
+          "selected": 29,
+          "total": 94,
+          "recall": 0.30851063829787234
+        },
+        "23": {
+          "selected": 29,
+          "total": 101,
+          "recall": 0.2871287128712871
+        },
+        "25": {
+          "selected": 42,
+          "total": 97,
+          "recall": 0.4329896907216495
+        },
+        "26": {
+          "selected": 29,
+          "total": 112,
+          "recall": 0.25892857142857145
+        },
+        "28": {
+          "selected": 3,
+          "total": 110,
+          "recall": 0.02727272727272727
+        },
+        "31": {
+          "selected": 21,
+          "total": 108,
+          "recall": 0.19444444444444445
+        },
+        "32": {
+          "selected": 35,
+          "total": 121,
+          "recall": 0.2892561983471074
+        },
+        "37": {
+          "selected": 33,
+          "total": 118,
+          "recall": 0.2796610169491525
+        },
+        "39": {
+          "selected": 64,
+          "total": 113,
+          "recall": 0.5663716814159292
+        },
+        "41": {
+          "selected": 35,
+          "total": 103,
+          "recall": 0.33980582524271846
+        },
+        "43": {
+          "selected": 29,
+          "total": 114,
+          "recall": 0.2543859649122807
+        },
+        "44": {
+          "selected": 24,
+          "total": 97,
+          "recall": 0.24742268041237114
+        },
+        "46": {
+          "selected": 15,
+          "total": 104,
+          "recall": 0.14423076923076922
+        },
+        "48": {
+          "selected": 23,
+          "total": 105,
+          "recall": 0.21904761904761905
+        },
+        "49": {
+          "selected": 47,
+          "total": 110,
+          "recall": 0.42727272727272725
+        },
+        "50": {
+          "selected": 39,
+          "total": 104,
+          "recall": 0.375
+        },
+        "53": {
+          "selected": 8,
+          "total": 101,
+          "recall": 0.07920792079207921
+        },
+        "54": {
+          "selected": 23,
+          "total": 110,
+          "recall": 0.20909090909090908
+        },
+        "55": {
+          "selected": 19,
+          "total": 107,
+          "recall": 0.17757009345794392
+        },
+        "59": {
+          "selected": 37,
+          "total": 104,
+          "recall": 0.3557692307692308
+        },
+        "61": {
+          "selected": 13,
+          "total": 114,
+          "recall": 0.11403508771929824
+        },
+        "64": {
+          "selected": 37,
+          "total": 116,
+          "recall": 0.31896551724137934
+        },
+        "70": {
+          "selected": 17,
+          "total": 103,
+          "recall": 0.1650485436893204
+        },
+        "72": {
+          "selected": 35,
+          "total": 100,
+          "recall": 0.35
+        },
+        "73": {
+          "selected": 12,
+          "total": 124,
+          "recall": 0.0967741935483871
+        },
+        "74": {
+          "selected": 36,
+          "total": 101,
+          "recall": 0.3564356435643564
+        },
+        "75": {
+          "selected": 45,
+          "total": 113,
+          "recall": 0.39823008849557523
+        },
+        "78": {
+          "selected": 54,
+          "total": 137,
+          "recall": 0.39416058394160586
+        },
+        "84": {
+          "selected": 46,
+          "total": 97,
+          "recall": 0.4742268041237113
+        },
+        "85": {
+          "selected": 39,
+          "total": 108,
+          "recall": 0.3611111111111111
+        },
+        "86": {
+          "selected": 31,
+          "total": 104,
+          "recall": 0.2980769230769231
+        },
+        "96": {
+          "selected": 38,
+          "total": 113,
+          "recall": 0.336283185840708
+        },
+        "99": {
+          "selected": 38,
+          "total": 104,
+          "recall": 0.36538461538461536
+        }
+      },
+      "known_selection_rate_by_raw_label": {
+        "1": {
+          "selected": 1,
+          "total": 24,
+          "selection_rate": 0.041666666666666664
+        },
+        "2": {
+          "selected": 1,
+          "total": 23,
+          "selection_rate": 0.043478260869565216
+        },
+        "4": {
+          "selected": 4,
+          "total": 15,
+          "selection_rate": 0.26666666666666666
+        },
+        "5": {
+          "selected": 4,
+          "total": 17,
+          "selection_rate": 0.23529411764705882
+        },
+        "6": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "7": {
+          "selected": 4,
+          "total": 16,
+          "selection_rate": 0.25
+        },
+        "9": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "10": {
+          "selected": 2,
+          "total": 17,
+          "selection_rate": 0.11764705882352941
+        },
+        "13": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "15": {
+          "selected": 2,
+          "total": 19,
+          "selection_rate": 0.10526315789473684
+        },
+        "16": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "17": {
+          "selected": 0,
+          "total": 25,
+          "selection_rate": 0.0
+        },
+        "20": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "21": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "22": {
+          "selected": 2,
+          "total": 25,
+          "selection_rate": 0.08
+        },
+        "24": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "27": {
+          "selected": 4,
+          "total": 18,
+          "selection_rate": 0.2222222222222222
+        },
+        "29": {
+          "selected": 4,
+          "total": 18,
+          "selection_rate": 0.2222222222222222
+        },
+        "30": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "33": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "34": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "35": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "36": {
+          "selected": 1,
+          "total": 19,
+          "selection_rate": 0.05263157894736842
+        },
+        "38": {
+          "selected": 0,
+          "total": 16,
+          "selection_rate": 0.0
+        },
+        "40": {
+          "selected": 1,
+          "total": 13,
+          "selection_rate": 0.07692307692307693
+        },
+        "42": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "45": {
+          "selected": 5,
+          "total": 19,
+          "selection_rate": 0.2631578947368421
+        },
+        "47": {
+          "selected": 5,
+          "total": 22,
+          "selection_rate": 0.22727272727272727
+        },
+        "51": {
+          "selected": 0,
+          "total": 10,
+          "selection_rate": 0.0
+        },
+        "52": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "56": {
+          "selected": 2,
+          "total": 15,
+          "selection_rate": 0.13333333333333333
+        },
+        "57": {
+          "selected": 0,
+          "total": 20,
+          "selection_rate": 0.0
+        },
+        "58": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "60": {
+          "selected": 0,
+          "total": 14,
+          "selection_rate": 0.0
+        },
+        "62": {
+          "selected": 2,
+          "total": 13,
+          "selection_rate": 0.15384615384615385
+        },
+        "63": {
+          "selected": 2,
+          "total": 11,
+          "selection_rate": 0.18181818181818182
+        },
+        "65": {
+          "selected": 2,
+          "total": 16,
+          "selection_rate": 0.125
+        },
+        "66": {
+          "selected": 3,
+          "total": 27,
+          "selection_rate": 0.1111111111111111
+        },
+        "67": {
+          "selected": 1,
+          "total": 18,
+          "selection_rate": 0.05555555555555555
+        },
+        "68": {
+          "selected": 0,
+          "total": 22,
+          "selection_rate": 0.0
+        },
+        "69": {
+          "selected": 0,
+          "total": 17,
+          "selection_rate": 0.0
+        },
+        "71": {
+          "selected": 0,
+          "total": 15,
+          "selection_rate": 0.0
+        },
+        "76": {
+          "selected": 0,
+          "total": 18,
+          "selection_rate": 0.0
+        },
+        "77": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "79": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "80": {
+          "selected": 4,
+          "total": 21,
+          "selection_rate": 0.19047619047619047
+        },
+        "81": {
+          "selected": 1,
+          "total": 14,
+          "selection_rate": 0.07142857142857142
+        },
+        "82": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "83": {
+          "selected": 2,
+          "total": 23,
+          "selection_rate": 0.08695652173913043
+        },
+        "87": {
+          "selected": 2,
+          "total": 21,
+          "selection_rate": 0.09523809523809523
+        },
+        "88": {
+          "selected": 2,
+          "total": 20,
+          "selection_rate": 0.1
+        },
+        "89": {
+          "selected": 2,
+          "total": 24,
+          "selection_rate": 0.08333333333333333
+        },
+        "90": {
+          "selected": 4,
+          "total": 20,
+          "selection_rate": 0.2
+        },
+        "91": {
+          "selected": 1,
+          "total": 21,
+          "selection_rate": 0.047619047619047616
+        },
+        "92": {
+          "selected": 0,
+          "total": 23,
+          "selection_rate": 0.0
+        },
+        "93": {
+          "selected": 1,
+          "total": 15,
+          "selection_rate": 0.06666666666666667
+        },
+        "94": {
+          "selected": 0,
+          "total": 13,
+          "selection_rate": 0.0
+        },
+        "95": {
+          "selected": 1,
+          "total": 27,
+          "selection_rate": 0.037037037037037035
+        },
+        "97": {
+          "selected": 2,
+          "total": 18,
+          "selection_rate": 0.1111111111111111
+        },
+        "98": {
+          "selected": 0,
+          "total": 26,
+          "selection_rate": 0.0
+        }
+      },
+      "novel_recall_summary": {
+        "classes": 40,
+        "min": 0.02727272727272727,
+        "median": 0.3032937806873977,
+        "max": 0.5663716814159292,
+        "zero_recall_classes": 0
+      }
+    }
+  }
+}

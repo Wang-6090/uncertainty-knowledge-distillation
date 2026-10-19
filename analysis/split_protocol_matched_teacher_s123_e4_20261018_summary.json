@@ -1,0 +1,157 @@
+{
+  "question": "How sensitive are known/unknown results to CIFAR-100 split semantics?",
+  "single_changed_factor": "known_novel_split_protocol_with_protocol_matched_teacher",
+  "estimand": "end-to-end protocol sensitivity under matched teacher/student recipes; not split-only causal effect",
+  "seed": 123,
+  "teacher_epochs": 5,
+  "epochs": 4,
+  "test_labels_used_for_training_selection_or_calibration": false,
+  "source_teacher_config": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\semantic_isolated_full_s44_disjointcal_teacher\\train_teacher_config.json",
+  "source_train_config": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\vos_source_gradient_compare_s44_e4_20261018_detached\\train_student_config.json",
+  "source_discover_config": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\vos_source_gradient_compare_s44_e4_20261018_detached_discover\\discover_config.json",
+  "arms": {
+    "semantic_isolated": {
+      "split": {
+        "protocol": "semantic_isolated",
+        "known_class_count": 60,
+        "novel_class_count": 40,
+        "known_coarse_superclass_count": 12,
+        "novel_coarse_superclass_count": 8,
+        "coarse_superclasses_shared": 0,
+        "metadata": {
+          "known_coarse_classes": [
+            1,
+            2,
+            3,
+            4,
+            6,
+            7,
+            9,
+            13,
+            14,
+            16,
+            17,
+            19
+          ],
+          "novel_coarse_classes": [
+            0,
+            5,
+            8,
+            10,
+            11,
+            12,
+            15,
+            18
+          ]
+        }
+      },
+      "train_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\split_protocol_matched_teacher_s123_e4_20261018_semantic_isolated_student",
+      "discover_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\split_protocol_matched_teacher_s123_e4_20261018_semantic_isolated_discover",
+      "metrics": {
+        "auroc": 0.8904756250000001,
+        "aupr": 0.8349582967994476,
+        "fpr95": 0.4088333333333333,
+        "oscr": 0.63756875,
+        "known_accept_rate": 0.9561666666666667,
+        "unknown_reject_rate": 0.4375,
+        "known_class_accuracy_after_accept": 0.7082098657835105,
+        "unknown_false_accept": 2250,
+        "known_rejected": 263
+      },
+      "score_distribution": {
+        "known": {
+          "count": 6000,
+          "mean": -4.823009605874618,
+          "std": 5.577132743270991,
+          "q05": -14.102333593368531,
+          "q25": -8.420586347579956,
+          "median": -4.740675449371338,
+          "q75": -0.93160380423069,
+          "q95": 3.9422992229461675
+        },
+        "unknown": {
+          "count": 4000,
+          "mean": 3.4902051203399895,
+          "std": 3.970076869911965,
+          "q05": -3.3936160087585447,
+          "q25": 1.1415181159973145,
+          "median": 3.7771105766296387,
+          "q75": 6.1053221225738525,
+          "q95": 9.44511842727661
+        },
+        "mean_gap_unknown_minus_known": 8.313214726214607,
+        "median_gap_unknown_minus_known": 8.517786026000977,
+        "ks_distance": 0.6234999999999999,
+        "overlap_unknown_below_known_q95": 0.51975,
+        "overlap_known_above_unknown_q05": 0.4088333333333333,
+        "threshold": 4.3153768777847255,
+        "known_above_threshold": 0.043833333333333335,
+        "unknown_above_threshold": 0.4375
+      },
+      "threshold_policy": "known_val_known_coverage",
+      "target_known_coverage": 0.95,
+      "calibration_known_accept_rate": 0.9492307692307692
+    },
+    "semantic_hard": {
+      "split": {
+        "protocol": "semantic_hard",
+        "known_class_count": 60,
+        "novel_class_count": 40,
+        "known_coarse_superclass_count": 20,
+        "novel_coarse_superclass_count": 20,
+        "coarse_superclasses_shared": 20,
+        "metadata": {
+          "known_per_coarse": 3,
+          "novel_per_coarse": 2
+        }
+      },
+      "train_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\split_protocol_matched_teacher_s123_e4_20261018_semantic_hard_student",
+      "discover_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\split_protocol_matched_teacher_s123_e4_20261018_semantic_hard_discover",
+      "metrics": {
+        "auroc": 0.7811089375000001,
+        "aupr": 0.6752074573047373,
+        "fpr95": 0.6468333333333334,
+        "oscr": 0.5902458749999999,
+        "known_accept_rate": 0.95,
+        "unknown_reject_rate": 0.24525,
+        "known_class_accuracy_after_accept": 0.7268421052631578,
+        "unknown_false_accept": 3019,
+        "known_rejected": 300
+      },
+      "score_distribution": {
+        "known": {
+          "count": 6000,
+          "mean": -1.078331171452999,
+          "std": 4.147104428628391,
+          "q05": -8.611815690994263,
+          "q25": -3.6689541339874268,
+          "median": -0.723158061504364,
+          "q75": 1.7753735184669495,
+          "q95": 5.179118871688844
+        },
+        "unknown": {
+          "count": 4000,
+          "mean": 2.9783863778188824,
+          "std": 3.1863999215660765,
+          "q05": -2.3760743021965025,
+          "q25": 0.9137811809778214,
+          "median": 3.046816349029541,
+          "q75": 5.128365397453308,
+          "q95": 8.139574623107904
+        },
+        "mean_gap_unknown_minus_known": 4.056717549271881,
+        "median_gap_unknown_minus_known": 3.769974410533905,
+        "ks_distance": 0.41825,
+        "overlap_unknown_below_known_q95": 0.7545,
+        "overlap_known_above_unknown_q05": 0.6468333333333334,
+        "threshold": 5.179923033714289,
+        "known_above_threshold": 0.05,
+        "unknown_above_threshold": 0.24525
+      },
+      "threshold_policy": "known_val_known_coverage",
+      "target_known_coverage": 0.95,
+      "calibration_known_accept_rate": 0.9493865030674846
+    }
+  },
+  "non_split_teacher_student_and_discovery_config_match": true
+}

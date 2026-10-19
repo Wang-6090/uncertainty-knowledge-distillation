@@ -1,0 +1,69 @@
+{
+  "protocol": {
+    "source_train": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\knn_pu_boundary_control_s44_e4_pure\\train_student_config.json",
+    "source_discover": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\knn_pu_boundary_control_s44_e4_pure_discover\\discover_config.json",
+    "seed": 44,
+    "epochs": 4,
+    "known_prior": 0.2,
+    "candidate_gating": false,
+    "cross_view_gating": false,
+    "single_changed_factor": "discovery_knn_risk",
+    "test_labels_used_for_training_or_selection": false
+  },
+  "arms": {
+    "naive_mixed": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\knn_pu_ungated_s44_e4_naive_mixed",
+      "config": {
+        "discovery_feature_candidate_gating": false,
+        "discovery_cross_view_gating": false,
+        "discovery_knn_risk": "naive_mixed",
+        "discovery_knn_known_prior": 0.2,
+        "alpha_discovery_knn_boundary": 0.1,
+        "discovery_pool_mode": "mixed",
+        "matched_pool_size": 5400
+      },
+      "last_epoch": {
+        "discovery_knn_boundary": 0.0920368617552298,
+        "feature_candidate_ratio": 0.0,
+        "feature_candidate_known_fraction": 0.0
+      },
+      "metrics": {
+        "auroc": 0.9023737083333332,
+        "aupr": 0.8429575056728491,
+        "fpr95": 0.3465,
+        "oscr": 0.6596303750000001,
+        "known_accept_rate": 0.9476666666666667,
+        "unknown_reject_rate": 0.495,
+        "known_rejected": 314,
+        "unknown_false_accept": 2020
+      }
+    },
+    "hard_nnpu": {
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\knn_pu_ungated_s44_e4_hard_nnpu",
+      "config": {
+        "discovery_feature_candidate_gating": false,
+        "discovery_cross_view_gating": false,
+        "discovery_knn_risk": "hard_nnpu",
+        "discovery_knn_known_prior": 0.2,
+        "alpha_discovery_knn_boundary": 0.1,
+        "discovery_pool_mode": "mixed",
+        "matched_pool_size": 5400
+      },
+      "last_epoch": {
+        "discovery_knn_boundary": 0.07261333490963336,
+        "feature_candidate_ratio": 0.0,
+        "feature_candidate_known_fraction": 0.0
+      },
+      "metrics": {
+        "auroc": 0.9015595416666667,
+        "aupr": 0.8396596399379845,
+        "fpr95": 0.3476666666666667,
+        "oscr": 0.6630143749999999,
+        "known_accept_rate": 0.9461666666666667,
+        "unknown_reject_rate": 0.507,
+        "known_rejected": 323,
+        "unknown_false_accept": 1972
+      }
+    }
+  }
+}

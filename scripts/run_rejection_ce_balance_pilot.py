@@ -54,6 +54,16 @@ def main() -> None:
             "and sibling discover directory provide the fixed protocol."
         ),
     )
+    parser.add_argument(
+        "--split-path",
+        default="",
+        help="Optional protocol split override applied identically to train and discovery.",
+    )
+    parser.add_argument(
+        "--teacher-ckpt",
+        default="",
+        help="Optional split-matched teacher checkpoint override for student training.",
+    )
     parser.add_argument("--tag", default="", help="Optional output-name suffix.")
     parser.add_argument(
         "--train-only",
@@ -96,6 +106,10 @@ def main() -> None:
     if not student_ckpt.is_file():
         train_args = load_args(source_train, "train_student", treatment_dir, args.seed, args.epochs)
         train_args.student_ckpt = str(student_ckpt)
+        if args.split_path:
+            train_args.split_path = str(Path(args.split_path).resolve())
+        if args.teacher_ckpt:
+            train_args.teacher_ckpt = str(Path(args.teacher_ckpt).resolve())
         train_args.alpha_rejection_known_ce = float(args.ce_weight)
         train_args.rejection_known_ce_decay_start_epoch = int(args.decay_start_epoch)
         train_args.rejection_known_ce_decay_epochs = int(args.decay_epochs)
@@ -115,6 +129,8 @@ def main() -> None:
             args.epochs,
         )
         discover_args.student_ckpt = str(student_ckpt)
+        if args.split_path:
+            discover_args.split_path = str(Path(args.split_path).resolve())
         discover(discover_args)
 
 

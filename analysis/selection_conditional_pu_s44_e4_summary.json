@@ -1,0 +1,75 @@
+{
+  "protocol": {
+    "source_train": "runs\\knn_pu_boundary_control_s44_e4_pure\\train_student_config.json",
+    "source_discover": "runs\\knn_pu_boundary_control_s44_e4_pure_discover\\discover_config.json",
+    "seed": 44,
+    "epochs": 4,
+    "tag": "selection_conditional_pu_s44_e4"
+  },
+  "arms": [
+    {
+      "label": "historical",
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\selection_conditional_pu_s44_e4_historical",
+      "metrics": {
+        "auroc": 0.9004834166666666,
+        "aupr": 0.8368402460927119,
+        "fpr95": 0.3555,
+        "oscr": 0.6579688333333333,
+        "ks": null,
+        "known_accept_rate": 0.9578333333333333,
+        "unknown_reject_rate": 0.4245,
+        "accepted_known_accuracy": null,
+        "score_overlap": null
+      },
+      "derived_metrics": {
+        "unknown_reject_rate": 0.4245,
+        "accepted_known_accuracy": 0.7221158865495041,
+        "score_overlap": 0.536,
+        "known_above_threshold": 0.042166666666666665,
+        "unknown_above_threshold": 0.4245,
+        "mean_gap_unknown_minus_known": 9.047323474069437,
+        "median_gap_unknown_minus_known": 8.923837900161743,
+        "ks_distance": 0.6571666666666667
+      },
+      "last_train": {
+        "discovery_knn_boundary": 0.0008003375527483445,
+        "feature_candidate_ratio": 0.25,
+        "discovery_knn_mixed_selection_rate": 0.0,
+        "discovery_knn_known_selection_rate": 0.0,
+        "discovery_knn_effective_prior": 0.20000000000000123
+      }
+    },
+    {
+      "label": "conditional",
+      "work_dir": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\selection_conditional_pu_s44_e4_conditional",
+      "metrics": {
+        "auroc": 0.8990614583333333,
+        "aupr": 0.8383093280190285,
+        "fpr95": 0.3631666666666667,
+        "oscr": 0.6590413749999999,
+        "ks": null,
+        "known_accept_rate": 0.9535,
+        "unknown_reject_rate": 0.4575,
+        "accepted_known_accuracy": null,
+        "score_overlap": null
+      },
+      "derived_metrics": {
+        "unknown_reject_rate": 0.4575,
+        "accepted_known_accuracy": 0.7260968362174445,
+        "score_overlap": 0.51325,
+        "known_above_threshold": 0.0465,
+        "unknown_above_threshold": 0.4575,
+        "mean_gap_unknown_minus_known": 8.824947644785047,
+        "median_gap_unknown_minus_known": 9.447917222976685,
+        "ks_distance": 0.6472500000000001
+      },
+      "last_train": {
+        "discovery_knn_boundary": 0.018336079740137966,
+        "feature_candidate_ratio": 0.25,
+        "discovery_knn_mixed_selection_rate": 0.25,
+        "discovery_knn_known_selection_rate": 0.25,
+        "discovery_knn_effective_prior": 0.20000000298023224
+      }
+    }
+  ]
+}

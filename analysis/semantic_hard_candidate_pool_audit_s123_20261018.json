@@ -1,0 +1,63 @@
+{
+  "protocol": {
+    "seed": 123,
+    "pool_size": 5400,
+    "known_fraction": 0.2,
+    "selector_ratio": 0.25,
+    "selector_mode_from_config": "entropy_uncertainty",
+    "support_k": 5,
+    "support_quantile": 0.95,
+    "labels_used_only_for_audit": true
+  },
+  "candidate_audit": {
+    "shared_entropy_uncertainty": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.11851851851851852,
+      "unknown_purity": 0.8814814814814815,
+      "unknown_recall": 0.27546296296296297
+    },
+    "shared_consensus": {
+      "selected": 1055,
+      "selected_ratio": 0.19537037037037036,
+      "known_contamination": 0.11943127962085308,
+      "unknown_purity": 0.8805687203791469,
+      "unknown_recall": 0.2150462962962963
+    },
+    "shared_prototype_distance": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.1288888888888889,
+      "unknown_purity": 0.8711111111111111,
+      "unknown_recall": 0.2722222222222222
+    },
+    "shared_distance_consensus": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.10962962962962963,
+      "unknown_purity": 0.8903703703703704,
+      "unknown_recall": 0.27824074074074073
+    },
+    "prototype_boundary": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.09333333333333334,
+      "unknown_purity": 0.9066666666666666,
+      "unknown_recall": 0.2833333333333333
+    },
+    "support_boundary": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.10518518518518519,
+      "unknown_purity": 0.8948148148148148,
+      "unknown_recall": 0.2796296296296296
+    },
+    "support_distance": {
+      "selected": 1350,
+      "selected_ratio": 0.25,
+      "known_contamination": 0.10444444444444445,
+      "unknown_purity": 0.8955555555555555,
+      "unknown_recall": 0.2798611111111111
+    }
+  }
+}

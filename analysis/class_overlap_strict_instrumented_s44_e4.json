@@ -1,0 +1,1009 @@
+{
+  "warning": "Retrospective test-label diagnostic only; not for model or threshold selection.",
+  "discover_dir": "runs\\strict_instrumented_s44_e4_feature_rejector",
+  "threshold": 3.9067947864532444,
+  "known_class_summary": [
+    {
+      "label": 0,
+      "known": true,
+      "count": 100,
+      "score_mean": -9.622768038511277,
+      "score_median": -9.980605602264404,
+      "score_q05": -15.318375396728515,
+      "score_q95": -3.8855074405670202,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 1,
+      "known": true,
+      "count": 100,
+      "score_mean": -4.3726951384544375,
+      "score_median": -4.726930141448975,
+      "score_q05": -10.874487686157227,
+      "score_q95": 3.275109159946439,
+      "reject_rate_at_report_threshold": 0.05
+    },
+    {
+      "label": 2,
+      "known": true,
+      "count": 100,
+      "score_mean": -9.785632417201995,
+      "score_median": -10.067001819610596,
+      "score_q05": -16.773744201660158,
+      "score_q95": -0.5890649497509004,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 5,
+      "known": true,
+      "count": 100,
+      "score_mean": -5.6246012020111085,
+      "score_median": -5.60312294960022,
+      "score_q05": -12.108871746063233,
+      "score_q95": 1.929725968837736,
+      "reject_rate_at_report_threshold": 0.02
+    },
+    {
+      "label": 6,
+      "known": true,
+      "count": 100,
+      "score_mean": -9.768793758153915,
+      "score_median": -9.546167850494385,
+      "score_q05": -20.809101581573486,
+      "score_q95": 0.5413330197334276,
+      "reject_rate_at_report_threshold": 0.02
+    },
+    {
+      "label": 7,
+      "known": true,
+      "count": 100,
+      "score_mean": -6.366950464248657,
+      "score_median": -6.298853874206543,
+      "score_q05": -15.987846231460571,
+      "score_q95": 4.144379758834838,
+      "reject_rate_at_report_threshold": 0.06
+    },
+    {
+      "label": 9,
+      "known": true,
+      "count": 100,
+      "score_mean": -4.963675317764282,
+      "score_median": -6.074794769287109,
+      "score_q05": -9.704509449005126,
+      "score_q95": 2.2464109897613493,
+      "reject_rate_at_report_threshold": 0.04
+    },
+    {
+      "label": 10,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.4186165136098863,
+      "score_median": -3.8072484731674194,
+      "score_q05": -8.869846963882447,
+      "score_q95": 2.924163866043088,
+      "reject_rate_at_report_threshold": 0.04
+    },
+    {
+      "label": 11,
+      "known": true,
+      "count": 100,
+      "score_mean": -9.111285712718963,
+      "score_median": -9.794473648071289,
+      "score_q05": -15.985489654541015,
+      "score_q95": 0.005432420969009294,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 12,
+      "known": true,
+      "count": 100,
+      "score_mean": -1.3955218422412872,
+      "score_median": -1.7986619472503662,
+      "score_q05": -7.723450946807861,
+      "score_q95": 5.720948648452757,
+      "reject_rate_at_report_threshold": 0.14
+    },
+    {
+      "label": 14,
+      "known": true,
+      "count": 100,
+      "score_mean": -9.609065021276473,
+      "score_median": -9.111714363098145,
+      "score_q05": -22.587578868865968,
+      "score_q95": 1.1180134415626486,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 16,
+      "known": true,
+      "count": 100,
+      "score_mean": -2.9715737962722777,
+      "score_median": -3.4116053581237793,
+      "score_q05": -8.263675689697266,
+      "score_q95": 3.8461502432823154,
+      "reject_rate_at_report_threshold": 0.05
+    },
+    {
+      "label": 17,
+      "known": true,
+      "count": 100,
+      "score_mean": -8.482073748111725,
+      "score_median": -8.860416412353516,
+      "score_q05": -17.688263511657716,
+      "score_q95": 0.8250713109970091,
+      "reject_rate_at_report_threshold": 0.0
+    },
+    {
+      "label": 18,
+      "known": true,
+      "count": 100,
+      "score_mean": -4.97928139090538,
+      "score_median": -4.75101375579834,
+      "score_q05": -13.048254680633544,
+      "score_q95": 2.655400872230529,
+      "reject_rate_at_report_threshold": 0.02
+    },
+    {
+      "label": 20,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.3243003422021866,
+      "score_median": -3.7748794555664062,
+      "score_q05": -7.297874307632446,
+      "score_q95": 3.2742944240570067,
+      "reject_rate_at_report_threshold": 0.02
+    },
+    {
+      "label": 24,
+      "known": true,
+      "count": 100,
+      "score_mean": -5.284169009923935,
+      "score_median": -5.804275035858154,
+      "score_q05": -11.870413827896119,
+      "score_q95": 3.7614699721336344,
+      "reject_rate_at_report_threshold": 0.05
+    },
+    {
+      "label": 25,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.2072555661201476,
+      "score_median": -3.800079584121704,
+      "score_q05": -10.200737810134887,
+      "score_q95": 4.4619219303131095,
+      "reject_rate_at_report_threshold": 0.07
+    },
+    {
+      "label": 26,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.521750274300575,
+      "score_median": -3.6503543853759766,
+      "score_q05": -11.920772886276245,
+      "score_q95": 3.1955175995826655,
+      "reject_rate_at_report_threshold": 0.05
+    },
+    {
+      "label": 28,
+      "known": true,
+      "count": 100,
+      "score_mean": -4.573656438589096,
+      "score_median": -4.9202728271484375,
+      "score_q05": -8.688254880905152,
+      "score_q95": -0.42990415692329526,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 32,
+      "known": true,
+      "count": 100,
+      "score_mean": -4.637880429029464,
+      "score_median": -4.010776877403259,
+      "score_q05": -14.015629386901855,
+      "score_q95": 4.326411008834838,
+      "reject_rate_at_report_threshold": 0.06
+    },
+    {
+      "label": 35,
+      "known": true,
+      "count": 100,
+      "score_mean": -8.538881464004517,
+      "score_median": -8.854114055633545,
+      "score_q05": -14.551379108428955,
+      "score_q95": -0.6862759351730372,
+      "reject_rate_at_report_threshold": 0.0
+    },
+    {
+      "label": 36,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.148153052330017,
+      "score_median": -3.069445252418518,
+      "score_q05": -8.118267250061034,
+      "score_q95": 2.392595171928403,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 37,
+      "known": true,
+      "count": 100,
+      "score_mean": -2.193005166053772,
+      "score_median": -2.3434298038482666,
+      "score_q05": -8.439472007751466,
+      "score_q95": 3.8697479844093317,
+      "reject_rate_at_report_threshold": 0.05
+    },
+    {
+      "label": 41,
+      "known": true,
+      "count": 100,
+      "score_mean": -2.889652291536331,
+      "score_median": -3.087869644165039,
+      "score_q05": -8.511922025680542,
+      "score_q95": 4.312083482742309,
+      "reject_rate_at_report_threshold": 0.06
+    },
+    {
+      "label": 45,
+      "known": true,
+      "count": 100,
+      "score_mean": -2.716713147163391,
+      "score_median": -2.571378469467163,
+      "score_q05": -11.768334245681762,
+      "score_q95": 6.531189346313476,
+      "reject_rate_at_report_threshold": 0.16
+    },
+    {
+      "label": 46,
+      "known": true,
+      "count": 100,
+      "score_mean": -8.330533313751221,
+      "score_median": -8.869498252868652,
+      "score_q05": -17.21522855758667,
+      "score_q95": 3.5192857384681675,
+      "reject_rate_at_report_threshold": 0.05
+    },
+    {
+      "label": 47,
+      "known": true,
+      "count": 100,
+      "score_mean": -7.238529303073883,
+      "score_median": -7.931789875030518,
+      "score_q05": -12.230923414230347,
+      "score_q95": -1.4546119153499615,
+      "reject_rate_at_report_threshold": 0.0
+    },
+    {
+      "label": 50,
+      "known": true,
+      "count": 100,
+      "score_mean": -0.17040147125720978,
+      "score_median": -0.3815404176712036,
+      "score_q05": -5.395374178886414,
+      "score_q95": 5.332795619964598,
+      "reject_rate_at_report_threshold": 0.11
+    },
+    {
+      "label": 51,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.582805715799332,
+      "score_median": -3.2424062490463257,
+      "score_q05": -12.862612295150756,
+      "score_q95": 4.106273412704465,
+      "reject_rate_at_report_threshold": 0.06
+    },
+    {
+      "label": 52,
+      "known": true,
+      "count": 100,
+      "score_mean": -6.409378395080567,
+      "score_median": -6.797154426574707,
+      "score_q05": -10.70485486984253,
+      "score_q95": -0.7050363898277292,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 53,
+      "known": true,
+      "count": 100,
+      "score_mean": -7.504650149345398,
+      "score_median": -7.074864864349365,
+      "score_q05": -11.900277423858642,
+      "score_q95": -1.3508545756340031,
+      "reject_rate_at_report_threshold": 0.0
+    },
+    {
+      "label": 54,
+      "known": true,
+      "count": 100,
+      "score_mean": -13.325217360258103,
+      "score_median": -13.665865421295166,
+      "score_q05": -23.500681018829347,
+      "score_q95": -1.6189414083957694,
+      "reject_rate_at_report_threshold": 0.0
+    },
+    {
+      "label": 56,
+      "known": true,
+      "count": 100,
+      "score_mean": -7.458127641677857,
+      "score_median": -7.23428201675415,
+      "score_q05": -14.91582431793213,
+      "score_q95": 1.5276716351509045,
+      "reject_rate_at_report_threshold": 0.02
+    },
+    {
+      "label": 57,
+      "known": true,
+      "count": 100,
+      "score_mean": -16.19012889742851,
+      "score_median": -7.57457160949707,
+      "score_q05": -72.60768585205078,
+      "score_q95": -0.3012055277824434,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 59,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.2157954323291777,
+      "score_median": -3.717607259750366,
+      "score_q05": -8.356141090393066,
+      "score_q95": 3.7224837899208056,
+      "reject_rate_at_report_threshold": 0.05
+    },
+    {
+      "label": 61,
+      "known": true,
+      "count": 100,
+      "score_mean": -4.306850621700287,
+      "score_median": -3.196339726448059,
+      "score_q05": -9.775637865066528,
+      "score_q95": 1.174422585964197,
+      "reject_rate_at_report_threshold": 0.02
+    },
+    {
+      "label": 62,
+      "known": true,
+      "count": 100,
+      "score_mean": -13.100632662773132,
+      "score_median": -14.628018856048584,
+      "score_q05": -19.644770622253418,
+      "score_q95": -3.463408219814301,
+      "reject_rate_at_report_threshold": 0.0
+    },
+    {
+      "label": 65,
+      "known": true,
+      "count": 100,
+      "score_mean": -1.1592864900827409,
+      "score_median": -1.8619565963745117,
+      "score_q05": -7.672883462905884,
+      "score_q95": 6.215148496627807,
+      "reject_rate_at_report_threshold": 0.15
+    },
+    {
+      "label": 67,
+      "known": true,
+      "count": 100,
+      "score_mean": -1.216229466199875,
+      "score_median": -0.9922759532928467,
+      "score_q05": -7.225932264328003,
+      "score_q95": 3.426006817817688,
+      "reject_rate_at_report_threshold": 0.04
+    },
+    {
+      "label": 68,
+      "known": true,
+      "count": 100,
+      "score_mean": -5.2966719168424605,
+      "score_median": -5.237812757492065,
+      "score_q05": -12.527597856521606,
+      "score_q95": 2.319483256340027,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 69,
+      "known": true,
+      "count": 100,
+      "score_mean": -4.65104306101799,
+      "score_median": -5.485929727554321,
+      "score_q05": -11.059576225280761,
+      "score_q95": 5.567505455017089,
+      "reject_rate_at_report_threshold": 0.08
+    },
+    {
+      "label": 70,
+      "known": true,
+      "count": 100,
+      "score_mean": -10.598970217704773,
+      "score_median": -11.021005153656006,
+      "score_q05": -18.754450607299805,
+      "score_q95": -1.3094972729682923,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 73,
+      "known": true,
+      "count": 100,
+      "score_mean": 1.0947776782512664,
+      "score_median": 1.0809673070907593,
+      "score_q05": -2.2365794658660887,
+      "score_q95": 5.109211206436157,
+      "reject_rate_at_report_threshold": 0.11
+    },
+    {
+      "label": 74,
+      "known": true,
+      "count": 100,
+      "score_mean": 0.4057633924484253,
+      "score_median": 0.5891556739807129,
+      "score_q05": -3.9326897501945495,
+      "score_q95": 4.178797864913939,
+      "reject_rate_at_report_threshold": 0.08
+    },
+    {
+      "label": 76,
+      "known": true,
+      "count": 100,
+      "score_mean": -5.106485207080841,
+      "score_median": -5.901386976242065,
+      "score_q05": -10.275811243057252,
+      "score_q95": 2.578679561614988,
+      "reject_rate_at_report_threshold": 0.04
+    },
+    {
+      "label": 77,
+      "known": true,
+      "count": 100,
+      "score_mean": -4.290872949361801,
+      "score_median": -4.455090045928955,
+      "score_q05": -10.336227178573608,
+      "score_q95": 2.329548573493957,
+      "reject_rate_at_report_threshold": 0.0
+    },
+    {
+      "label": 79,
+      "known": true,
+      "count": 100,
+      "score_mean": -8.912499480247497,
+      "score_median": -9.608679294586182,
+      "score_q05": -18.35461015701294,
+      "score_q95": 3.251050615310669,
+      "reject_rate_at_report_threshold": 0.04
+    },
+    {
+      "label": 80,
+      "known": true,
+      "count": 100,
+      "score_mean": 0.7979097282886505,
+      "score_median": 0.845955491065979,
+      "score_q05": -3.783184826374054,
+      "score_q95": 4.830128526687622,
+      "reject_rate_at_report_threshold": 0.1
+    },
+    {
+      "label": 81,
+      "known": true,
+      "count": 100,
+      "score_mean": -0.21275179982185363,
+      "score_median": -0.1188662052154541,
+      "score_q05": -5.053906774520874,
+      "score_q95": 4.368121957778929,
+      "reject_rate_at_report_threshold": 0.08
+    },
+    {
+      "label": 82,
+      "known": true,
+      "count": 100,
+      "score_mean": -9.079170416593552,
+      "score_median": -9.354037761688232,
+      "score_q05": -15.050126457214356,
+      "score_q95": 0.24507510662078857,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 83,
+      "known": true,
+      "count": 100,
+      "score_mean": -10.354460018873215,
+      "score_median": -11.081322193145752,
+      "score_q05": -18.19927587509155,
+      "score_q95": -1.839466816186906,
+      "reject_rate_at_report_threshold": 0.0
+    },
+    {
+      "label": 84,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.7264695131778716,
+      "score_median": -3.6787763833999634,
+      "score_q05": -12.455071830749512,
+      "score_q95": 4.756134843826294,
+      "reject_rate_at_report_threshold": 0.08
+    },
+    {
+      "label": 85,
+      "known": true,
+      "count": 100,
+      "score_mean": -1.6473004627227783,
+      "score_median": -1.9187135696411133,
+      "score_q05": -6.608930158615112,
+      "score_q95": 4.179002571105956,
+      "reject_rate_at_report_threshold": 0.1
+    },
+    {
+      "label": 89,
+      "known": true,
+      "count": 100,
+      "score_mean": -0.3514542281627655,
+      "score_median": -0.47694486379623413,
+      "score_q05": -5.031835579872131,
+      "score_q95": 5.343094062805173,
+      "reject_rate_at_report_threshold": 0.11
+    },
+    {
+      "label": 91,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.9380597323179245,
+      "score_median": -4.617520332336426,
+      "score_q05": -9.238200664520264,
+      "score_q95": 3.5643859267234745,
+      "reject_rate_at_report_threshold": 0.05
+    },
+    {
+      "label": 92,
+      "known": true,
+      "count": 100,
+      "score_mean": -12.36937560558319,
+      "score_median": -13.864415168762207,
+      "score_q05": -20.322781562805176,
+      "score_q95": -1.0347862601280218,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 94,
+      "known": true,
+      "count": 100,
+      "score_mean": -5.905275928974151,
+      "score_median": -6.243565559387207,
+      "score_q05": -9.849328184127808,
+      "score_q95": 0.4264193892478906,
+      "reject_rate_at_report_threshold": 0.02
+    },
+    {
+      "label": 96,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.1187140733003615,
+      "score_median": -3.3323862552642822,
+      "score_q05": -8.178743934631347,
+      "score_q95": 3.071742677688598,
+      "reject_rate_at_report_threshold": 0.03
+    },
+    {
+      "label": 98,
+      "known": true,
+      "count": 100,
+      "score_mean": -6.29365190923214,
+      "score_median": -6.869067192077637,
+      "score_q05": -13.402005910873413,
+      "score_q95": 0.9215339183807367,
+      "reject_rate_at_report_threshold": 0.01
+    },
+    {
+      "label": 99,
+      "known": true,
+      "count": 100,
+      "score_mean": -3.1490382635593415,
+      "score_median": -1.3224732875823975,
+      "score_q05": -16.775813484191893,
+      "score_q95": 5.009096097946167,
+      "reject_rate_at_report_threshold": 0.11
+    }
+  ],
+  "hardest_unknown_classes": [
+    {
+      "label": 22,
+      "known": false,
+      "count": 100,
+      "score_mean": 0.5142790234088898,
+      "score_median": 0.3773442506790161,
+      "score_q05": -4.237455415725708,
+      "score_q95": 6.728453254699705,
+      "reject_rate_at_report_threshold": 0.16
+    },
+    {
+      "label": 4,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.02157807469368,
+      "score_median": 2.2187235355377197,
+      "score_q05": -1.8565314590930937,
+      "score_q95": 6.574048280715942,
+      "reject_rate_at_report_threshold": 0.23
+    },
+    {
+      "label": 40,
+      "known": false,
+      "count": 100,
+      "score_mean": 0.28985593378543856,
+      "score_median": 0.6195404529571533,
+      "score_q05": -7.323885917663574,
+      "score_q95": 7.2356360912322994,
+      "reject_rate_at_report_threshold": 0.23
+    },
+    {
+      "label": 63,
+      "known": false,
+      "count": 100,
+      "score_mean": 1.4754661786556245,
+      "score_median": 2.288377523422241,
+      "score_q05": -3.9800961732864373,
+      "score_q95": 6.3327834606170645,
+      "reject_rate_at_report_threshold": 0.24
+    },
+    {
+      "label": 64,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.483112555742264,
+      "score_median": 2.4545390605926514,
+      "score_q05": -1.3480162858963012,
+      "score_q95": 7.199815559387206,
+      "reject_rate_at_report_threshold": 0.25
+    },
+    {
+      "label": 93,
+      "known": false,
+      "count": 100,
+      "score_mean": 1.88691515147686,
+      "score_median": 1.9815702438354492,
+      "score_q05": -4.222557306289673,
+      "score_q95": 6.939681434631347,
+      "reject_rate_at_report_threshold": 0.29
+    },
+    {
+      "label": 87,
+      "known": false,
+      "count": 100,
+      "score_mean": 1.5530135703086854,
+      "score_median": 1.306437611579895,
+      "score_q05": -4.112450623512268,
+      "score_q95": 7.7443284511566155,
+      "reject_rate_at_report_threshold": 0.3
+    },
+    {
+      "label": 55,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.597562471628189,
+      "score_median": 2.6018383502960205,
+      "score_q05": -2.533518266677856,
+      "score_q95": 6.7663445472717285,
+      "reject_rate_at_report_threshold": 0.31
+    },
+    {
+      "label": 33,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.0575439977645873,
+      "score_median": 2.0177788734436035,
+      "score_q05": -4.557869482040405,
+      "score_q95": 7.3719529628753655,
+      "reject_rate_at_report_threshold": 0.34
+    },
+    {
+      "label": 90,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.908731689453125,
+      "score_median": 2.6763851642608643,
+      "score_q05": -2.0472941994667053,
+      "score_q95": 8.00097103118896,
+      "reject_rate_at_report_threshold": 0.34
+    },
+    {
+      "label": 3,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.046670607328415,
+      "score_median": 3.1331064701080322,
+      "score_q05": -2.131749939918518,
+      "score_q95": 7.324538326263426,
+      "reject_rate_at_report_threshold": 0.36
+    },
+    {
+      "label": 13,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.9533074033260345,
+      "score_median": 2.848745822906494,
+      "score_q05": -2.1292938709259035,
+      "score_q95": 8.99806809425354,
+      "reject_rate_at_report_threshold": 0.36
+    },
+    {
+      "label": 44,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.826603555679321,
+      "score_median": 3.236842393875122,
+      "score_q05": -3.1952865362167358,
+      "score_q95": 8.046858787536621,
+      "reject_rate_at_report_threshold": 0.37
+    },
+    {
+      "label": 27,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.7019926643371583,
+      "score_median": 2.861664295196533,
+      "score_q05": -1.5402890920639039,
+      "score_q95": 6.356856203079222,
+      "reject_rate_at_report_threshold": 0.38
+    },
+    {
+      "label": 72,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.012061656713486,
+      "score_median": 3.2613565921783447,
+      "score_q05": -3.524970519542694,
+      "score_q95": 8.228683853149414,
+      "reject_rate_at_report_threshold": 0.41
+    },
+    {
+      "label": 78,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.8739212203025817,
+      "score_median": 3.1995108127593994,
+      "score_q05": -3.5226207494735715,
+      "score_q95": 7.7743579864501955,
+      "reject_rate_at_report_threshold": 0.41
+    },
+    {
+      "label": 38,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.0237353563308718,
+      "score_median": 2.951767683029175,
+      "score_q05": -2.0551726460456847,
+      "score_q95": 8.690567111968994,
+      "reject_rate_at_report_threshold": 0.42
+    },
+    {
+      "label": 29,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.146769803762436,
+      "score_median": 3.2755095958709717,
+      "score_q05": -2.8602232813835142,
+      "score_q95": 8.89055380821228,
+      "reject_rate_at_report_threshold": 0.45
+    },
+    {
+      "label": 88,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.386784300804138,
+      "score_median": 3.1813151836395264,
+      "score_q05": -3.579262113571167,
+      "score_q95": 9.059148120880126,
+      "reject_rate_at_report_threshold": 0.46
+    },
+    {
+      "label": 21,
+      "known": false,
+      "count": 100,
+      "score_mean": 2.7104942107200625,
+      "score_median": 3.6751887798309326,
+      "score_q05": -6.28934965133667,
+      "score_q95": 9.182961893081663,
+      "reject_rate_at_report_threshold": 0.48
+    },
+    {
+      "label": 48,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.8435895538330076,
+      "score_median": 3.7690670490264893,
+      "score_q05": -1.4125343561172485,
+      "score_q95": 8.2735999584198,
+      "reject_rate_at_report_threshold": 0.48
+    },
+    {
+      "label": 43,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.768871861696243,
+      "score_median": 3.756997585296631,
+      "score_q05": -1.6839272320270537,
+      "score_q95": 9.072431421279907,
+      "reject_rate_at_report_threshold": 0.49
+    },
+    {
+      "label": 8,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.339173501133919,
+      "score_median": 3.8691956996917725,
+      "score_q05": -2.903333842754364,
+      "score_q95": 8.716975927352903,
+      "reject_rate_at_report_threshold": 0.5
+    },
+    {
+      "label": 34,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.9789205813407897,
+      "score_median": 3.9493297338485718,
+      "score_q05": -2.2489524006843564,
+      "score_q95": 11.48578724861145,
+      "reject_rate_at_report_threshold": 0.5
+    },
+    {
+      "label": 75,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.8382381439208983,
+      "score_median": 3.957143545150757,
+      "score_q05": -2.7862291812896727,
+      "score_q95": 9.737754154205321,
+      "reject_rate_at_report_threshold": 0.51
+    },
+    {
+      "label": 86,
+      "known": false,
+      "count": 100,
+      "score_mean": 3.741074896454811,
+      "score_median": 3.9936548471450806,
+      "score_q05": -3.0786463022232056,
+      "score_q95": 10.056196880340575,
+      "reject_rate_at_report_threshold": 0.52
+    },
+    {
+      "label": 58,
+      "known": false,
+      "count": 100,
+      "score_mean": 4.280161238908768,
+      "score_median": 4.163039684295654,
+      "score_q05": -0.19749701023101798,
+      "score_q95": 9.316464567184447,
+      "reject_rate_at_report_threshold": 0.54
+    },
+    {
+      "label": 15,
+      "known": false,
+      "count": 100,
+      "score_mean": 4.414138088226318,
+      "score_median": 4.363518238067627,
+      "score_q05": -2.53265198469162,
+      "score_q95": 11.48524827957153,
+      "reject_rate_at_report_threshold": 0.57
+    },
+    {
+      "label": 30,
+      "known": false,
+      "count": 100,
+      "score_mean": 4.177195547819138,
+      "score_median": 4.578423976898193,
+      "score_q05": -1.947058641910553,
+      "score_q95": 9.109766101837156,
+      "reject_rate_at_report_threshold": 0.57
+    },
+    {
+      "label": 95,
+      "known": false,
+      "count": 100,
+      "score_mean": 4.120245912075043,
+      "score_median": 4.463101863861084,
+      "score_q05": -0.344364660978317,
+      "score_q95": 8.188636684417723,
+      "reject_rate_at_report_threshold": 0.58
+    },
+    {
+      "label": 42,
+      "known": false,
+      "count": 100,
+      "score_mean": 4.574596940279007,
+      "score_median": 4.7057785987854,
+      "score_q05": -1.3574171543121336,
+      "score_q95": 10.09821138381958,
+      "reject_rate_at_report_threshold": 0.59
+    },
+    {
+      "label": 19,
+      "known": false,
+      "count": 100,
+      "score_mean": 5.237675049304962,
+      "score_median": 4.9649858474731445,
+      "score_q05": -1.8564685642719267,
+      "score_q95": 12.579012537002564,
+      "reject_rate_at_report_threshold": 0.6
+    },
+    {
+      "label": 66,
+      "known": false,
+      "count": 100,
+      "score_mean": 4.637662928104401,
+      "score_median": 4.452762603759766,
+      "score_q05": 0.14209301471710212,
+      "score_q95": 9.785421657562257,
+      "reject_rate_at_report_threshold": 0.61
+    },
+    {
+      "label": 39,
+      "known": false,
+      "count": 100,
+      "score_mean": 5.1966402876377105,
+      "score_median": 5.316730499267578,
+      "score_q05": -3.2098299145698546,
+      "score_q95": 12.522557926177978,
+      "reject_rate_at_report_threshold": 0.62
+    },
+    {
+      "label": 49,
+      "known": false,
+      "count": 100,
+      "score_mean": 4.655787290334701,
+      "score_median": 4.772616863250732,
+      "score_q05": -1.3220416605472565,
+      "score_q95": 9.475655555725096,
+      "reject_rate_at_report_threshold": 0.64
+    },
+    {
+      "label": 97,
+      "known": false,
+      "count": 100,
+      "score_mean": 4.952135806083679,
+      "score_median": 4.866433620452881,
+      "score_q05": 1.3725054383277895,
+      "score_q95": 8.914342737197876,
+      "reject_rate_at_report_threshold": 0.67
+    },
+    {
+      "label": 31,
+      "known": false,
+      "count": 100,
+      "score_mean": 5.9291978561878205,
+      "score_median": 6.501828193664551,
+      "score_q05": -2.4250483751296996,
+      "score_q95": 12.731557750701903,
+      "reject_rate_at_report_threshold": 0.7
+    },
+    {
+      "label": 60,
+      "known": false,
+      "count": 100,
+      "score_mean": 6.16412246465683,
+      "score_median": 6.745461940765381,
+      "score_q05": 1.1265708327293396,
+      "score_q95": 11.346381092071534,
+      "reject_rate_at_report_threshold": 0.73
+    },
+    {
+      "label": 23,
+      "known": false,
+      "count": 100,
+      "score_mean": 6.587285952568054,
+      "score_median": 6.815196990966797,
+      "score_q05": 1.0619217157363892,
+      "score_q95": 11.68384609222412,
+      "reject_rate_at_report_threshold": 0.81
+    },
+    {
+      "label": 71,
+      "known": false,
+      "count": 100,
+      "score_mean": 7.020076756477356,
+      "score_median": 7.066694259643555,
+      "score_q05": 1.657986545562744,
+      "score_q95": 12.70555191040039,
+      "reject_rate_at_report_threshold": 0.81
+    }
+  ]
+}
