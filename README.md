@@ -1,5 +1,509 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 近期修改总览（2026-10-26）
+
+近期工作围绕“基于不确定性知识蒸馏的新类发现”这一核心问题，重点完成了实验协议、标签隔离、拒识表征和负结果审计的系统整理。当前阶段的核心结论是：semantic-near novel 与 known 在共享分类表征、独立 rejection 表征以及最终拒识分数上仍存在明显重叠；训练期 uncertainty-KD 尚未形成稳定的新类发现增益，因此不作为默认方法启用。
+
+近期代码和实验层面的主要修改如下：
+
+1. 将 standard logits-KD 固定为默认对照，训练期 uncertainty-KD 改为显式 opt-in；补充了 uncertainty 信号、权重、梯度和 loss participation 的审计。
+2. 完善 shared-backbone independent rejection encoder、feature-rejector score、mixed-pool NNPU 和 known-validation-only 95% coverage calibration 的协议记录，明确禁止使用 mixed/test 真值参与训练、checkpoint、阈值、候选规则或方法选择。
+3. 增加并修正多组 fresh semantic-hard 配对 runner、候选池审计、拒识表征审计、Auto-K/聚类诊断和中期材料生成工具；实验结果同时保存协议、配置、训练历史和机器可读 JSON。
+4. 对近期方法进行了联合指标复核：feature_pca 主要改善聚类表征，不能单独视为拒识提升；prototype-boundary、MC-epistemic logits-KD 和外部 uniform-logit OE 均未通过完整新类发现联合门槛。
+5. 最新的 CIFAR-10 外部 OE 配对实验（seed=2120）中，AUROC 从 `0.812349` 升至 `0.816958`，但固定 known coverage 下 unknown rejection 从 `33.825%` 降至 `32.350%`（`-1.475 pp`），因此不修改默认配置、不继续扫描该权重，并将其保留为正式负结果。
+
+当前默认主线保持为：standard logits-KD、shared-backbone independent rejection encoder、mixed-pool NNPU、known-validation-only checkpoint/95% coverage calibration；feature_pca 仅作为聚类组件，uncertainty fusion 和 uncertainty-KD 均为显式 opt-in。后续优先研究 semantic-near hard-unknown 覆盖和 support-aware rejection 表征，并继续同时报告排序、固定 coverage 拒识、known utility、分数重叠、Auto-K 与 NMI/ARI。
+
+
+## 最新研究决策：prototype-boundary weighted rejector 新 split 复核（2026-10-25，seed=2119）
+
+为检验此前 prototype-boundary 排序信号能否真正改善未知类覆盖，在新的
+semantic-hard CIFAR-100 60/40 split=`2119` 上完成了预注册配对复核。两臂只训练一份
+split-matched teacher 和一份 shared-backbone student，并共用同一个冻结 student
+checkpoint；control 为 `all_pool`，treatment 为固定的
+`weighted_boundary + prototype_boundary`，候选比例 `0.25`、权重 `2.0`。两臂均使用
+feature rejector、mixed unlabeled NNPU 和 known-validation-only 95% coverage 校准；
+clustering 关闭，因此这不是端到端聚类实验。配置审计确认除候选池规则和输出目录外
+没有差异，test/mixed 标签没有进入训练、checkpoint、校准、候选选择或方法选择。
+
+| 指标 | all-pool control | prototype-boundary treatment | treatment − control |
+|---|---:|---:|---:|
+| AUROC | 0.778810 | 0.789709 | +0.010899 |
+| AUPR | 0.671914 | 0.681410 | +0.009497 |
+| FPR95 | 64.717% | 58.750% | −5.967 pp |
+| OSCR | 0.583718 | 0.594945 | +0.011227 |
+| known acceptance | 94.383% | 94.350% | −0.033 pp |
+| unknown rejection | 25.325% | 25.050% | **−0.275 pp** |
+| accepted-known accuracy | 71.499% | 71.754% | +0.255 pp |
+
+虽然排序指标全部改善，但预注册的核心门槛是 unknown rejection 至少提升 `2 pp`，
+本次实际下降 `0.275 pp`；正确拒绝的 unknown 从 `1,013` 降到 `1,002`，false
+accept 从 `2,987` 增加到 `2,998`。分数的平均 unknown-minus-known 间隔从
+`4.073937` 增至 `5.152587`，但 unknown below known-q95 overlap 从 `76.225%`
+恶化到 `76.900%`，说明排序改善没有转化为 calibrated unknown coverage。
+
+结合此前固定配方的复核，工作点 unknown rejection 变化为：2026 `+2.600 pp`、
+2027 `+0.625 pp`、2028 `−0.425 pp`、2119 `−0.275 pp`。因此该方向没有稳定
+通过联合判据，不能改默认，也停止继续扫描 prototype-boundary 的 ratio/weight。
+下一步回到训练期、可由 known train/validation 合法驱动的 class-conditional
+support/outlier 表征目标；继续同时报告排序、固定 coverage 拒识、known utility
+和 overlap，不把 detector-only 结果写成完整新类发现成功。
+
+完整报告见 [`analysis/prototype_boundary_fresh_replication_s2119_20261025.md`](analysis/prototype_boundary_fresh_replication_s2119_20261025.md)，
+机器结果见 [`analysis/prototype_boundary_fresh_replication_s2119.json`](analysis/prototype_boundary_fresh_replication_s2119.json)，
+预注册协议见 [`analysis/prototype_boundary_fresh_replication_protocol_s2119_20261025.md`](analysis/prototype_boundary_fresh_replication_protocol_s2119_20261025.md)。
+
+## 最新研究决策：MC-epistemic logits-KD（2026-10-25）
+
+seed `2114–2116` 的预注册 fresh-split 配对复核已经完成。两臂共享 split-matched
+teacher、4-pass MC-mean logits、4 个 student epoch、mixed discovery pool 和其余
+训练条件，唯一训练因素是普通 KL 与 detached、batch-mean-normalized
+`exp(-MC_epistemic)` 加权 KL；feature KD/rejection KD 关闭，checkpoint/阈值只用
+known validation，mixed/test 标签未用于训练或选择。
+
+| 指标（uncertainty − standard） | 2114 | 2115 | 2116 | 三 seed 平均 |
+|---|---:|---:|---:|---:|
+| AUROC | +0.000639 | +0.001159 | +0.002836 | +0.001545 |
+| AUPR | +0.003511 | +0.000037 | +0.002905 | +0.002151 |
+| FPR95 | +1.717 pp | −3.950 pp | −1.583 pp | −1.272 pp |
+| OSCR | +0.003247 | +0.006023 | −0.005829 | +0.001147 |
+| known acceptance | +0.083 pp | −0.700 pp | −2.000 pp | −0.872 pp |
+| unknown rejection | +0.650 pp | +2.925 pp | +6.400 pp | +3.325 pp |
+| accepted-known accuracy | +0.291 pp | +0.716 pp | −0.477 pp | +0.177 pp |
+| overall NMI | +0.003532 | −0.018462 | −0.010940 | −0.008623 |
+| overall ARI | +0.009277 | −0.017720 | +0.018976 | +0.003511 |
+| Auto-K 绝对误差 | +1 | +2 | −2 | +0.333 |
+
+权重路径真实生效，但样本重分配很弱：三个 seed 的平均 weight std 为
+`0.010158/0.005457/0.027569`，ESS 为 `0.999852/0.999967/0.999088`。该方法未通过
+预注册的整体门槛：2114 未达到 `+2 pp` unknown rejection，2116 的 known
+acceptance 损失超过 `1 pp`，overall NMI 平均下降且 2115/2116 均下降，Auto-K
+误差也未稳定改善。因此这只是部分 split 上的拒识 trade-off，不是整体新类发现
+改进；不改默认，不继续扫描 MC 次数、系数或 weighting function。
+
+完整条件、绝对结果、标签隔离审计和决策见
+[`analysis/uncertainty_kd_mc_epistemic_s2114_s2116_20261025.md`](analysis/uncertainty_kd_mc_epistemic_s2114_s2116_20261025.md)。
+下一阶段回到 semantic-near novel/known 表征重叠和 Auto-K 低估；已有 `feature_pca`
+与 8 epoch 结果均显示拒识、K 估计和聚类质量之间存在权衡，后续只做预先固定的
+单因素 fresh-split 实验，并同时报告拒识、known utility、Auto-K、NMI/ARI。
+
+### 2026-10-25：feature_pca 第三个独立复核（seed=2117）
+
+在预注册的 semantic-hard CIFAR-100 60/40 split=2117 上，使用同一个
+split-matched teacher、同一个 4 epoch student checkpoint、同一个候选池和
+known-validation-only 95% coverage 阈值，仅比较 `projection_pca` 与
+`feature_pca`。配置审计确认除 `cluster_feature` 和输出目录外没有差异；两臂
+候选池均为 1,103 个样本，候选纯度均为 77.335%。test/mixed 标签没有参与训练、
+checkpoint、校准、候选选择或方法选择，只用于最终回顾性指标。
+
+| 指标 | `projection_pca` | `feature_pca` | 变化 |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.799849 / 0.692041 | 0.799849 / 0.692041 | 0 / 0 |
+| FPR95 / OSCR | 58.933% / 0.575753 | 58.933% / 0.575753 | 0 pp / 0 |
+| known acceptance / unknown rejection | 95.833% / 21.325% | 95.833% / 21.325% | 0 pp / 0 pp |
+| accepted-known accuracy | 68.904% | 68.904% | 0 pp |
+| Auto-K（真 K=40，绝对误差） | 36（4） | 40（0） | 误差 -4 |
+| 全体 novel NMI / ARI | 0.434485 / 0.195720 | 0.490112 / 0.258722 | +0.055627 / +0.063003 |
+| 候选 novel NMI / ARI | 0.510516 / 0.188264 | 0.583006 / 0.310336 | +0.072489 / +0.122073 |
+| 候选 novel ACC | 33.411% | 44.080% | +10.668 pp |
+
+该 split 满足预注册联合门槛：NMI、ARI 全部提升，Auto-K 误差不增加且由 4
+降至 0，候选纯度不变；拒识和已知类效用完全不变。因此 2117 进一步支持
+`feature_pca` 是聚类质量组件，而不是拒识组件。结合 2110/2111，三次独立复核的
+全体 novel NMI/ARI 平均增量约为 `+0.06896/+0.07846`，候选 novel NMI/ARI
+平均增量约为 `+0.08332/+0.12392`，且三次 NMI/ARI 均同方向改善。但 Auto-K
+误差在 2110、2111 分别从 4→6、9→10，2117 才从 4→0；三 split 平均误差仅从
+5.67 降至 5.33，仍存在明显 split 间不稳定。因此不把该结果表述为完整新类发现
+已经解决，也不继续用 2117 调 PCA/K/阈值；保持 `feature_pca` 为主分析路径、
+`projection_pca` 为控制消融，并单独报告 Auto-K 误差。完整记录见
+[`analysis/rejection_cluster_feature_replication_s2117_20261025.md`](analysis/rejection_cluster_feature_replication_s2117_20261025.md)，
+机器结果见 [`analysis/rejection_cluster_feature_replication_s2117.json`](analysis/rejection_cluster_feature_replication_s2117.json)。
+
+### 2026-10-25：当前完整流程 2×2 交叉实验（seed=2118）
+
+为检查两个局部有效组件能否组合成完整收益，在新的 semantic-hard split=2118
+上只训练一份 split-matched teacher 和一份 shared-backbone student，然后交叉比较
+`score_mode={feature_rejector, feature_rejector_uncertainty_fusion}` 与
+`cluster_feature={projection_pca, feature_pca}`。fusion 固定为已有的 `0.5/0.5`
+规则，uncertainty-to-error 映射和 95% known coverage 阈值只使用 known validation；
+test/mixed 标签没有参与训练、checkpoint、校准、候选选择或方法选择。
+
+| 指标 | rejector+projection | rejector+feature | fusion+projection | fusion+feature |
+|---|---:|---:|---:|---:|
+| AUROC | 0.811574 | 0.811574 | 0.813532 | 0.813532 |
+| AUPR | 0.718728 | 0.718728 | 0.727585 | 0.727585 |
+| FPR95 / OSCR | 59.667% / 0.582323 | 59.667% / 0.582323 | 59.517% / 0.583601 | 59.517% / 0.583601 |
+| known acceptance / unknown rejection | 95.450% / 25.750% | 95.450% / 25.750% | 96.200% / 25.675% | 96.200% / 25.675% |
+| Auto-K（真 K=40，绝对误差） | 31（9） | 28（12） | 28（12） | 24（16） |
+| 全体 novel NMI / ARI | 0.4711479 / 0.2269193 | 0.5342233 / 0.3029029 | 0.4711479 / 0.2269193 | 0.5342233 / 0.3029029 |
+
+相对 control，`feature_pca` 保持拒识指标完全不变，但全体 novel NMI/ARI 提升
+`+0.063075/+0.075984`，同时 Auto-K 误差 `9→12`；fusion 提升 AUROC `+0.001957`、
+AUPR `+0.008857`、FPR95 `-0.150 pp` 和 OSCR `+0.001278`，但 unknown rejection
+反而 `-0.075 pp`。完整 treatment（fusion+feature_pca）继承两类 trade-off：
+unknown rejection `-0.075 pp`，Auto-K 误差 `9→16`，因此未通过预注册完整流程门槛。
+
+结论是两个分别有局部证据的组件在 seed=2118 上没有形成正向互补，不能把它们
+简单组合后称为整体有效方法。保持默认不变，不在该 split 上继续调 fusion 权重、
+PCA 或 Auto-K；后续回到 semantic-near 表征重叠和无标签类别数估计这两个上游问题。
+完整报告见 [`analysis/rejection_full_pipeline_factorial_s2118_20261025.md`](analysis/rejection_full_pipeline_factorial_s2118_20261025.md)，
+机器结果见 [`analysis/rejection_full_pipeline_factorial_s2118.json`](analysis/rejection_full_pipeline_factorial_s2118.json)，
+协议和 runner 分别见 [`analysis/rejection_full_pipeline_factorial_protocol_s2118_20261025.md`](analysis/rejection_full_pipeline_factorial_protocol_s2118_20261025.md)
+和 [`scripts/run_rejection_full_pipeline_factorial.py`](scripts/run_rejection_full_pipeline_factorial.py)。
+
+### 2026-10-25：MC epistemic logits-KD fresh-split protocol（seeds 2114–2116）
+
+既有 logits uncertainty-KD 对照以 teacher learned uncertainty head 生成权重；直接 teacher uncertainty 回归和 rejection-feature KD 对照未带来稳定的新类拒识收益，且部分 split 上 learned head 饱和。MC epistemic weighting 已在 rejection-feature KD 路径验证为非退化，但尚未单独验证主 logits-KD。因此新增一个预注册的机制复核：两臂都使用同一 teacher 的 4-pass MC-mean logits，control 为普通 KL，treatment 仅对逐样本 KL 乘 detached、batch-mean-normalized `exp(-u)` MC epistemic weights。两臂的 teacher uncertainty source、teacher logits、数据划分、其余训练目标、known-validation checkpoint selection、feature-rejector、自动 K 和 known-validation-only 95% coverage calibration 均相同；feature/rejection KD 关闭。fresh semantic-hard split seeds 为 2114–2116，mixed/test 标签不得参与训练、校准、checkpoint 或规则选择。
+
+预注册主门槛为 calibrated unknown rejection 至少提升 2 pp，同时 known acceptance 损失不超过 1 pp，且 OSCR、accepted-known accuracy、Auto-K 和聚类没有实质退化。三 split 即使通过也仅作为探索性证据，需另行独立确认后才能改默认。协议见 [`analysis/uncertainty_kd_mc_epistemic_protocol_s2114_2116_20261025.md`](analysis/uncertainty_kd_mc_epistemic_protocol_s2114_2116_20261025.md)；runner 新增 `--kd-uncertainty-source` 与 `--kd-mc-samples`，默认仍为原来的 learned head 和 4 次参数值，不改变历史运行行为。seed=2114、2115、2116 均已完成，最终三 split 结果未通过联合门槛，详见 [`analysis/uncertainty_kd_mc_epistemic_s2114_s2116_20261025.md`](analysis/uncertainty_kd_mc_epistemic_s2114_s2116_20261025.md)。
+
+### 2026-10-25：MC-epistemic logits-KD 首个 fresh split 结果（seed=2114）
+
+seed=2114 的配对已完成：两臂使用同一 4-pass MC-mean teacher logits，唯一训练变量是是否用 detached MC-epistemic `exp(-u)` 权重重分配 logits KL。相对 standard KL，MC treatment 的 AUROC `0.792826→0.793465`（`+0.000639`）、AUPR `0.682692→0.686203`（`+0.003511`）、OSCR `0.601508→0.604755`（`+0.003247`），固定 coverage unknown rejection `27.675%→28.325%`（`+0.650 pp`），accepted-known accuracy `73.074%→73.364%`（`+0.291 pp`）。但 FPR95 `59.867%→61.583%`（恶化 `1.717 pp`），Auto-K 绝对误差 `7→8`，因此未达到预注册的至少 `+2 pp` unknown rejection 门槛，不能判定有效或修改默认。整体 NMI/ARI 小幅 `+0.003532/+0.009277`，unknown-only NMI/ARI 为 `+0.009385/+0.016289`；MC 权重标准差仅约 `0.0098–0.0104`，ESS 约 `0.99985`，样本重分配很弱。完整分析见 [`analysis/uncertainty_kd_mc_epistemic_s2114_20261025.md`](analysis/uncertainty_kd_mc_epistemic_s2114_20261025.md)。2115、2116 仍按原协议继续，最终以三 split 联合结果决定是否停止该变体。
+
+seed=2115 的配对也已完成。相对 standard KL，MC treatment 的 AUROC `0.811164→0.812323`（`+0.001159`）、AUPR `0.718851→0.718888`（`+0.000037`）、FPR95 改善 `3.950 pp`、OSCR `+0.006023`，固定 coverage unknown rejection `23.650%→26.575%`（`+2.925 pp`），known acceptance `96.167%→95.467%`（`-0.700 pp`），accepted-known accuracy `+0.716 pp`。但 Auto-K 绝对误差 `4→6`，整体 NMI/ARI 分别下降 `0.018462/0.017720`，所以拒识局部改善没有转化为完整新类发现改善，仍不晋升该方法。2115 的 MC 权重标准差仅 `0.0053–0.0056`、ESS 约 `0.99997`，样本重分配比 2114 更弱。详细结果见 [`analysis/uncertainty_kd_mc_epistemic_s2115_20261025.md`](analysis/uncertainty_kd_mc_epistemic_s2115_20261025.md)。
+
+seed=2116 的最终配对结果为：AUROC `0.795956→0.798792`（`+0.002836`）、AUPR `0.684144→0.687049`（`+0.002905`）、FPR95 改善 `1.583 pp`、unknown rejection `22.150%→28.550%`（`+6.400 pp`），但 known acceptance `95.650%→93.650%`（`-2.000 pp`）、OSCR `-0.005829`、accepted-known accuracy `-0.477 pp`，overall NMI `-0.010940`。因此三 split 联合结果仍不支持该变体，停止继续扫描 MC 次数和权重系数。
+
+### 2026-10-24：known-only rejection variance floor fresh 对照（seed=2093）
+
+为直接检查 shared-backbone rejection branch 的低秩问题，完成了一个预注册单因素对照：control 使用 `alpha_rejection_variance_floor=0`，treatment 使用 `alpha_rejection_variance_floor=0.5`，两臂固定 `rejection_variance_floor=0.05`。两臂共享同一个 teacher、semantic-hard 60/40 fresh split、student recipe、4 epoch 预算、mixed-pool nnPU、known-validation checkpoint selection 和 95% known-coverage calibration；mixed pool 不使用 hard unknown 标签，测试标签不参与训练、选择或校准。协议见 [`analysis/rejection_variance_floor_protocol_s2093_20261024.md`](analysis/rejection_variance_floor_protocol_s2093_20261024.md)，runner 为 [`scripts/run_rejection_variance_floor_pair.py`](scripts/run_rejection_variance_floor_pair.py)。
+
+该机制真实生效：treatment 的 variance-floor loss 从 epoch-1 的 `0.000698` 降到 epoch-4 的 `1.28e-5`，epoch-4 gradient audit norm 为 `0.001329`；control 全程为零。结果是 mixed/偏负：AUROC `0.799619→0.798164`、AUPR `0.685910→0.682342`、FPR95 `0.562833→0.567833`、OSCR `0.605964→0.605098`，unknown rejection 仅 `27.725%→28.050%`（`+0.325 pp`），accepted-known accuracy `73.152%→72.948%`；unknown-below-known-q95 overlap 仅 `76.350%→76.275%`，KS `0.461417→0.460000`，没有形成分离改善。因此没有通过预注册联合标准，不提升为默认，也不在该 split 上继续扫描 variance weight/floor。
+
+post-hoc rejection 表征审计进一步显示 participation `15.865→16.056` 但 rank95 保持 `28`，shared→rejection cross-R² `0.850023→0.849811`，known-class probe accuracy `71.833%→71.500%`；它没有降低耦合或解决 semantic-near overlap。完整结果与后续决策见 [`analysis/rejection_variance_floor_s2093_20261024.md`](analysis/rejection_variance_floor_s2093_20261024.md)，机器结果见 [`analysis/rejection_variance_floor_s2093.json`](analysis/rejection_variance_floor_s2093.json) 和 [`analysis/rejection_variance_floor_representation_audit_s2093.json`](analysis/rejection_variance_floor_representation_audit_s2093.json)。
+
+本轮回归验证：`pytest -q` 为 `311 passed`，`compileall` 和 `git diff --check` 均通过。
+
+### 2026-10-24：uncertainty conjunction fresh-split protocol（seed=2090）
+
+在固定 validation-calibrated uncertainty fusion 已完成四个 fresh split 复核后，新增一个预注册的单因素实验：同一 teacher、同一 shared-backbone uncertainty-KD student 和同一冻结 checkpoint，control 使用已有的 `feature_rejector_uncertainty_fusion`，treatment 使用固定的 `feature_rejector_uncertainty_conjunction`：
+
+```text
+control   = 0.5 * z(feature_rejector) + 0.5 * z(calibrated_uncertainty_error)
+treatment = min(z(feature_rejector), z(calibrated_uncertainty_error))
+```
+
+两种 z-score 和 `known_coverage=0.95` threshold 均只使用 known validation；matched mixed pool 由 nnPU 按无标签方式处理，test/mixed-pool 真标签不得用于训练、校准、阈值、规则或方法选择。两臂除 `score_mode` 外必须完全一致，并导出无标签 calibration scores 供审计。预注册协议见 [`analysis/shared_rejection_uncertainty_conjunction_s2090_protocol_20261024.md`](analysis/shared_rejection_uncertainty_conjunction_s2090_protocol_20261024.md)，运行入口为 [`scripts/run_shared_rejection_conjunction_fresh.py`](scripts/run_shared_rejection_conjunction_fresh.py)。该实验不改变默认 score，也不允许根据 seed=2090 结果回头调 conjunction 规则。
+
+### 2026-10-24：uncertainty conjunction fresh split 结果（seed=2090）
+
+seed=2090 已完成完整配对：control 是固定 `feature_rejector_uncertainty_fusion`，treatment 是预注册的 `min(z_rejector,z_uncertainty)` conjunction；两臂使用同一个冻结 student，known-validation 校准样本为 `730`，calibration source index 和两个导出的 z-score 分量完全一致，fusion/conjunction 公式重构误差分别为 `2.22e-16/0`。两臂 discovery config 除 `score_mode` 和输出目录外无差异，协议均为 mixed nnPU、无 mixed-pool hard labels、无 test labels 参与训练或校准。
+
+结果为有效负结果：fusion → conjunction 的 AUROC `0.813643→0.802724`、AUPR `0.730350→0.707424`、FPR95 `0.598000→0.613500`、OSCR `0.604196→0.598739`，known-validation 工作点 unknown rejection `32.925%→28.975%`（`-3.95 pp`），known acceptance `94.533%→94.700%`，accepted-known accuracy `71.527%→71.647%`。conjunction 未通过预注册联合标准，因此不提升为默认，也不在该 split 上继续扫阈值、归一化或 conjunction 变体；这说明“要求两个相关风险信号同时高”会损失 unknown 覆盖，不能解决 semantic-near overlap。完整审计见 [`analysis/shared_rejection_uncertainty_conjunction_s2090_20261024.md`](analysis/shared_rejection_uncertainty_conjunction_s2090_20261024.md)、机器结果见 [`analysis/shared_rejection_uncertainty_conjunction_fresh_s2090.json`](analysis/shared_rejection_uncertainty_conjunction_fresh_s2090.json) 和 [`analysis/shared_rejection_uncertainty_conjunction_s2090_audit.json`](analysis/shared_rejection_uncertainty_conjunction_s2090_audit.json)，审计脚本见 [`scripts/audit_shared_rejection_conjunction.py`](scripts/audit_shared_rejection_conjunction.py)。本轮新增 conjunction 回归测试后，`pytest -q` 为 `306 passed`。
+
+### 2026-10-24：fixed uncertainty fusion fresh replication（seed=2086）
+
+在预注册的 semantic-hard fresh split `2086` 上完成了冻结模型的
+`feature_rejector` vs 固定 `0.5/0.5` `feature_rejector_uncertainty_fusion`
+对照。两者共享同一个 student checkpoint；不重新训练、不替换 checkpoint，
+不使用 test/mixed-pool 标签做训练、校准、阈值、权重或方法选择。结果为：
+AUROC `0.806395→0.812822`、AUPR `0.703931→0.725969`、FPR95
+`58.517%→57.650%`、OSCR `0.597871→0.598819`，known-validation 95%
+coverage 工作点的 unknown rejection `30.175%→33.725%`（`+3.55 pp`），
+accepted-known accuracy `71.819%→71.771%`（`-0.047 pp`）。自动 K 为 `31`
+（真实 K=40），auto NMI/ARI 为 `0.494852/0.185172`。
+
+需要明确聚类边界：control 在自己的校准 score 下没有形成 discovery
+candidate，而 treatment 形成了 `1759` 个候选，因此该 seed 的自动 K/NMI/ARI
+不是两种 score 的配对聚类比较，只作为 treatment 的回顾性结果记录，不能据此
+宣称端到端新类聚类收益。
+
+该结果满足预注册联合判据：unknown rejection 至少提升 2 pp，FPR95 不恶化
+超过 1 pp，OSCR 不下降超过 0.005，accepted-known accuracy 不下降超过
+0.5 pp，且融合权重未调。因此 fixed validation-calibrated fusion 从“有希望
+的 opt-in”升级为“强 opt-in 候选”，但仍不改默认 score mode，也不在
+2084–2086 上继续搜索融合权重；known acceptance 下降 `0.867 pp`，且前两个
+fresh split 已显示 split-sensitive operating-point tradeoff。该结果不能证明
+uncertainty-KD 训练有效，也不能表述为核心的 semantic-near overlap 已解决。
+
+完整记录见 [`analysis/shared_rejection_fusion_fresh_s2086_20261024.md`](analysis/shared_rejection_fusion_fresh_s2086_20261024.md)、
+机器结果见 [`analysis/shared_rejection_fusion_fresh_s2086.json`](analysis/shared_rejection_fusion_fresh_s2086.json)。
+当前下一步仍是围绕 shared-backbone rejection branch 做 label-free hard-unknown
+覆盖和表示几何审计，不叠加 VOS、额外 PU、uncertainty-KD 或融合权重搜索。
+
+### 2026-10-24：fixed uncertainty fusion 三个 fresh split 汇总（2084–2086）
+
+对 2084、2085、2086 的冻结 `feature_rejector` / 固定 `0.5/0.5`
+`feature_rejector_uncertainty_fusion` 结果进行了机器汇总。fusion 相对 control
+的三 split 平均变化为：AUROC `+0.009665`、AUPR `+0.020395`、FPR95
+`-0.007667`、OSCR `+0.004735`、calibrated unknown rejection `+4.367 pp`，
+accepted-known accuracy `+0.006 pp`。联合判据在 `2084/2085/2086` 中通过
+`2/3` 个 split：2084 仅因 unknown rejection 提升 `1.80 pp` 未达到预设的
+`2 pp` 门槛；2085 和 2086 完整通过。三次 known acceptance 均下降
+（平均 `-0.739 pp`），说明仍有稳定的 operating-point 代价。
+
+三次 control 都没有形成可聚类候选，而 treatment 候选数分别为 `1287/1961/1759`，
+所以自动 K、NMI、ARI 不是配对聚类证据，不用于方法晋升。综合判断：fixed
+validation-calibrated fusion 是有三 split 支持的强 opt-in 拒识候选，但仍不改
+默认 score、不继续搜索融合权重，也不能据此宣称 uncertainty-KD 训练或
+semantic-near overlap 已解决。汇总脚本为
+[`scripts/summarize_shared_rejection_fusion_fresh.py`](scripts/summarize_shared_rejection_fusion_fresh.py)，
+结果见 [`analysis/shared_rejection_fusion_fresh_2084_2086_summary_20261024.md`](analysis/shared_rejection_fusion_fresh_2084_2086_summary_20261024.md)
+和 [`analysis/shared_rejection_fusion_fresh_2084_2086_summary.json`](analysis/shared_rejection_fusion_fresh_2084_2086_summary.json)。
+
+### 2026-10-24：hard-unknown 候选规则三 split 审计（2084–2086）
+
+在三个冻结 shared-backbone checkpoint 上，用完全相同的 5,400 样本 mixed
+pool、25% 固定预算和 23 个候选规则做 retrospective audit。候选规则只使用
+known train/validation 构造的特征、预测和不确定性信号；pool 标签只在选择
+完成后用于统计 contamination 与 novel-class recall，不能进入 selector、训练
+或方法选择。完整汇总见 [`analysis/semantic_hard_candidate_pool_audit_s2084_s2086_20261024.md`](analysis/semantic_hard_candidate_pool_audit_s2084_s2086_20261024.md)。
+
+结果显示明显的 coverage—contamination tradeoff，而非稳定的 hard-unknown
+解决方案：`mc_epistemic_plus_head_uncertainty` 平均 contamination 最低，约
+`3.95%`，平均 unknown recall 约 `30.02%`，但平均最差 novel 类 recall 只有
+`0.63%`；原始 `shared_entropy_uncertainty` 的对应数值为 `8.05%`、`28.73%`
+和 `3.39%`。support boundary 的平均 contamination 为 `7.65%`，平均最差类
+recall 为 `4.93%`，仍不能覆盖 semantic-near 的困难尾部。因而本轮不选择任何
+selector 接入训练、不扫描 k/预算、不改变默认候选规则；下一步应继续分析困难
+novel 类的来源和 rejection 表示几何，而不是把平均污染下降误写成新类发现收益。
+
+汇总脚本为 [`scripts/summarize_candidate_pool_audits.py`](scripts/summarize_candidate_pool_audits.py)，
+机器结果见 [`analysis/semantic_hard_candidate_pool_audit_s2084_s2086_summary.json`](analysis/semantic_hard_candidate_pool_audit_s2084_s2086_summary.json)。
+
+### 2026-10-24：shared/rejection 表示几何三 split 机制审计（2084–2086）
+
+为判断当前 shared-backbone rejection 分支究竟是独立有效表征，还是 shared
+表征的低秩重参数化，使用三个冻结 student 做了 deterministic post-hoc audit。
+test 的 known/unknown 标签只用于事后 probe 和描述性统计，不参与训练、checkpoint、
+阈值、selector 或方法选择。三 split 的平均结果为：shared/rejection
+participation `37.49/15.10`，rank95 `241.33/27.33`，top-10 邻域 Jaccard
+`0.281`，shared→rejection cross-R² `0.851`，rejection→shared cross-R²
+`0.620`。rejection 表征的 known/unknown probe AUROC 为 `0.812`，高于
+shared feature 的 `0.769`，且三个 split 都同向；这证明 rejection 分支确实包含
+额外的拒识信号，而不是完全复制 shared feature。
+
+但 rejection 的有效秩明显更低，且 shared→rejection 可预测性仍然很高，说明它是
+“有用但低秩且强耦合”的残余表征，不能据此宣称 semantic-near overlap 已解决。
+结合同一 checkpoint 上 rejection-support candidate selector 没有稳定改善困难
+novel 类尾部，本轮不改训练目标、不恢复已停止的 decorrelation/VOS/额外 PU，
+也不改变默认 score。若继续训练，下一次只能预注册一个单因素的 rejection
+representation rank/known-class retention 机制，并固定当前 shared-backbone、
+known-validation-only 校准和联合评价标准。
+
+完整记录见 [`analysis/rejection_representation_audit_s2084_s2086_20261024.md`](analysis/rejection_representation_audit_s2084_s2086_20261024.md)，
+汇总脚本为 [`scripts/summarize_rejection_representation_audit.py`](scripts/summarize_rejection_representation_audit.py)，
+机器结果见 [`analysis/rejection_representation_audit_s2084_s2086_summary.json`](analysis/rejection_representation_audit_s2084_s2086_summary.json)。
+
+## 2026-10-24：整体程序审计与协议修复
+
+围绕研究主题的整体审阅确认：当前最核心的问题仍是 semantic-near novel 与 known 在共享表征、拒识表征和最终拒识分数上的重叠；uncertainty-KD 尚未成为稳定的新类发现增益。因此当前默认主线不再隐式启用 uncertainty-KD，而是使用 standard logits-KD 作为对照，`--kd-mode uncertainty` 仅作为显式 opt-in 消融。
+
+本轮修复了会影响实验真实性的协议问题：训练、发现和数据检查统一通过同一个数据协议构造入口，修复 `calibration_overlap_control` 在 `train_student` 中未实际生效的问题；禁止 mixed pool 将整个未标注池用 hard unknown 标签训练（strict mixed 以及默认 `rejector-pool-selection=all` 均会拒绝，只有显式候选伪标签实验例外）；将 uncertainty-KD 的 CLI 默认改为 standard。discovery calibration report 现在还会记录 rejector supervision semantics，避免把 pure-unknown hard control、mixed PU 和伪未知候选实验混为一类。新增回归测试，当前 `pytest -q` 为 `305 passed`。
+
+完整审计、研究优先级和停止标准见 [`analysis/full_program_research_theme_audit_20261024.md`](analysis/full_program_research_theme_audit_20261024.md)。合法 hard-unknown 信号审计和独立 image-to-rejection 表征的 known-only 机制复核已完成；下一阶段只在 fresh split 上验证容量匹配/初始化或显式归一化的单因素 rejection 分支，不再在旧 split 上扫描 uncertainty weighting function 或叠加更多损失。
+
+### 2026-10-24：独立 rejection 表征机制复核（seed 2040）
+
+继续检查真正的 image-to-rejection 表征时，发现审计脚本原先没有根据 checkpoint 配置构造 independent rejection encoder，导致独立分支 checkpoint 不能被可靠复核。现已修复为按 case 传入并记录 `independent_rejection_encoder` 与初始化方式。
+
+在已有 seed=2040 control/treatment checkpoint 上做了 deterministic post-hoc 机制审计。shared-feature control 的 shared→rejection cross-R² 为 `0.97650`、neighbor Jaccard@10 为 `0.52733`、rejection binary-probe AUROC 为 `0.80290`；independent image encoder 分别为 `0.69544`、`0.02491`、`0.55558`。这说明独立分支确实降低了与分类表征的耦合，但同时出现有效秩下降（participation `15.61→5.40`、rank95 `26→7`）和拒识区分能力下降。它没有解决核心重叠问题，反而提示当前独立 CNN 可能存在容量/训练利用不足或表示坍缩；不恢复默认，也不在旧 split 上调结构。完整记录见 [`analysis/rejection_representation_audit_followup_s2040_20261024.md`](analysis/rejection_representation_audit_followup_s2040_20261024.md)。
+
+### 2026-10-24：known-only rejection 表征诊断（seed 2040）
+
+为区分“独立 rejection 分支容量/优化失败”和“semantic-near novel 泛化失败”，新增了只使用 known train/validation 的 deterministic 诊断，并按训练协议复现 `open_val_ratio=0.1`。结果显示 independent scratch CNN 在进入 test 之前就已失去有效已知类表征：最终 rejection participation `16.473→5.379`，norm 均值 `23.580→8.523`，between/total known-class variance `0.737→0.361`；known-class probe 的 train 内准确率 `86.79%→21.51%`，train→val 准确率 `74.52%→20.59%`。进一步拆开 raw image-to-rejection encoder 与 projector 后，independent raw branch 的 norm 均值仅 `1.486`，train 内 probe `32.62%`、train→val `31.67%`，说明坍缩主要在 raw branch 已经出现，projector 还会进一步恶化。
+
+这不是“没有训练到”：保存的训练历史中 rejection-known CE、mixed uncertainty-PU 和 outlier rejection-margin 梯度在四个 epoch 均非零。当前最合理判断是 lightweight scratch CNN 与现有四 epoch/损失配方不匹配，而不是继续堆叠 VOS、uncertainty-KD、PU 或 selector fusion。该分支不恢复为默认；后续若重启，只能在 fresh split 上做单因素的容量/初始化或显式归一化实验，并预注册 known-only 表征检查。详细记录见 [`analysis/rejection_representation_known_only_s2040_20261024.md`](analysis/rejection_representation_known_only_s2040_20261024.md)，复现工具见 [`scripts/audit_rejection_representation.py`](scripts/audit_rejection_representation.py)。
+
+随后利用已完成的 seed=2051 scratch-CNN / random-ResNet18 / shared-pretrained-ResNet18 三臂 factorial checkpoint 做了同协议的 known-only 复核：scratch CNN 与 random ResNet 的 rejection train→val probe 分别为 `17.56%`、`28.23%`，shared pretrained ResNet 为 `70.96%`；rejection participation 分别为 `5.017`、`5.518`、`15.422`。这说明 seed=2040 的失效不是偶然 split 现象，而是当前随机初始化 rejection 分支的容量/优化问题；shared-backbone 只保留为后续 fresh-split 的候选，不据此宣称核心问题已解决。详细结果见 [`analysis/rejection_representation_known_only_s2051_20261024.md`](analysis/rejection_representation_known_only_s2051_20261024.md)。
+
+### 2026-10-24：CE-only 三臂消融已完成（seed 2079）
+
+为确认 logits KD 是否本身贡献了新类发现收益，已完成严格的 `CE-only / CE+standard-KD / CE+uncertainty-KD` 三臂消融。三臂共享 split-matched teacher、student seed、训练预算和 semantic-hard 60/40 split；CE-only 关闭全部数值 `alpha_*`、discovery/outlier/rejection 训练，三臂统一使用 `max_softmax`，checkpoint 和 95% known-coverage 阈值均只使用 known validation。runner 已验证三臂 epoch 数一致、KD 路径和 uncertainty 权重有效、feature KD 为零、自动 K 完成，mixed-pool/test 标签未用于训练或选择。
+
+seed=2079 的结果为：CE-only / standard-KD / uncertainty-KD 的 AUROC 分别为 `0.703847 / 0.708586 / 0.709437`，unknown rejection 为 `14.30% / 10.05% / 11.95%`，auto NMI 为 `0.436954 / 0.485926 / 0.464595`。uncertainty-KD 相对 standard-KD 的 AUROC、AUPR、OSCR 仅小幅改善，unknown rejection 提升 `1.90 pp`，但 auto NMI 下降 `0.021331`；相对 CE-only 的 unknown rejection 仍下降 `2.35 pp`。这是协议有效的单 seed 探索性结果，不支持恢复 uncertainty-KD 默认配置，也不支持继续在旧 split 上搜索 weighting function。完整记录见 [`analysis/uncertainty_kd_ce_objective_retry_s2079_20261024.md`](analysis/uncertainty_kd_ce_objective_retry_s2079_20261024.md)。
+
+因此当前主线继续收敛为：先验证 hard-unknown 信号覆盖和真正独立的 image-to-rejection 表征；uncertainty 仅保留为 known-validation 校准的 opt-in rejection/gating 信号，不再作为已验证的训练期核心方法。
+
+## 2026-10-24：整体审阅结论与后续优先级
+
+本次整体审阅把研究主题重新收敛为一个可证伪的问题：不确定性知识蒸馏是否能让
+semantic-hard CIFAR-100 60/40 新类发现中的 known/novel 表征和拒识分数真正分离。
+现有证据表明，最核心的瓶颈仍是 semantic-near novel 与 known 的分布重叠；teacher
+uncertainty 对 known classification error 有局部排序信号，但 `exp(-u)` logits-KD
+重加权没有稳定改善 novel rejection 或自动聚类。因此 uncertainty-KD 暂不作为默认方法，
+也停止在旧测试 split 上继续搜索 weighting function。
+
+当前优先级已固定为：
+
+1. 完成严格的 `CE-only / CE+standard-KD / CE+uncertainty-KD` 三臂消融，确认 KD 本身
+   是否有贡献；CE-only 关闭全部数值 `alpha_*`、discovery/outlier/rejection 训练，
+   统一使用 `max_softmax` 评估。
+2. 只用 known train/validation 信息审计 hard-unknown 信号的覆盖率和跨 split 稳定性，
+   不使用 mixed-pool/test 真标签选规则。
+3. 若继续训练期方法，只一次引入真正 image-to-rejection 的独立 encoder 或类条件边界
+   监督，不与 VOS、OE、PU、candidate gating 同时叠加。
+4. 所有主结果同时报告 AUROC、AUPR、FPR95、OSCR、KS、overlap、known utility、固定
+   known-coverage 下的 unknown rejection、automatic K 和 ACC/NMI/ARI。
+
+完整审阅、代码判断和修改记录见 [`analysis/research_theme_review_20261024.md`](analysis/research_theme_review_20261024.md)。
+
+### 下一步预注册：校准不确定性拒识融合 fresh-split 复核（2077–2078）
+
+在 2074–2076 冻结模型诊断中，validation-only 校准不确定性融合改善了拒识排序和固定工作点拒识，但自动聚类 NMI 并未稳定改善。为区分真实机制信号与单批 checkpoint 偶然性，下一轮预先固定 semantic-hard fresh split seeds `2077`、`2078`。每个 seed 训练并比较 no-KD、standard-KD、uncertainty-KD 三臂，然后对每个冻结 student 运行相同的 evaluation-only `feature_rejector_uncertainty_fusion`。
+
+配置、评价指标、泄漏约束和复现命令见 [`analysis/uncertainty_validation_fusion_replication_protocol_20261023.md`](analysis/uncertainty_validation_fusion_replication_protocol_20261023.md)。本轮不扫描融合比例、不根据测试结果调阈值；只有同时考虑 unknown rejection、known utility、自动 K 和聚类质量，才会决定是否保留该机制。
+
+### 2026-10-23 后续诊断：validation-only 校准不确定性拒识融合（2074–2076）
+
+为检验“不确定性信号用于拒识/门控是否比用于 KD 重加权更合理”，本轮在已完成的 2074–2076 三臂冻结 student checkpoint 上进行了 evaluation-only 诊断。每个模型均使用同一原始 discovery 配置，仅将 score mode 改为 `feature_rejector_uncertainty_fusion`；不重新训练，不改变 checkpoint，也不使用 mixed-pool/test 标签选择融合权重或阈值。Isotonic uncertainty-to-error calibration 只用 known validation 标签拟合，阈值仍由 known-validation 95% coverage 得到，自动 K 保持开启。
+
+相对每个原始 `feature_rejector` discovery 的 paired 差值（融合减原始；FPR95 越低越好）如下。三臂均完成 known-coverage calibration 和 automatic-K；校准报告均标记 `calibration_source=known_validation_only`、`labels_used_for_training_or_test_selection=false`。
+
+| arm | ΔAUROC | ΔAUPR | ΔFPR95 | ΔOSCR | Δ calibrated unknown rejection | Δ cluster ACC / NMI / ARI |
+|---|---:|---:|---:|---:|---:|---:|
+| no-KD，3 seed 平均 | +0.0104 | +0.0238 | -0.0081 | +0.0044 | +0.0353 | -0.0012 / -0.0091 / +0.0060 |
+| standard-KD，3 seed 平均 | +0.0084 | +0.0219 | +0.0074 | +0.0034 | +0.0484 | +0.0065 / -0.0106 / +0.0035 |
+| uncertainty-KD，3 seed 平均 | +0.0142 | +0.0298 | -0.0146 | +0.0080 | +0.0538 | +0.0051 / -0.0115 / +0.0029 |
+
+该结果支持一个较窄的结论：已校准的不确定性可以为现有 feature rejector 提供互补的拒识排序信号，尤其在 AUROC/AUPR 和固定工作点拒识上有跨 seed 的正向趋势；但它没有稳定改善自动聚类的 NMI，也没有证明训练阶段的不确定性 KD 有效。因此该融合只保留为显式 opt-in 的 evaluation/候选拒识机制，不改默认 score mode，不宣称核心方法已经解决。后续若要晋升为正式方法，必须在预先声明的独立 fresh split 上复核，并同时报告拒识、known utility、自动 K 和聚类质量；不得根据本轮 test 标签重新调融合比例。
+
+完整审计见 [`analysis/uncertainty_validation_fusion_s2074_s2076_20261023.md`](analysis/uncertainty_validation_fusion_s2074_s2076_20261023.md)，运行脚本为 [`scripts/run_calibrated_uncertainty_fusion_eval.py`](scripts/run_calibrated_uncertainty_fusion_eval.py)。
+
+### 后续实验预注册：KD 贡献三臂对照（seed 2074–2076）
+
+上一轮 uncertainty-KD 相对 standard-KD 的结果混合，因此不在 seed 2071–2073 上调参。本轮新增 no-logit-KD 对照：`alpha_kd=0`，但保留所有当前分类、表征及 PU/rejection 辅助目标；它不是纯 CE baseline。三臂为 no-logit-KD、standard logits-KD、uncertainty-weighted logits-KD；后两者 `alpha_kd=1`。所有臂 feature KD 与 rejection-branch KD 关闭。每个新 seed 使用同一 teacher 和 split，训练其余条件相同；checkpoint 只按 known validation 选择，阈值用 known validation 校准，自动 K 为主聚类结果。预定新 seed 为 2074、2075、2076，主要比较 standard KD − no-KD 与 uncertainty KD − standard KD，完整报告全部对照，不挑选有利结果。
+
+该实验能检验当前完整辅助损失管线中 logits KD 的增量效应，但不能回答纯 CE 对照或单独识别 PU/rejection 损失贡献。协议：[`analysis/uncertainty_kd_core_protocol_20261023.md`](analysis/uncertainty_kd_core_protocol_20261023.md)；runner：[`scripts/run_uncertainty_kd_core_pair.py`](scripts/run_uncertainty_kd_core_pair.py)。
+
+**执行记录（2026-10-23）**：实验曾被暂停，随后通过可验证的产物复用安全续跑；没有覆盖已完成的 2074/2075 结果，最终 2074–2076 三个 seed 的三臂均完整完成。原始结果为 [`analysis/uncertainty_kd_triad_s2074.json`](analysis/uncertainty_kd_triad_s2074.json)、[`analysis/uncertainty_kd_triad_s2075.json`](analysis/uncertainty_kd_triad_s2075.json)、[`analysis/uncertainty_kd_triad_s2076.json`](analysis/uncertainty_kd_triad_s2076.json)，汇总状态为 `completed`。
+
+### 三臂结果与真实性审计
+
+表中差值为后者减前者；FPR95 越低越好。`no_kd` 是当前完整辅助损失管线中的 `alpha_kd=0` 控制，不是纯 CE；三臂都保留分类、表征和 PU/rejection 辅助目标。
+
+| 指标 | no-KD，2074/2075/2076 | standard KD，2074/2075/2076 | uncertainty KD，2074/2075/2076 | standard−no-KD 均值 | uncertainty−standard 均值 |
+|---|---|---|---|---:|---:|
+| AUROC | 0.8000 / 0.7908 / 0.7939 | 0.7961 / 0.7878 / 0.8005 | 0.7942 / 0.7813 / 0.7942 | -0.0001 | -0.0049 |
+| AUPR | 0.6957 / 0.6834 / 0.6904 | 0.6969 / 0.6790 / 0.7041 | 0.6927 / 0.6705 / 0.6921 | +0.0035 | -0.0082 |
+| FPR95 | 0.5758 / 0.6092 / 0.6167 | 0.5915 / 0.5828 / 0.6013 | 0.6117 / 0.5843 / 0.6280 | -0.0087 | +0.0161 |
+| OSCR | 0.5814 / 0.5918 / 0.6128 | 0.5812 / 0.5729 / 0.5935 | 0.5775 / 0.5698 / 0.5887 | -0.0128 | -0.0039 |
+| known accuracy | 0.6797 / 0.6965 / 0.7267 | 0.6853 / 0.6802 / 0.6990 | 0.6868 / 0.6817 / 0.7020 | -0.0128 | +0.0020 |
+| unknown rejection | 0.3268 / 0.2863 / 0.2160 | 0.2903 / 0.2483 / 0.2613 | 0.3003 / 0.2270 / 0.2063 | -0.0098 | -0.0221 |
+| automatic K (error) | 34 (6) / 38 (2) / 39 (1) | 33 (7) / 36 (4) / 33 (7) | 35 (5) / 34 (6) / 39 (1) | +3.00 | -2.00 |
+| auto-cluster ACC | 0.2456 / 0.2709 / 0.2653 | 0.2319 / 0.2880 / 0.2394 | 0.2505 / 0.2809 / 0.2754 | -0.0075 | +0.0158 |
+| auto-cluster NMI | 0.4577 / 0.4954 / 0.4897 | 0.4594 / 0.5200 / 0.4610 | 0.4791 / 0.5041 / 0.5065 | -0.0008 | +0.0164 |
+| auto-cluster ARI | 0.1373 / 0.1596 / 0.1408 | 0.1202 / 0.1922 / 0.1236 | 0.1449 / 0.1827 / 0.1543 | -0.0006 | +0.0153 |
+
+审计结果：每个 seed 的三臂均为 4 个 epoch；no-KD 的 `alpha_kd=0`，两种 KD 的 `alpha_kd=1`；三臂 `alpha_feat_kd=0`，rejection-branch KD 关闭。standard 臂始终未应用不确定性权重，uncertainty 臂每个 epoch 都应用了非均匀权重，权重标准差约为 0.19–0.22；KD loss 路径均非零。每个 seed 使用一个共享 teacher 和同一 split；checkpoint 只按 known validation 选择，阈值只用 known validation 校准，三臂覆盖率均在 95% 目标的允许范围内；自动 K 完成，测试标签只用于最终回顾性指标。
+
+结论：在当前 semantic-hard CIFAR-100 60/40 和完整辅助损失管线下，uncertainty-weighted logits KD 没有相对 standard KD 的稳定收益。三 seed 中 AUROC、AUPR、OSCR 和 unknown rejection 的平均差值均不利；ACC/NMI/ARI 虽平均为正，但方向并不稳定，且不能抵消拒识指标的下降。因此不将该方法提升为默认方法，也不继续在同一测试 seed 上搜索新的 uncertainty 权重函数。standard KD 相对 no-KD 同样没有稳定总体收益，说明当前结果不能把 logits KD 本身宣传为已证实的核心增益。
+
+后续优先级改为：保留 uncertainty 的 validation-only 校准/排序诊断，转向 hard-unknown 信号覆盖和真正独立的 image-to-rejection 表征；CE-only / standard KD / uncertainty KD 消融已在 seed 2079 完成，结果不支持继续扩展 uncertainty 权重函数搜索。
+
+### 2026-10-23：validation-only 不确定性信号诊断
+
+为区分“信号无效”和“重加权机制无效”，在已完成的 seed=2074 三个冻结学生 checkpoint 上增加了只使用 known validation 标签的错误排序诊断。该诊断不参与训练、checkpoint 选择、阈值选择或测试评估；mixed pool 标签仍只用于回顾性候选污染审计。实现位于 [`scripts/audit_discovery_candidate_pool.py`](scripts/audit_discovery_candidate_pool.py)，诊断结果分别保存为 [`analysis/uncertainty_signal_audit_s2074_no_kd.json`](analysis/uncertainty_signal_audit_s2074_no_kd.json)、[`analysis/uncertainty_signal_audit_s2074_standard.json`](analysis/uncertainty_signal_audit_s2074_standard.json) 和 [`analysis/uncertainty_signal_audit_s2074_uncertainty.json`](analysis/uncertainty_signal_audit_s2074_uncertainty.json)。
+
+| checkpoint | validation error AUROC | error correlation | 最高−最低不确定性五分位错误率 |
+|---|---:|---:|---:|
+| no-KD | 0.688 | 0.306 | 0.395 |
+| standard KD | 0.675 | 0.282 | 0.342 |
+| uncertainty KD | 0.695 | 0.313 | 0.390 |
+
+三个 checkpoint 的不确定性都能在 validation 上识别已知类分类错误，说明教师/学生不确定性信号不是完全无效；但上一轮三臂实验已显示，直接把该信号用于 logits KD 的样本重加权会损害或无法稳定改善 unknown rejection。因此当前更合理的解释是“信号有局部校准价值，但 `exp(-u)` KD 重分配不是有效的核心机制”。该诊断只有一个 seed，不能作为最终性能结论，也不能据此选择新的测试配置。
+
+下一步若继续推进，应预注册独立 seed，先在 known validation 上拟合不确定性到分类错误概率的校准关系，再把校准后的不确定性作为独立 rejection/gating 候选与当前 feature rejector 比较；同时保留 strict CE-only / standard KD / uncertainty KD 消融，以避免再次把局部信号误称为整体新类发现增益。
+
+## 2026-10-23：uncertainty-KD 主效应的三 seed 配对复核
+
+研究问题限定为：在当前 semantic-hard CIFAR-100 60/40 新类发现管线中，teacher 不确定性加权的 logits KL 是否优于普通 logits KL。每个 split 内两臂共享同一个 teacher、同一训练/验证/测试划分和 mixed pool；唯一训练处理变量是 `kd_mode`。`alpha_kd=1`，两臂 `alpha_feat_kd=0` 且 rejection-branch KD 关闭；PU/rejection 等其他学生目标保持一致。权重 `exp(-u)` 按 batch 均值归一到 1，控制总体 KD 尺度，比较的是样本间权重重分配。checkpoint 仅按 known-validation accuracy 选择，阈值仅用 known validation 校准到 95% 覆盖；自动 K 为主结果，oracle K 不作为主结论。协议和可复现实验 runner：[`analysis/uncertainty_kd_core_protocol_20261023.md`](analysis/uncertainty_kd_core_protocol_20261023.md)、[`scripts/run_uncertainty_kd_core_pair.py`](scripts/run_uncertainty_kd_core_pair.py)。
+
+三组预定 seed（2071–2073）均完成。所有两臂 KD loss 非零，uncertainty 臂各 epoch 确实应用了非均匀权重（权重均值约 1、标准差约 0.20–0.22、ESS fraction 约 0.95–0.96）；feature KD 系数为零。自动 K、known-validation 阈值校准和最终测试评估均有保存产物。表中“差值”为 uncertainty − standard；FPR95 越低越好。
+
+| 指标 | Standard KD，2071/2072/2073 | Uncertainty KD，2071/2072/2073 | 配对差值，2071/2072/2073 | 平均差值 |
+|---|---|---|---|---:|
+| AUROC | 0.8005 / 0.7939 / 0.8056 | 0.7987 / 0.7913 / 0.8127 | -0.0018 / -0.0026 / +0.0070 | +0.0009 |
+| AUPR | 0.7038 / 0.6893 / 0.7137 | 0.6913 / 0.6880 / 0.7177 | -0.0124 / -0.0013 / +0.0041 | -0.0032 |
+| FPR95 | 0.6077 / 0.6052 / 0.6148 | 0.6002 / 0.6070 / 0.5952 | -0.0075 / +0.0018 / -0.0197 | -0.0084 |
+| OSCR | 0.5818 / 0.5728 / 0.6017 | 0.5897 / 0.5897 / 0.6067 | +0.0078 / +0.0168 / +0.0050 | +0.0099 |
+| all-known accuracy | 0.6832 / 0.6773 / 0.7027 | 0.6900 / 0.6977 / 0.7035 | +0.0068 / +0.0203 / +0.0008 | +0.0093 |
+| known acceptance @ calibrated threshold | 0.9395 / 0.9357 / 0.9482 | 0.9525 / 0.9442 / 0.9458 | +0.0130 / +0.0085 / -0.0023 | +0.0064 |
+| unknown rejection @ calibrated threshold | 0.2963 / 0.3055 / 0.2895 | 0.2290 / 0.2680 / 0.2948 | -0.0673 / -0.0375 / +0.0053 | -0.0332 |
+| automatic K (absolute error vs 40) | 34 (6) / 31 (9) / 36 (4) | 36 (4) / 31 (9) / 38 (2) | error: -2 / 0 / -2 | -1.33 |
+| auto-cluster ACC | 0.2616 / 0.2973 / 0.2600 | 0.2390 / 0.2921 / 0.2713 | -0.0227 / -0.0052 / +0.0112 | -0.0055 |
+| auto-cluster NMI | 0.4720 / 0.5009 / 0.4690 | 0.4444 / 0.5048 / 0.4818 | -0.0277 / +0.0039 / +0.0128 | -0.0037 |
+| auto-cluster ARI | 0.1520 / 0.1900 / 0.1341 | 0.1140 / 0.1851 / 0.1596 | -0.0380 / -0.0049 / +0.0255 | -0.0058 |
+
+结论仍是混合、未获稳定支持：三 seed 中 OSCR、全体 known accuracy 和自动 K 误差方向较一致地改善；但 unknown rejection 有两 seed 下降，AUPR 均值略降，聚类 ACC/NMI/ARI 平均差值均为负且逐 seed 不一致。AUROC 均值仅增加 `0.0009`，样本数也不足以支持可靠显著性推断。因此这不是已证实的新类发现增益，不应提升为默认方法或论文结论；目前最多说明 uncertainty weighting 对部分排序/综合指标有小幅信号，却未稳定转化为未知拒绝与新类聚类收益。三个 seed 全部使用同一大训练 pipeline，因此结果只识别“该固定 pipeline 条件下更换 KD 权重”的局部效应，不说明 PU/rejection 组件的独立贡献。
+
+真实性/条件审计：split 内配置除 `kd_mode`、输出/checkpoint 路径及由训练结果产生的字段外相同；两臂都完成各自预算并按同一 known-only 规则选模。不同 seed 使用各自 split-matched teacher；阈值 target 为 95%，测试 known acceptance 因有限校准样本而不必恰好等于 95%。测试标签只用于最终回顾性指标（含聚类 ACC/NMI/ARI），不能用于训练、checkpoint 选择、阈值或自动 K 选择。保存文件包括 [`analysis/uncertainty_kd_core_s2071.json`](analysis/uncertainty_kd_core_s2071.json)、[`analysis/uncertainty_kd_core_s2072.json`](analysis/uncertainty_kd_core_s2072.json)、[`analysis/uncertainty_kd_core_s2073.json`](analysis/uncertainty_kd_core_s2073.json) 与 [`analysis/uncertainty_kd_core_summary.json`](analysis/uncertainty_kd_core_summary.json)。
+
+下一步不在这三组测试 seed 上调权重。CE-only / standard KD / uncertainty KD 已在新的 seed 2079 完成，仍只作为单 seed 探索性消融；后续应在独立预注册 seed 上评估 uncertainty 的 validation-only 校准/排序能力，或验证真正独立的 image-to-rejection 表征，不能把单 seed 结果冒充统计确定性。
+
+## 2026-10-20：继续检查核心重叠瓶颈——初始化三臂复核与 PU 拒识边界训练
+
+### seed=2051：区分完整配置差异与同架构初始化
+
+此前 seed=2050 的类别级测试集事后诊断显示，`shared_backbone` 在 40 个
+novel 类中有 36 类误接收率下降、3 类上升、1 类持平，中位变化 `−12 pp`；
+但总体仍有 `65.55%` novel 样本被误接收。该分析仅作最终测试描述，不用于训练、
+选模或调参。随后在全新 semantic-hard seed=2051 上完成预注册三臂：
+`scratch_cnn`、随机 ResNet-18 (`random_backbone`) 和复制学生训练前预训练
+ResNet-18 (`shared_backbone`)。teacher、split、student 训练预算/损失、mixed
+pool、detector 和 known-validation-only 95% coverage 校准相同。此设计不是完整
+architecture×initialization factorial；scratch-vs-ResNet 只能比较完整配置，
+random-vs-shared 才是同架构初始化对照。
+
+| seed 2051 arm | AUROC | FPR95 | OSCR | KS | unknown below known-q95 | test known acceptance | unknown rejection | known accuracy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| scratch CNN | 0.76745 | 0.66633 | 0.55848 | 0.39733 | 77.50% | 95.183% | 21.950% | 67.967% |
+| random ResNet-18 | 0.76545 | 0.66117 | 0.56102 | 0.39683 | 78.425% | 95.433% | 20.800% |
+| shared pretrained ResNet-18 | **0.78807** | **0.60683** | **0.57335** | **0.43367** | **76.600%** | 95.067% | **23.200%** | 68.000% |
+
+Shared initialization improves ranking/overlap over both controls on this split;
+relative to random ResNet-18, AUROC is `+0.02261`, FPR95 improves `5.433 pp`,
+OSCR is `+0.01232`, KS is `+0.03683`, and overlap falls `1.825 pp`. The work-point
+unknown rejection rises only `2.4 pp` versus random and remains low at `23.2%`;
+`76.6%` of unknown scores are still below known q95. This replicates a ranking
+signal, not a solution or a basis for changing defaults. Full data and protocol:
+[`analysis/rejection_encoder_arch_factorial_s2051.json`](analysis/rejection_encoder_arch_factorial_s2051.json)
+and [`analysis/rejection_encoder_arch_factorial_s2051_protocol.md`](analysis/rejection_encoder_arch_factorial_s2051_protocol.md).
+
+### seed=2052：训练期 PU class-conditional rejection boundary
+
+针对“未知样本进入已知支持边界”的重叠问题，预先固定 copied-pretrained
+`shared_backbone`，只比较训练权重 `alpha_discovery_rejection_boundary=0`
+与 `0.1`。使用新 semantic-hard seed=2052、同一 split-matched teacher、其余
+student 配置与 4 epoch 预算、known prior `0.2` 的 mixed pool、PU risk、相同
+detector 和 known-validation-only 95% coverage 校准。关闭 VOS、去相关、rejection
+kNN/PU margin 和其他 boundary loss，不使用 pool 或 test 标签做逐样本训练决策。
+配置审计确认训练配置除该 loss 权重、输出路径和结果元数据外一致；发现配置除
+checkpoint/输出路径外一致。Treatment 的边界 loss 和对应梯度四个 epoch 均非零，
+所以对比实际执行。
+
+| seed 2052 | AUROC | FPR95 | OSCR | KS | unknown below known-q95 | test known acceptance | unknown rejection | known accuracy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 0.79346 | 0.60083 | 0.59415 | 0.44067 | 76.725% | 93.667% | 27.500% | 70.300% |
+| PU boundary 0.1 | **0.80065** | **0.58033** | **0.60037** | **0.45783** | **74.200%** | 94.750% | 26.775% | 70.200% |
+
+Loss 对排序与重叠代理有小幅正向效果（AUROC `+0.00719`、FPR95 改善
+`2.05 pp`、OSCR `+0.00622`、overlap 降 `2.525 pp`），已知总体准确率近似持平；
+但校准工作点 unknown rejection 下降 `0.725 pp`，因此联合标准为混合结果，不能称为
+有效解决核心问题，也不改默认、不在此测试 split 扫权重。已知 test acceptance
+与 calibration acceptance 的差异反映泛化波动；calibration 两臂均为 `94.954%`。
+下一步只值得在新独立 seed 上按原样复核固定 `0.1`，不做权重搜索；若排序信号仍
+无法转化为工作点未知拒绝收益，则停止该 objective 方向，回查 semantic-near
+hard-unknown 训练信号覆盖。完整记录：
+[`analysis/rejection_boundary_train_s2052_20261020.md`](analysis/rejection_boundary_train_s2052_20261020.md)、
+[`analysis/rejection_boundary_train_s2052.json`](analysis/rejection_boundary_train_s2052.json)。
+
+## 2026-10-20：rejection encoder 初始化复核（semantic-hard seed=2050）
+
+本轮围绕核心问题“已知/未知在 rejector 分数上的重叠”做初始化机制复核。修改前明确的唯一对比因素是：同一 rejection encoder 架构使用 `shared_backbone`（复制学生 backbone 的预训练初始化；复制发生在 student 训练开始前）还是 `random_backbone`（同架构随机初始化）；teacher、学生训练配置、数据划分、mixed discovery pool、损失权重、训练轮数、检测器以及 validation-only 的 95% known-coverage 校准全部固定。`alpha_rejection_decorrelation=0`，没有叠加 VOS、边界损失或新的后处理。
+
+seed=2050 的完整结果如下：
+
+| 初始化 | AUROC | FPR95 | OSCR | KS | unknown below known-q95 | 已知接受率 | 未知拒绝率 | 已知全体准确率 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| shared backbone | 0.78795 | 0.63983 | 0.57330 | 0.42958 | 74.85% | 95.15% | 24.70% | 68.13% |
+| random backbone | 0.75959 | 0.70850 | 0.55582 | 0.38492 | 77.68% | 93.27% | 27.20% | 68.65% |
+
+shared 的预训练初始化使排序/分布指标一致改善：AUROC `+0.02836`、FPR95 `-0.06867`、OSCR `+0.01749`、KS `+0.04467`、重叠代理下降 `2.83` 个百分点。但该副本取自 student 训练前加载的预训练 backbone，并非训练后的 student 表征；不能解释成“已经对齐学生特征”。在固定校准工作点上，shared 的未知拒绝率反而低 `2.50` 个百分点，同时已知接受率高 `1.88` 个百分点，说明排序改善尚未稳定转化为开放集工作点收益，不能据此修改默认配置或宣称核心问题已解决。该结论也与 2048/2049 的同架构复核中 shared 在 AUROC/FPR95/KS/overlap 方向反复占优的信号一致，但不能排除预训练初始化之外的训练差异。
+
+本轮有价值之处是定位了一个可解释的训练因素：rejector 初始化会影响共享表示空间中的可分性；但它还不能单独解决 hard/semantic-near unknown 的误接收。后续已完成同一 seed=2050 上的 `scratch_cnn` vs `shared_backbone` 对照。需要更正实验解释：两臂不只差初始化，`scratch_cnn` 是轻量三层 CNN，`shared_backbone` 是学生 ResNet-18 的副本，故架构/容量也不同。这是两种完整配置的比较，不能作为初始化的因果证据。shared 在该 split 的 AUROC/FPR95/OSCR/KS/overlap 及固定工作点未知拒绝率均较好，但已知测试接受率低 1.75 pp，且只有一个 split；不据此改默认。保留同架构 `shared_backbone` vs `random_backbone` 作为有效初始化对照。下一步优先评估是否值得做架构×初始化的分离式 factorial 新 split 复核；完整结果见 [`analysis/rejection_encoder_scratch_vs_shared_s2050_20261020.md`](analysis/rejection_encoder_scratch_vs_shared_s2050_20261020.md) 和 [`analysis/rejection_encoder_scratch_vs_shared_s2050_20261020.json`](analysis/rejection_encoder_scratch_vs_shared_s2050_20261020.json)。初始化复核报告仍见 [`analysis/rejection_encoder_init_s2050_s2050.md`](analysis/rejection_encoder_init_s2050_s2050.md) 与 [`analysis/rejection_encoder_init_s2050_s2050.json`](analysis/rejection_encoder_init_s2050_s2050.json)。
+
 ## 2026-10-18：边界 VOS + rejection BCE 配对复核——未获得稳定收益
 
 为验证“困难边界虚拟未知上的 rejection-head BCE”是否真的改善核心的
@@ -297,7 +801,7 @@ seed=123 的 `0.05` 复核 AUROC 为 `0.8918`、FPR95 为 `0.4063`、OSCR 为 `0
 - kNN+rejector 的 `w=0.75` 在普通报告中达到 AUROC `0.88064`、FPR95 `0.41733`、OSCR `0.59619`，但严格精确 95% 已知覆盖率下未知拒绝率比 rejector-only 低 `2.40` 个百分点，AUROC CI 跨 0；这是校准/工作点变化，不进入默认流程。
 - MLP nnPU 的 AUROC `0.87249`、FPR95 `0.50533`，均不如 linear nnPU 的 `0.87986/0.43817`，停止增加 rejector 容量。
 
-详细数据和判断见 [`analysis/rejection_detector_followup_20261013.md`](analysis/rejection_detector_followup_20261013.md)。当前继续保留 independent rejection representation + linear `nu_corrected` nnPU 和 `encoder_lr_scale=0.1` 作为候选；下一步停止堆叠后处理检测器，回到直接改善共享 encoder 几何的单一训练目标，并继续同时报告 AUROC、FPR95、OSCR、已知效用、KS 和 overlap。
+详细数据和判断见 [`analysis/rejection_detector_followup_20261013.md`](analysis/rejection_detector_followup_20261013.md)。该段是历史候选结论；结合 2026-10-24 的独立表征机制复核，当前不再把 independent rejection representation 作为默认或优先候选，后续只有在先解决有效秩/训练利用问题后才重新考虑。其余训练目标仍应继续同时报告 AUROC、FPR95、OSCR、已知效用、KS 和 overlap。
 
 本轮代码检查：`python -m pytest -q` 为 `228 passed`，`compileall` 和 `git diff --check` 均通过。融合脚本初次运行曾因漏传 `--knn-ood` 暴露配置错误，已修正并重新运行；该失败不是算法结果，脚本现已通过语法检查。
 
@@ -6314,3 +6818,1098 @@ seed=2029 出现值得固定复核的混合信号后，按原计划在 seed=2030
 （旧版随机 MC-dropout 结果，已作废。）进一步测试了一个区别于均匀配额的规则：只用 known validation 中每个预测类的 entropy+uncertainty 95 分位作为阈值（该类 validation 预测少于 20 个时回退到全局阈值），再应用于同一个 mixed training pool。选中 `15.43%` pool，known contamination `7.44%`、novel recall `17.85%`，较同预算随机选择期望 `15.43%` 高 `2.42 pp`；但 per-class median recall 仅 `17.01%`，最差类仍为 `2.63%`。known validation 各预测类实际接受率为 `91.3–95.1%`，显示 finite/discrete bin 的校准误差；两个 bin 回退到全局阈值。该法通过减少选择量降低污染，却没有修复 class-tail coverage，不接入训练。两种候选分配改动均未达到机制门槛，因此当前停止候选 selector 探索，不跑完整训练；所有 mixed-pool 标签只用于事后审计，未访问最终 test。详情见 [`analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md`](analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md)。
 
 **审计更正（2026-10-20）：** 上面首轮候选池数字及 class-balanced/q95 结论已被后续复核取代。审计调用 `extract_outputs(..., mc_samples=1)`，但该 helper 即使只采样一次也会启用随机 MC-dropout；先前将其称为确定性提取有误，导致类别统计复跑变化。现已改为普通 eval 前向，且加入重复提取一致性测试。按两个独立 semantic-hard split 的确定性结果，validation classwise empirical-CDF top-25% 在 seed 2041 将 contamination/novel recall/最差类 recall 从 `9.19%/28.38%/1.75%` 改为 `8.81%/28.50%/4.39%`；但 seed 2040 则从 `6.37%/29.26%/2.73%` 变为 `6.89%/29.10%/2.73%`，没有复现改善。因此该方法不接入训练、不跑完整实验；下一步先审计确定性训练池信号的跨 split 稳定性。更正后报告与 JSON：[`analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md`](analysis/semantic_hard_candidate_classwise_audit_s2041_20261020.md)、[`analysis/semantic_hard_candidate_pool_audit_s2041_deterministic_20261020.json`](analysis/semantic_hard_candidate_pool_audit_s2041_deterministic_20261020.json)、[`analysis/semantic_hard_candidate_pool_audit_s2040_deterministic_20261020.json`](analysis/semantic_hard_candidate_pool_audit_s2040_deterministic_20261020.json)。旧 JSON 保留供追溯，但不得再作为确定性结果引用。
+
+### 2026-10-20：已知邻域不确定性候选信号复核
+
+为测试候选池中少数 novel 类覆盖过低是否可由“已知特征邻域冲突”改善，在 seed 2040/2041 的冻结 CE=1.0 模型上进行两项纯诊断：已知训练特征的 10-NN 类别投票熵，以及分类器预测类与 10-NN 已知类别投票的不一致比例。每个方法都在相同 5,400 样本 mixed pool 中固定选择 25%（1,350 个）；known 训练标签只构造邻域，pool 标签仅在 selection 完成后计算污染率、整体召回和逐 novel 类召回，不使用最终测试集。
+
+| split | selector | 已知污染率 | novel 总召回 | novel 类召回中位数 | 最差类召回 |
+|---:|---|---:|---:|---:|---:|
+| 2040 | entropy+uncertainty | 6.37% | 29.26% | 32.22% | 2.73% |
+| 2040 | 10-NN 投票熵 | 9.56% | 28.26% | 28.72% | 3.77% |
+| 2040 | 分类器—邻域不一致 | 11.26% | 27.73% | 28.13% | 7.02% |
+| 2041 | entropy+uncertainty | 9.19% | 28.38% | 26.77% | 1.75% |
+| 2041 | 10-NN 投票熵 | 10.15% | 28.08% | 32.32% | 0.88% |
+| 2041 | 分类器—邻域不一致 | 11.33% | 27.71% | 29.55% | 1.75% |
+
+两种信号都未通过预设门槛（两 split 最差类都改善、median 下降不超过 1 pp、污染上升不超过 1 pp），因此不接入训练、不跑训练实验、不继续在相同 split 上扫 k 或预算。kNN 不一致信号可能找到 seed 2040 的少数极难类，但明显以更多已知污染和更低总召回/中位召回为代价；seed 2041 没有最差类收益。当前证据表明单一已知邻域模糊度不足以处理 semantic-near unknown 与 hard-known 的重叠。下一步应检查 hard semantic unknown 的数据来源与不同冻结表征下的类尾失败是否持续，而非继续堆叠后验 selector。实现、测试和四份逐样本审计 JSON 见 [`analysis/semantic_hard_knn_candidate_signal_audit_20261020.md`](analysis/semantic_hard_knn_candidate_signal_audit_20261020.md)。该轮是冻结训练池机制诊断，不是训练效果或最终性能结论。
+
+### 2026-10-20：同一拒识 encoder 的跨表征候选覆盖诊断
+
+基于 seed 2040/2041 已有 independent-rejection treatment checkpoint，固定模型、5,400 样本 pool、known 支持标签、cosine kNN `k=5` 与 25%（1,350 个）候选预算，只比较 shared classification features 和 rejection features 两种表征下的 support-distance 排序。pool 标签只在候选形成后计算污染率和逐类召回；没有训练、测试集调参或阈值选择。
+
+| split | 表征 | 已知污染率 | novel 总召回 | novel 类中位召回 | 最差类召回 |
+|---:|---|---:|---:|---:|---:|
+| 2040 | shared classification | 7.85% | 28.80% | 24.27% | 0.00% |
+| 2040 | rejection | 20.81% | 24.75% | 24.10% | 10.89% |
+| 2041 | shared classification | 7.78% | 28.82% | 26.45% | 1.75% |
+| 2041 | rejection | 19.93% | 25.02% | 24.18% | 10.66% |
+
+rejection 表征确实提高了两 split 的最差类召回（`+10.89/+8.91 pp`），说明它捕捉到 shared 表征遗漏的部分类尾样本；但已知污染率增加 `+12.96/+12.15 pp`，novel 总召回下降 `−4.05/−3.80 pp`，median 也没有稳定提升。未通过预先设定的联合门槛，因此不把该表征用作训练候选 gate，也不据此追加训练。它是一个“尾类敏感但不够选择性”的机制证据，与既有独立拒识 detector 的残余重叠结果一致。停止在 seed 2040/2041 继续调候选排序；后续若有新 hard-unknown 监督，应在新的 semantic-hard split 上验证能否同时保住已知支持和提高类尾召回。详细结果：[`analysis/semantic_hard_representation_candidate_audit_20261020.md`](analysis/semantic_hard_representation_candidate_audit_20261020.md)。
+
+随后只做两种预先固定的 shared/rejection 整合诊断，不扫描权重：50/50 rank fusion 的最差类召回升至 `2.83%/3.51%`，median 升至 `27.02%/28.00%`，但污染上升到 `10.15%/11.26%`（较 shared-only `+2.30/+3.48 pp`），仍不符合门槛。shared-support veto（先要求 shared-space support-distance 为正，再按 rejection-space 距离排序）使最差类召回升至 `11.88%/13.00%`，却将污染推至 `17.85%/17.48%`、总 novel 召回降至 `25.67%/25.79%`。硬 veto 放大了 rejection 表征的低选择性，没有解决 hard-known 混入。由此停止当前双表征 selector 路线，不跑训练，也不在相同 split 上继续融合调参。两 split 的完整方法结果已更新在上述审计报告和 [`analysis/semantic_hard_dual_representation_candidates_s2040_20261020.json`](analysis/semantic_hard_dual_representation_candidates_s2040_20261020.json)、[`analysis/semantic_hard_dual_representation_candidates_s2041_20261020.json`](analysis/semantic_hard_dual_representation_candidates_s2041_20261020.json)。
+
+### 2026-10-20：固定 rank fusion 与 inter-class VOS 独立复核
+
+在确定性候选池审计之后，先做了一个不训练的固定融合诊断：`0.5 × entropy+uncertainty rank + 0.5 × known-support boundary rank`，与原排序在两个相同的 5,400 样本训练池、25% 固定预算下比较。seed=2041 的最差 novel-class recall 从 `1.75%` 到 `1.75%`，seed=2040 从 `2.73%` 到 `2.83%`；同时 median recall 在两个 split 都下降，且污染至少在一个 split 上上升。因此该融合没有通过跨 split 机制门槛，不接入训练、不继续扫融合权重。实现保留在 [`scripts/audit_discovery_candidate_pool.py`](scripts/audit_discovery_candidate_pool.py)，仅用于离线诊断；对应结果为 `analysis/semantic_hard_candidate_pool_audit_s2040_fusion_20261020.json` 和 `analysis/semantic_hard_candidate_pool_audit_s2041_fusion_20261020.json`。
+
+随后把重点转回训练期表征目标，完成了 inter-class virtual outlier（VOS）的独立 semantic-hard 配对复核。两次实验都固定 nearest-class pairing、boundary fraction `0.25`、`alpha_vos=0.01`，只比较 `alpha_vos=0` control 与 treatment；两臂均使用 split-matched teacher、4 epochs、mixed pool、validation-only 95% known coverage。seed=2040 treatment 相对 control 的 AUROC/OSCR/未知拒绝率分别为 `+0.00236/+0.00689/+3.90 pp`，overlap proxy `−2.35 pp`，但 FPR95 `+0.12 pp`、已知接受率 `−0.52 pp`；seed=2041 则 AUROC/OSCR/未知拒绝率为 `−0.00644/−0.01036/−2.40 pp`，FPR95 `+2.33 pp`，已知接受率 `+1.20 pp`，overlap proxy 仍 `−1.80 pp`。训练历史确认 treatment 的 `vos` 和 `vos_rejection` 非零、control 为零，故不是 wiring 失败。结论是：VOS 能在部分 split 上改变分数几何，但不能稳定改善排序和固定覆盖率工作点，当前 synthetic inter-class outlier 与 semantic-hard unknown 不匹配；不改默认、不叠加 rejection BCE、不继续在这两个测试 split 上扫权重。详细报告见 [`analysis/semantic_hard_vos_boundary_replication_s2040_s2041_20261020.md`](analysis/semantic_hard_vos_boundary_replication_s2040_s2041_20261020.md)。下一步停止 selector 融合和该 VOS 配方，转向有更可靠 hard-unknown 结构的训练监督或解耦 rejection representation。
+
+**验证集 CDF 校准复核（2026-10-20）：**在冻结的 seed 2040/2041 independent-rejection checkpoint 上，固定 5,400 样本 mixed pool、25%（1,350）预算、support-distance `k=5`，比较原始 shared/rejection support distance 与按已知验证集预测类别计算的经验 CDF 排序。显式过滤 `is_known=False` 验证项；当前两次验证集均为 2,046 个已知样本、排除 0 个未知项，小于 20 个样本的预测类回退到全局 known-reference。Shared-space CDF 将 median/min novel recall 从 `24.27/0.00%` 提升至 `28.17/0.99%`（2040），从 `26.45/1.75%` 提升至 `28.57/2.63%`（2041），但 contamination 分别上升 `1.26/0.44 pp`，且 novel 总召回略降；超过预设污染上限的 seed 2040 未通过联合门槛。Rejection-space CDF 虽提高最低类召回，但相对 shared baseline 仍有 `+14.00/+11.11 pp` contamination、`−4.38/−3.47 pp` novel 总召回，未修复低选择性。因此不接入训练或默认策略，停止在旧 split 上继续校准/扫参；结论仅支持“类别尺度不均衡会影响尾部覆盖”，不是核心重叠问题的解决方案。审计与判断见 [`analysis/semantic_hard_validation_cdf_dual_representation_s2040_s2041_20261020.md`](analysis/semantic_hard_validation_cdf_dual_representation_s2040_s2041_20261020.md)，逐 seed JSON 为 `analysis/semantic_hard_cdf_candidate_audit_s2040_20261020.json`、`analysis/semantic_hard_cdf_candidate_audit_s2041_20261020.json`。
+
+**同架构 rejection 初始化配对的类别错误诊断（2026-10-20）：**对 seed 2045/2046 已完成的 copied-pretrained/random ResNet18 四个冻结模型做纯事后分析，不改模型、阈值或训练。novel false-accept rate 分别为 `80.05%/78.80%`（seed 2045 copied/random）和 `77.10%/83.20%`（seed 2046）。错误覆盖大量 novel 类，而非稳定集中于少数类；14 个两个 split 都为 novel 的共同类别，其误接纳率跨 split 相关系数仅 copied `0.158`、random `0.001`。这不支持从测试错误派生类权重，也说明初始化的 aggregate ranking 改善并未消除广泛的 novel false acceptance。下一步不做 test-informed 类别加权；候选假设是利用训练集已知标签与 CIFAR-100 coarse taxonomy，做 superclass-aware fine-class margin。数据管线核对确认 CIFAR-100 batch 保留 `raw_labels`，semantic-hard split JSON 提供 `fine_to_coarse`，可仅在 known training rows 上构造映射；实现前仍需做梯度/known-accuracy smoke test，再在新 semantic-hard split 上预注册单因素配对。该假设尚无效果证据。明细见 [`analysis/semantic_hard_classwise_false_accept_s2045_s2046_20261020.md`](analysis/semantic_hard_classwise_false_accept_s2045_s2046_20261020.md) 和 [`analysis/semantic_hard_classwise_false_accept_s2045_s2046_20261020.json`](analysis/semantic_hard_classwise_false_accept_s2045_s2046_20261020.json)；类别映射/趋势只作诊断，绝不用于训练权重或阈值调节。
+
+### 2026-10-20：superclass-aware rejection SupCon 实现与实现级验证
+
+针对上述假设，新增默认关闭的 `--alpha-rejection-superclass-supcon`：在 student 的 rejection embedding 上计算已知类 supervised contrastive loss；同 fine 类是正样本，不同 fine 类是负样本，同 coarse superclass 的负样本固定乘 `2.0`（通过 logit `log(2)` 偏置强化 hard-negative 排斥）。权重 2.0 是预先固定的机制常数，不做 split/test 标签调权；control 使用系数 0，treatment 使用预先固定的非零系数。coarse map 仅由 CIFAR-100 split 的 `known_classes` 与 `fine_to_coarse` 建立，未映射 unknown/test 样本不会进入训练 loss。该选项仅支持 CIFAR-100 且要求 rejection branch 与带 taxonomy 的现存 split 文件。
+
+实现级检查：weight=1 时与已有 SupCon 数值等价；无正样本锚点可安全忽略；unknown/负标签行不会影响 loss；新项对 embedding 有有限、非零梯度；batch/map 错误显式失败。针对性测试 3 项通过，完整 `tests/test_core_behaviors.py` 为 `252 passed`；CUDA 前向/反向 smoke 的 loss 为 `2.99839`、梯度范数 `0.24342` 且均有限，CLI 参数默认关闭。随后已完成下述 control/treatment 配对训练；实现 smoke 仅证明代码路径与梯度可运行，算法效果以配对实验结果为准。
+
+**seed=2047 配对训练结果：**两臂使用同一 split-matched teacher、student 初始 seed、独立 rejection encoder 的 shared-backbone 初始化、mixed pool、训练/检测配置和 known-validation-only 95% coverage 校准；唯一算法变量为 loss 系数 `0` vs `0.1`，coarse hard-negative 权重固定 `2.0`。control/treatment AUROC 为 `0.79128/0.77495`，AUPR `0.69938/0.67651`，FPR95 `0.63150/0.65950`，OSCR `0.58844/0.58369`；校准阈值下 known acceptance `94.650%/94.433%`，unknown rejection `27.750%/25.125%`，unknown-below-known-q95 overlap proxy `73.325%/76.250%`。已知分类 accuracy 基本持平（`70.400%/70.450%`）。日志确认新增 loss treatment 四 epoch 均非零（`2.8387→1.9970`），control 恒为 0；故不是参数未接线。排序、FPR95、拒识工作点和 overlap 均变差，判定该配方本次无效：不设默认、不在该 split 扫权重。结论限于一个 paired seed，taxonomy-aware 已知 sibling 区分并不等价于 semantic-near unknown rejection。应重新审查训练监督是否提供了可用的 unknown-vs-known 信号，再提出不同机制的单因素配对，不把 test 标签用于训练/阈值/选择。详细设置和结果见 [`analysis/superclass_rejection_supcon_s2047_pair_20261020.md`](analysis/superclass_rejection_supcon_s2047_pair_20261020.md)。
+## 2026-10-20：拒识表征机制审计——当前“独立分支”仍高度继承共享特征
+
+为避免把 `rejection_projector` 的结构独立误认为任务上的表征独立，本轮没有重新训练或调阈值，而是对已有 semantic-hard seed=2040/2041 VOS checkpoint 做确定性后验审计。固定原 checkpoint、原数据划分和原检测报告；测试集已知/未知标签只用于描述性 probe，不参与训练、模型选择或阈值校准。
+
+| seed | shared participation/rank95 | rejection participation/rank95 | top-10 邻域 Jaccard | shared→rejection R² | rejection→shared R² | shared probe AUC | rejection probe AUC |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2040 | 38.53/251 | 15.66/27 | 0.5320 | 0.9757 | 0.7372 | 0.8081 | 0.8027 |
+| 2041 | 40.16/239 | 15.66/28 | 0.5257 | 0.9739 | 0.7444 | 0.7870 | 0.8016 |
+
+这说明当前 `rejection_projector` 虽然参数上独立，但输入仍是共享 encoder 特征，且没有显式的解耦约束；rejection embedding 可以被 shared embedding 线性高度预测，邻域也有约一半重合。因此它更像共享表征的压缩/重参数化，而不是能够独立识别 hard unknown 的拒识空间。另一方面，rejection probe AUC 仍约为 0.80，说明该分支包含有用信息，不应直接删除。最终检测分数与保存的 `feature_rejector_score` 相关系数为 1.0，确认本审计针对的就是实际 rejector 分数。
+
+本轮结论不是继续调阈值，也不是把高拒绝率当作成功；下一步做一个单因素训练试验：在保留 rejection known-class CE 和现有检测协议不变的前提下，加入 shared/rejection normalized feature 的 known-only cross-covariance decorrelation loss，直接测试能否减少表征复制并降低已知/未知重叠。成功必须同时满足两个预先固定 split 的排序/重叠指标改善，并且不能以降低 known acceptance 或 accepted-known accuracy 换取未知拒绝率；否则停止该方向，转向真正独立的 rejection encoder 或数据协议修正。
+
+详细报告：[`analysis/rejection_representation_audit_s2040_s2041_20261020.md`](analysis/rejection_representation_audit_s2040_s2041_20261020.md)；复现脚本：[`scripts/audit_rejection_representation.py`](scripts/audit_rejection_representation.py)。
+
+### 2026-10-20：拒识表征 cross-covariance 去相关配对实验
+
+针对上面的表征复制审计，固定 semantic-hard seed=2040/2041、各自 teacher/split、4 epochs、mixed pool、rejector、known-validation-only 95% coverage 校准和其余训练配置，只比较 `alpha_rejection_decorrelation=0` 与 `0.01`。已核实 treatment 损失实际启用并产生非零梯度，保存配置除目标系数外没有其他实验条件差异（路径与运行后 checkpoint 元数据除外）。
+
+结果不稳定且方向相反：seed 2040 的 AUROC/OSCR/KS 变差、overlap 增加 `0.75 pp`；未知拒绝率虽增加 `2.675 pp`，已知接受率下降 `1.017 pp`，不能视为纯收益。seed 2041 的 AUROC/FPR95/OSCR/KS 和 overlap 有改善（overlap 降 `1.075 pp`），但未知拒绝率反而下降 `2.575 pp`，accepted-known accuracy 小幅下降。两次都仍有约 `72–78%` 未知分数落在 known q95 以下。因此没有达到跨 split 同时改善排序/重叠与工作点效用的标准，不改默认，也停止在这两个测试 split 上继续扫去相关权重。
+
+**下一步：**先验证真正 image-to-rejection 的 task-specific encoder。实现和单测完成后，再按下述配对协议训练，不与其他新 loss 叠加。仍需同时报告 AUROC、FPR95、OSCR、KS、overlap、known acceptance 和 accepted-known accuracy。完整配对数据、限制和判断见 [`analysis/semantic_hard_rejection_decorrelation_s2040_s2041_20261020.md`](analysis/semantic_hard_rejection_decorrelation_s2040_s2041_20261020.md)。
+
+### 2026-10-20：独立拒识 encoder 初始化探索（seed=2042）
+
+此前 seed 2040/2041 的小型 scratch CNN 独立拒识 encoder 均未改善核心指标。本次原本想检查从零初始化是否表征不足，对比 `scratch_cnn` 与 `shared_backbone`。当时观察到的观测值和运行条件保留在对应报告中；但后续审计确认两臂的拒识 encoder 结构/容量并不相同，且 `shared_backbone` 复制的是 student 的初始预训练 ResNet18。因此该实验不能隔离初始化效应，必须按历史探索结果解读，不能用于判断哪个因素造成性能差异。
+
+seed 2042 的原始单 split 数值曾显示多个指标向好，见其历史报告；但这不是“backbone 初始化”的有效因果证据，因为两臂结构与容量同时变化。两臂 calibration-set known acceptance 相近也不能排除结构/容量或分类 checkpoint 差异带来的影响。
+
+**seed 2042–2044 的旧实验仅保留为历史探索结果，不作为初始化因果证据。**后来发现这三组对照同时改变拒识 encoder 的结构/容量和权重来源，且复制的是 student 的初始预训练 ResNet18，不是训练后的 student backbone。因此此前把三组同向指标解释成“预训练初始化有效”的结论已撤回；原始观测数据仍有效，但不能分辨是结构、容量还是初始化来源导致差异。详情见 [`analysis/rejection_encoder_init_attribution_audit_20261020.md`](analysis/rejection_encoder_init_attribution_audit_20261020.md) 及各 seed 历史报告。
+
+### 2026-10-20：独立拒识 encoder 初始化确认（seed=2043/2044）
+
+seed 2043/2044 延续了相同的 `scratch_cnn` 与 `shared_backbone` 比较，训练协议和验证校准按各自报告记录；两臂拒识训练信号非零，确认不是空路径。但这些复核沿用了相同结构不匹配的对照，因此无论其他配置字段是否一致、指标方向是否重复，都不能把结果归因为初始化来源。
+
+seed 2043 的历史报告记录了多项指标改善；seed 2044 的历史报告也记录到类似方向。它们是旧对照下的观测，不是独立初始化效应确认；不再据此将 `shared_backbone` 评为候选或推荐。
+
+seed 2043/2044 的详细原始数据与限制分别见 [`analysis/rejection_encoder_init_s2043_20261020.md`](analysis/rejection_encoder_init_s2043_20261020.md) 和 [`analysis/rejection_encoder_init_s2044_20261020.md`](analysis/rejection_encoder_init_s2044_20261020.md)。归因更正见下节。
+
+以上 seed 2043/2044 的早期“确认”表述也只描述旧配置的观测结果，不构成公平的因果确认。旧结果与更正后的解释应以 [`analysis/rejection_encoder_init_s2042_20261020.md`](analysis/rejection_encoder_init_s2042_20261020.md)、[`analysis/rejection_encoder_init_s2043_20261020.md`](analysis/rejection_encoder_init_s2043_20261020.md)、[`analysis/rejection_encoder_init_s2044_20261020.md`](analysis/rejection_encoder_init_s2044_20261020.md) 中的归因更正为准。
+
+### 2026-10-20：独立拒识 encoder 初始化实验归因更正
+
+**重要审计更正：**复核 seed=2042/2043/2044 的保存配置（`pretrained=true`）及模型构造顺序后，确认旧实验的 `shared_backbone` 不是从“训练后的 student backbone”复制，而是在训练开始前复制已加载预训练权重的 ResNet18；`scratch_cnn` 则是不同结构、不同参数量的小型随机 CNN。旧实验结果和数值保留，但同时改变了结构/容量与初始化，不能据此得出“预训练初始化本身有效”的因果结论。撤回此前将 `shared_backbone` 作为推荐初始化的表述；相关 seed 报告已加更正说明。
+
+下一步只验证初始化来源：同一 ResNet18 架构、参数量、student encoder、其余 heads、teacher、split、训练和 known-validation-only 校准均匹配，唯一对照为 rejection encoder 复制 student 的预训练初值（`shared_backbone`）或同架构随机初值（`random_backbone`）。新模式在所有旧模块构造后创建，并使用 RNG 隔离；单测核对拒识 encoder 状态字典结构/参数量相同，且其余模块初值逐张量一致。新 semantic-hard seed=2045 用于独立配对；实验尚未运行，不能预判收益。实现审计与限制见 [`analysis/rejection_encoder_init_attribution_audit_20261020.md`](analysis/rejection_encoder_init_attribution_audit_20261020.md)。
+
+### 2026-10-20：同架构 rejection encoder 初始化对照（seed=2045）
+
+在前述归因更正后，完成了 `shared_backbone`（复制初始预训练 ResNet18）对 `random_backbone`（同架构随机权重）的单 split 配对实验。两臂参数量均为 23,023,994，student 配置无意外差异，teacher、语义 hard split、训练日程、5,400/known prior 0.2 discovery pool、验证子集划分、detector 与 known-validation-only 95% 校准相同；拒识 CE 与 uncertainty-PU 均实际激活。验证 checkpoint 选择/校准分别用 2,053/647 个互斥样本，索引 hash 完全相同。
+
+| seed=2045 | copied pretrained | random ResNet18 | 差值 |
+|---|---:|---:|---:|
+| AUROC | 0.78040 | 0.76147 | +0.01893 |
+| FPR95 | 0.62933 | 0.66783 | −0.03850 |
+| OSCR | 0.59697 | 0.58220 | +0.01477 |
+| score KS | 0.40950 | 0.39400 | +0.01550 |
+| unknown below known q95 | 76.150% | 80.050% | −3.900 pp |
+| test known acceptance | 96.317% | 94.600% | +1.717 pp |
+| calibrated-threshold unknown rejection | 19.950% | 21.200% | −1.250 pp |
+| accepted-known accuracy | 72.919% | 73.097% | −0.178 pp |
+
+排序和 overlap 指标方向偏向 copied initialization，但固定工作点未知拒绝率下降、test known acceptance 上升，且单 seed 的 checkpoint epoch 不同。因此未达到“分离改善且工作点未知拒绝同步改善、无已知接受率代价”的联合成功标准；只能称为混合/弱正向信号，不提升为推荐配置。即使 copied arm，unknown-below-known-q95 仍有 76.15%，核心问题未解决。seed 2046 的独立复核和两 seed 综合判断见下节及 [`analysis/rejection_encoder_same_arch_s2045_20261020.md`](analysis/rejection_encoder_same_arch_s2045_20261020.md)。
+
+### 2026-10-20：同架构初始化独立复核（seed=2046）与方向决策
+
+完成预先约定的 seed=2046 semantic-hard 独立配对：同一 ResNet18 rejection encoder 架构，仅对比复制 student 初始预训练权重 (`shared_backbone`) 与同架构随机初始化 (`random_backbone`)。split、teacher、student 训练配置、4 epoch 日程、5,400/known prior 0.2 discovery pool、detector、验证划分和 known-validation-only 95% 校准一致。保存配置没有非预期算法字段差异；两臂 rejection CE、uncertainty-PU、outlier-margin 信号均非零，calibration known acceptance 都为 94.9074%。
+
+seed=2046 相对 random，copied arm 的 AUROC `+0.02273`、FPR95 `−0.05817`、OSCR `+0.01916`、KS `+0.03142`、unknown-below-known-q95 overlap `−3.025 pp`；固定校准阈值 unknown rejection `+6.100 pp`，但 test known acceptance `−0.933 pp`，accepted-known accuracy `+0.996 pp`。因此本 split 的效能信号偏正，但付出了轻微已知接受率代价。
+
+**两 split 综合判断（2045/2046）：**同架构设计排除了旧实验的结构/容量混淆。两 split 上 copied 初始化的五项 ranking/overlap 指标均改善；但工作点 unknown rejection 在 seed 2045 为 `−1.25 pp`、seed 2046 为 `+6.10 pp`，test known acceptance 分别为 `+1.72 pp`、`−0.93 pp`（均为 copied 相对 random），方向不一致。按预先约定的联合标准，不能判定为成功，也不把它设为默认；现有证据支持“score ranking/overlap 有重复改善信号”，不支持“固定 operating point 稳定改善”。copied arm 在 seed 2046 仍有 77.55% unknown score 低于 known q95，核心问题仍未解决。停止单纯追加同类 seed 来追求普遍初始化结论，下一重点转向 semantic-hard unknown supervision 与数据/分数重叠瓶颈；初始化仅留作受控 ablation。完整数值与限制见 [`analysis/rejection_encoder_same_arch_s2046_20261020.md`](analysis/rejection_encoder_same_arch_s2046_20261020.md)。
+
+### 2026-10-20：独立图像拒识编码器实现与实验前审计
+
+**假设与对照：**前述审计发现旧 rejection 分支仍输入共享 encoder 特征，即使 projection/head 参数独立也无法摆脱共享表征的信息瓶颈。本试验假设直接从图像提取 rejection embedding 能提供更 task-specific 的拒识表示。唯一 treatment 是 `--independent-rejection-encoder`：共享 encoder、分类头、rejection projection/head、训练损失、数据划分、teacher、rejector 与 known-validation-only 校准均固定；control 使用当前 shared-feature rejection 分支。必须在 seed=2040 与 2041 各自 split 内配对，不能跨 split 相互充当 control/treatment。
+
+**本轮已完成的是实现审计，尚无算法效果数据。**新增轻量 CNN rejection encoder，仅在显式开关时启用；其输出参与已知类 rejection CE、伪未知 uncertainty loss 和 mixed-pool PU loss，PU detach 时仅更新 rejection head，不反向更新图像 encoder。为控制配对初始化，新增 encoder 在全部 legacy heads 初始化后创建，避免其随机数消耗改变 control/treatment 的分类头和拒识头初值。冻结 BN、EMA、优化器参数组、梯度审计和评估模型构建均包含该 encoder。
+
+实现审计过程中发现并修复了两个接线风险：PU detach 曾检查错误的属性名，会将独立模式错误地退回共享特征；VOS 合成的是共享特征空间向量而非图像，不能据此伪造独立拒识 encoder 的未知样本信号。现 VOS 的分类/能量路径仍可运行，但不产生独立拒识不确定性训练信号；显式开启 `alpha_vos_rejection` 与独立 encoder 的组合会报不兼容错误。伪未知真实图像路径则直接扰动其 rejection embedding 后训练 rejection uncertainty head。
+
+验证：完整 pytest `278 passed`（2 个既有 warning）；CUDA image forward/backward 冒烟通过，分类与 rejection encoder 梯度均非零；`py_compile` 与 `git diff --check` 通过。**这些只证明代码路径能运行，不证明检测指标变好。**
+
+**配对实验结果：**seed=2040/2041 两个 treatment 均完成，训练配置已核对除结构开关和输出路径外相同，拒识 CE、PU 与 outlier-margin 梯度均非零。两 split 的 AUROC 分别下降 `0.03237/0.03604`，FPR95 恶化 `4.38/7.65 pp`，OSCR 下降 `0.02067/0.02312`，未知分数落在 known q95 以下的比例上升 `4.93/3.78 pp`；known acceptance 基本持平（下降 `0.10/0.38 pp`），因此失败不是以拒绝更多已知换得的表面提升。未知拒绝率也分别下降 `4.03/2.60 pp`。尽管 KS 下降，整体排序/重叠/校准工作点联合标准明显失败；这进一步说明不能只凭单一分布指标判定成功。停止当前轻量独立 CNN 方案，不设为默认、不在这两个测试 split 上调参。详细配对表、训练信号与限制见 [`analysis/independent_rejection_encoder_s2040_s2041_20261020.md`](analysis/independent_rejection_encoder_s2040_s2041_20261020.md)。
+# 2026-10-20：复核 mixed-pool nnPU 先验是否是当前主瓶颈
+
+**问题与审计范围：**近期的 rejection SupCon、独立 encoder 和候选表征诊断都没有解决 semantic-hard 已知/未知大幅重叠。本次先核对是否存在更基础的 PU 先验/采样定义错误，避免在错误的训练风险上继续叠加算法。只读检查 `novel_discovery/data.py` 的 pool 构造、`train.py` 的先验传递、`nnpu_binary_risk` 的风险定义，以及已有 selection-conditional 配对结果；本次没有新训练、没有测试集调参，也没有改默认配置。
+
+**核对结果：**标准 matched mixed pool 按 `round(pool_size * known_prior)` 从与有标签训练集分离的 known pool 抽已知样本，其余由 novel pool 补足。因此 `pool_size=5,400`、`known_prior=0.2` 时构造为 1,080 已知 + 4,320 novel；训练和最终 nnPU rejector 使用的均是该混合池与同一 `0.2` 先验。`nnpu_binary_risk` 的方向也一致：已知样本是可靠负例，混合池是含已知正例的 unlabeled 正例混合，正风险校正项为 `R_U(unknown)-pi_K R_K(unknown)`。这条主拒识器路径未发现先验含义颠倒或 pool 比例不匹配的实现错误。
+
+候选筛选之后的 kNN PU 分支确有另一类先验/风险分布错配；selection-conditional 修正已作为显式消融实现并做过 seed=44 配对。日志中 known 与 mixed 选择率都为 `0.25`，有效先验恢复为 `0.2`，说明该协议下修正没有改变实际先验。实验中 overlap 代理改善 `2.275 pp`、校准工作点未知拒绝率增加 `3.30 pp`，但 AUROC 下降 `0.00142`、FPR95 恶化 `0.00767`、KS 下降 `0.00992`，且已知接受率略降；因此是指标混合的工作点变化，不能称为整体分离改进。该结论已有完整报告 [`analysis/selection_conditional_pu_wiring_20261018.md`](analysis/selection_conditional_pu_wiring_20261018.md)，不应在相同条件上重复跑。
+
+**决策：**不改主 nnPU 先验、不做先验扫描，也不重复 selection-conditional 配对。当前证据更支持“有效未知边界监督不足/表示对 hard known 与 semantic-near novel 缺少可分信号”，而不是标准 mixed-pool 比例写错。与此同时，候选筛选、邻域歧义、CDF、独立 rejection 表征和 taxonomy sibling SupCon 均未提供联合、可复现的改进；不能把单一阈值拒绝率上升当成解决核心问题。后续算法试验应先明确新增监督信号来自何处、训练可观测到什么、如何避免把混合池真标签或测试标签泄漏进决策；在该问题没有新依据前，不再添加近似的已知类紧致/类间分离 loss。任何后续配对需固定 split、teacher、初始化、采样池、检测器和 known-validation-only 校准，并同时报告 AUROC、FPR95、OSCR、KS、overlap、已知接受率、未知拒绝率及接受后已知准确率。
+
+本次是代码/实验协议审计，不产生新的性能结论，也没有修改算法实现。工作区原有用户改动和实验产物均保留；未提交、未上传 GitHub。
+
+### 2026-10-20：拒识初始化 × 去相关 2×2 配对实验（seed=2048）
+
+**实验前假设与对比因素：**此前同架构初始化 seed 2045/2046 对排序/重叠指标有重复改善信号，但工作点结果不一致；去相关 seed 2040/2041 结果相反。本次预先固定 2×2 因子：拒识 encoder 初始化为复制预训练权重或同架构随机权重，去相关系数为 `0` 或固定 `0.01`。四组使用新 seed=2048 semantic-hard split、同一 split-matched teacher、训练/采样/发现配置及 known-validation-only 95% coverage 校准，VOS 均关闭；无中途改参。
+
+**结果：**按（初始化，去相关系数）列出 AUROC/FPR95/OSCR/KS/unknown-below-known-q95 overlap/校准阈值下 known acceptance 与 unknown rejection：copied、0 为 `0.79979/0.60367/0.59882/0.45275/74.55%/95.03%/25.35%`；copied、0.01 为 `0.79098/0.60950/0.58744/0.43900/74.95%/94.62%/26.48%`；random、0 为 `0.76070/0.65683/0.57506/0.38800/79.60%/95.17%/20.13%`；random、0.01 为 `0.76111/0.67533/0.57017/0.39800/80.90%/95.63%/17.55%`。四组 calibration known acceptance 均为 `94.946%`。训练日志证实 treatment 的去相关 loss/梯度非零，control 为零，因素已生效。
+
+**判断与后续：**本 split 上 copied 初始化跨两个去相关水平的平均 AUROC 为 `0.79538`，random 为 `0.76091`；平均 KS 为 `0.44588/0.39300`，支持初始化对排序/重叠有价值的信号，但目前仍只有一个新 split。去相关与初始化没有正向互补：copied 下 AUROC、FPR95、OSCR、overlap 均恶化；random 下排序收益极小，unknown rejection 还下降 `2.58 pp`。不把去相关设为默认，也不在本 split 扫权重。后续若继续，应在新 semantic-hard split 上单独复核 copied-vs-random，去相关固定关闭，同时评价校准工作点；初始化现阶段仅作为有希望的排序消融，不宣称已解决核心问题。完整数据和限制见 [`analysis/rejection_init_decor_factorial_s2048_20261020.md`](analysis/rejection_init_decor_factorial_s2048_20261020.md) 与 [`analysis/rejection_init_decor_factorial_s2048.json`](analysis/rejection_init_decor_factorial_s2048.json)。
+
+### 2026-10-20：同架构 rejection 初始化独立复核（seed=2049）
+
+按上一轮决定，在新 semantic-hard seed=2049 上只比较同架构 rejection encoder 的 copied-pretrained 与 random 初始化；去相关显式固定为 `0.0`，VOS 关闭。两臂共享 split-matched teacher、student 配置、4 epochs、候选池、发现配置和 known-validation-only 95% coverage 校准，验证接受率均为 `94.923%`，均选择 epoch 4。Copied/random 的 AUROC 为 `0.78429/0.75879`，FPR95 `0.61817/0.67217`，OSCR `0.61836/0.59880`，KS `0.42683/0.38067`，unknown-below-known-q95 overlap `75.075%/79.350%`；校准工作点 known acceptance `96.650%/95.783%`、unknown rejection `18.625%/17.700%`；已知分类 accuracy `73.783%/73.850%`。故 copied 在排序/重叠指标方向一致改善（AUROC `+0.02549`、FPR95 `−5.40 pp`、OSCR `+0.01955`、KS `+0.04617`、overlap `−4.275 pp`），工作点 unknown rejection 仅 `+0.925 pp`，known acceptance 同时增加 `+0.867 pp`，不是拒识能力的大幅突破。
+
+连同 seed 2045/2046 及 seed 2048 factorial 的 decor-off 对照，copied 初始化在三次新 split 同架构比较中继续显示排序优势，值得保留为研究消融/后续实验控制条件；但工作点提升有限且跨 split 幅度不一，不宣称统计显著、不据此改项目默认，也不代表解决 semantic-hard 广泛误接纳。去相关在 2048 factorial 未显示有效互补，不再叠加。下一步把 copied 初始化固定为候选基线，将重点转向 hard-unknown 训练监督或其校准/泛化，并预先规定多 split 验证，而非继续扫初始化。完整结果见 [`analysis/rejection_encoder_init_replication_s2049_20261020.md`](analysis/rejection_encoder_init_replication_s2049_20261020.md) 和 [`analysis/rejection_encoder_init_replication_s2049.json`](analysis/rejection_encoder_init_replication_s2049.json)。
+
+### 2026-10-20：mixed-pool 标签流与 uncertainty-PU 输入审计
+
+继续检查训练监督是否存在逐样本真标签泄漏。`discovery_is_known` 只用于记录 pseudo-known anchor 的真实纯度，以及候选池的事后污染率/召回；一致性 loss 的 mask 在读取 metadata 之前已由模型双视图预测、置信度和可选支持度构造。uncertainty-PU loss 只接收有标签 known batch 与 mixed-pool 两视图预测，权重来自模型输出及 known support bank；pool 真标签不进入 loss、gate、采样、阈值或 checkpoint 决策。`auto` prior 从构造后的 mixed pool 比例解析。当前静态审计未发现标签泄漏或标准 PU 先验错配。
+
+这不是性能实验，也不意味着 PU 监督足够强。旧梯度 smoke 中 known rejection CE 大于 PU 梯度约 25 倍只是机制线索；已有 semantic-hard `1.0 vs 0.25` CE 配对已表明排序/overlap 改善不能稳定转化为固定 known-validation coverage 下更高的 unknown rejection。因此本轮不重复扫 prior、不盲目增大 PU 权重，也不再叠加相似的软权重 loss。下一步应先在训练池上找出一种新的、label-safe hard-unknown 信号并量化覆盖率，再预注册 fresh semantic-hard split 的小型配对实验；若没有足够覆盖的信号，应明确记录监督限制，而不是增加弱代理目标。审计范围、数据流依据和限制见 [`analysis/mixed_pool_label_flow_audit_20261020.md`](analysis/mixed_pool_label_flow_audit_20261020.md)。本轮没有改算法实现或训练配置，没有提交或上传。
+# 2026-10-21: independent boundary replication and candidate-coverage diagnosis
+
+在全新的 semantic-hard seed=2053 上，按预先固定协议复核训练期 PU
+class-conditional rejection boundary：唯一算法因素是
+`alpha_discovery_rejection_boundary=0` 对 `0.1`；两臂共享 split-matched
+teacher、4 epoch、mixed pool/known prior `0.2`、shared-backbone rejection
+encoder、同一 detector 和 known-validation-only 95% coverage calibration。
+训练日志确认 treatment 的 boundary loss 四个 epoch 都非零
+(`0.24741, 0.23728, 0.23255, 0.22198`)，拒识分支梯度范数也非零
+(`0.09181, 0.09095, 0.08906, 0.08974`)，不是死开关。
+
+| seed=2053 | AUROC | FPR95 | OSCR | KS | unknown below known-q95 | unknown rejection |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | 0.81204 | 0.54033 | 0.61848 | 0.49008 | 75.275% | 27.200% |
+| PU boundary 0.1 | 0.81326 | 0.53817 | 0.61391 | 0.47983 | 74.475% | 27.950% |
+
+Treatment 只带来 AUROC `+0.00122`、FPR95 改善 `0.22 pp`、overlap 下降
+`0.80 pp`，但 OSCR 下降 `0.46 pp`、KS 下降 `0.01025`；校准工作点未知
+拒绝率提高 `0.75 pp`。结合 seed=2052 的混合结果，证据不足以修改默认配置，
+也不继续在测试 split 上扫描 boundary 权重。完整报告见
+[`analysis/rejection_boundary_train_s2053_20261021.md`](analysis/rejection_boundary_train_s2053_20261021.md)。
+
+本轮进一步审计了冻结 checkpoint 的 mixed discovery pool，标签只用于事后
+统计。默认 entropy/uncertainty selector 对 5,400 个池样本的未知召回率为
+baseline `29.51%`、treatment `29.24%`，已知污染率为 `5.56%`、`6.44%`；
+shared-distance consensus 和 rejection-support selector 也都只有约
+`28--30%` 未知召回。由此当前更核心的瓶颈是 semantic-near hard unknown
+没有稳定进入训练信号，而不是 boundary loss 权重不足。下一步优先做
+label-free、预先固定的候选池覆盖/按 novel-class 覆盖诊断与方法；先证明
+覆盖率和污染率在独立 split 上改善，再考虑与 boundary loss 组合。审计原始
+结果见 [`analysis/rejection_boundary_candidate_audit_s2053_baseline.json`](analysis/rejection_boundary_candidate_audit_s2053_baseline.json)
+和 [`analysis/rejection_boundary_candidate_audit_s2053_pu_boundary.json`](analysis/rejection_boundary_candidate_audit_s2053_pu_boundary.json)。
+
+另外做了冻结 checkpoint 的候选预算诊断：只把 selector budget 从 25%
+提高到 50%，默认 entropy/uncertainty 的未知召回便从 `29.51%` 提高到
+`57.64%`，但已知污染率也从 `5.56%` 升到 `7.78%`；distance-consensus
+同样从 `29.77%/4.74%` 变为 `57.80%/7.52%`（召回/污染）。这说明
+25% budget 是真实覆盖瓶颈，但不能直接把 50% 写成默认；下一步应实现
+不使用 pool/test 标签、可由 known validation 审计的 coverage--contamination
+权衡，再在独立 split 上做训练验证。预算审计结果见
+[`analysis/rejection_boundary_candidate_audit_s2053_baseline_r050.json`](analysis/rejection_boundary_candidate_audit_s2053_baseline_r050.json)。
+
+### 2026-10-21 补充：known-validation candidate risk budget 诊断
+
+在同一冻结 seed=2053 baseline checkpoint 上，进一步只用 known validation
+按预测类 entropy+head-uncertainty 分位数设候选阈值（90%/95%/97.5%），并在
+pool 标签仅用于事后审计的前提下比较覆盖与污染。90%/95%/97.5% 目标下，
+候选池分别占 `33.50%/23.54%/16.37%`，未知召回为
+`38.89%/27.45%/19.33%`，known contamination 为
+`7.13%/6.69%/5.54%`；实际 known false-selection rate 为
+`11.94%/7.87%/4.54%`，均高于 nominal 目标对应的 `10%/5%/2.5%`，说明
+每个预测类有限样本分位数存在明显离散/校准误差，不能当成风险保证。
+
+为拆分“预算变大”与“类条件阈值”的效果，又将 90% 类条件阈值与同样选取
+33.5% pool 的 entropy/uncertainty top-k 比较：两者未知召回为 `38.89%` 与
+`39.10%`、污染为 `7.13%` 与 `6.63%`，类条件法没有改善总体召回或纯度；
+但 novel-class 最低召回从 `3.96%` 升到 `13.16%`，median recall 从
+`40.39%` 降到 `37.83%`，提示可能是长尾均衡与总体指标之间的权衡。单 split
+且只做冻结模型审计，证据不足以接入训练或更改默认 selector/budget。
+
+下一步若继续该信号，应在独立 semantic-hard split 上预先固定 90% 规则，
+与匹配预算的 entropy top-k 比较 worst-class 与 median recall、known
+false-selection/contamination；仅当尾类收益复现后，再考虑训练配对，并
+重新核算候选筛选后的有效 known prior。本次未启动训练，也未使用最终测试标签。
+详细分析与产物索引见
+[`analysis/rejection_candidate_validation_risk_budget_s2053_20261021.md`](analysis/rejection_candidate_validation_risk_budget_s2053_20261021.md)。
+
+随后用已有、类别 split 独立的 seed=2048/2049 冻结 checkpoint 做相同 q90
+规则复核，并在各自实际选中数量上匹配 entropy/uncertainty top-k。seed=2048
+有小幅联合正向信号：类条件规则的 unknown recall `32.36%` 对 `32.15%`、污染
+`8.39%` 对 `9.04%`、worst novel-class recall `14.41%` 对 `9.40%`；seed=2049
+则未复现 worst-class 收益（两者均 `5.41%`），总体 recall `28.43%` 对
+`28.54%`、污染 `10.17%` 对 `9.80%`，略差。结合 seed=2053（尾类召回改善但
+总体召回/污染略差），目前是 split-dependent 的混合证据。且三个 checkpoint
+来自不同训练配置，这属于每个 split 内机制比较，不是严格的跨 seed 算法因果
+估计。因此仅值得再做一个预先固定规则的独立 split 审计；不接入训练、不改默认，
+若下一 split 仍无稳定联合收益则停止 selector 分支，转回训练期表示/候选信号覆盖。
+复核详情见
+[`analysis/rejection_candidate_validation_risk_budget_replication_20261021.md`](analysis/rejection_candidate_validation_risk_budget_replication_20261021.md)。
+
+再补充一个已存在的 seed=2047 冻结 checkpoint 审计：在等预算 `30.02%` 下，
+q90 类条件规则相对 entropy top-k 的 unknown recall 为 `34.14%` 对 `33.84%`、
+污染 `9.01%` 对 `9.81%`、worst novel-class recall `7.14%` 对 `5.10%`，
+但 median recall `32.67%` 对 `34.04%`。合并 seed=2047/2048/2049/2053 四个
+split，q90 规则呈现弱且依赖 split 的尾类信号：2047、2048 的最差类提升分别
+`2.04/5.01 pp`，2049 持平，2053 有提升但伴随总体召回/污染轻微变差。各
+checkpoint 训练配置不完全相同，也没有运行级置信区间，因此停止在这些池上
+继续扫 q 或 selector；不接入训练、不改默认。后续优先转回训练期表示与
+label-free hard-unknown 信号覆盖，只有提出新机制并预注册新 split 时才重开。
+seed=2047 产物见
+[`analysis/rejection_candidate_validation_risk_budget_s2047_vcov090.json`](analysis/rejection_candidate_validation_risk_budget_s2047_vcov090.json)
+和 [`analysis/rejection_candidate_validation_risk_budget_s2047_vcov090_matched.json`](analysis/rejection_candidate_validation_risk_budget_s2047_vcov090_matched.json)。
+
+### 2026-10-21：known rejection CE 后期衰减配对实验（seed=2054）
+
+随后对 seed=2054/2055 的四个**冻结** checkpoint 做了 known-only threshold-policy 审计，模型与 score 向量完全不变，只将全局 known-validation 95% coverage 阈值与已有 class-conditional known-validation q95 比较。class-conditional 在四模型上均提高测试 unknown rejection `9.58–10.65 pp`，但 known acceptance 同时降低 `5.73–7.77 pp`（降至 `88.52–89.33%`）；AUROC/FPR95/OSCR 不变。它不是整体 95% coverage 保证，也不是表征改进，只是偏保守的可选工作点。故保留为可选策略、不改默认、不用测试集继续调分位数。完整审计见 [`analysis/rejection_ce_threshold_policy_s2054_s2055_20261021.md`](analysis/rejection_ce_threshold_policy_s2054_s2055_20261021.md)，机器可读结果与逐模型配置见 [`analysis/rejection_ce_threshold_policy_s2054_s2055.json`](analysis/rejection_ce_threshold_policy_s2054_s2055.json)，运行入口为 [`scripts/audit_ce_decay_threshold_policy.py`](scripts/audit_ce_decay_threshold_policy.py)。
+
+独立 split 复核见 [`analysis/rejection_ce_decay_s2055_replication_20261021.md`](analysis/rejection_ce_decay_s2055_replication_20261021.md)。seed=2055 沿用预先确定的末两轮线性衰减至 `0.25`，两臂均选第 4 轮且 validation calibration known acceptance 均为 94.946%。测试 AUROC `0.79382→0.80634`、OSCR `0.59451→0.60025`、KS `0.44200→0.46625`，unknown-below-known-q95 从 74.93% 降至 71.15%；固定校准阈值 unknown rejection 从 24.18% 升至 30.00%，known acceptance 为 95.27%→94.80%。但 FPR95 同时从 0.59850 恶化至 0.62850，且 seed=2054 的工作点拒识反而下降 4.88 pp。综合两 split，late decay 有排序及 overlap 代理方面的一致信号，但工作点收益不稳定且尾部指标存在代价，**属于 tradeoff，不能视为解决核心问题**。不改默认、不继续按测试结果搜 schedule；若重启，应先预注册仅依赖 validation 的目标/checkpoint 规则，再做 fresh multi-split 联合验证。原始结果：[`analysis/rejection_ce_decay_s2055_replication.json`](analysis/rejection_ce_decay_s2055_replication.json)。
+
+从候选池覆盖转向训练目标，测试“早期保留已知类 rejection CE、后期减弱其压力”是否能改善 semantic-hard 拒识。seed=2054 两臂使用同一 split-matched teacher、student 初始化/结构、mixed pool（5,400，known prior 0.2）、PU 项、detector 和仅 known validation 的 95% coverage 校准；唯一变化是 known rejection CE schedule：control 全程系数 `1.0`，treatment 在初期保持 `1.0`，最后两轮线性衰减到 `0.25`。代码按 epoch 将 schedule scale 乘入实际 CE 系数，非仅配置记录。
+
+| seed=2054 | static CE | late decay | treatment − control |
+|---|---:|---:|---:|
+| AUROC | 0.78952 | 0.81307 | +0.02356 |
+| AUPR | 0.68213 | 0.71433 | +0.03220 |
+| FPR95 | 0.60500 | 0.56950 | −3.55 pp |
+| OSCR | 0.58722 | 0.60264 | +0.01542 |
+| score KS | 0.43833 | 0.47783 | +0.03950 |
+| unknown below known-score q95 | 76.30% | 72.85% | −3.45 pp |
+| test known acceptance | 94.80% | 97.10% | +2.30 pp |
+| calibrated-threshold unknown rejection | 24.15% | 19.28% | −4.88 pp |
+
+结论是**排序指标有改善，但工作点拒识变差**：两臂 calibration known acceptance 均为 94.94%，然而 treatment 在测试集接受了更多 known（+2.30 pp），unknown rejection 反而降低 4.88 pp，accepted-known accuracy 也低 0.84 pp。单 seed 不能证明普遍因果，但已足以说明该 schedule 未满足“固定 known coverage 下提高 unknown rejection”的联合成功标准。不开启默认、不宣称解决核心问题，也不在该测试 split 上继续调 decay；下一步若重开，应先诊断 calibration 到测试 known coverage 的偏移，再在 fresh split 预注册温和 schedule/coverage-aware checkpoint 对照，不能用测试标签选参。完整结果与限制见 [`analysis/rejection_ce_decay_s2054_20261021.md`](analysis/rejection_ce_decay_s2054_20261021.md)，原始指标及保存配置见 [`analysis/rejection_ce_decay_s2054.json`](analysis/rejection_ce_decay_s2054.json)，runner 为 [`scripts/run_rejection_ce_decay_pair.py`](scripts/run_rejection_ce_decay_pair.py)。
+
+进一步看 score quantile 可解释该 tradeoff：校准阈值基本不变（4.762→4.769），但 treatment 的测试 known median/q95 从 `-1.349/4.807` 下移到 `-2.572/4.099`，unknown median/q95 从 `2.794/7.465` 下移到 `2.467/6.580`。两类分数都整体落到固定阈值以下，known 尾部下移使接受率升高，同时 unknown 超阈值尾部缩小使拒绝率降低。因此相对排序/分布分离变好并不保证绝对阈值位置上的拒识变好；这些仅是最终测试集的事后解释，不用于选方法或调参。
+
+### 2026-10-21 补充：late rejection-CE decay 第三 split 复核（seed=2056）
+
+为确认 seed=2054/2055 上一致的排序信号并检验工作点波动，在新的 semantic-hard seed=2056 上按原协议复核，不搜索参数：仍只比较 static CE `1.0` 与最后两轮线性衰减至 `0.25`。两臂使用同一个 split-matched teacher、mixed pool（5,400，known prior 0.2）、模型/PU 配置、epoch-4 validation known-accuracy checkpoint 规则、detector 与 known-validation-only 95% coverage 校准；校准接受率均为 94.931%。配置审计确认训练差异只有预设 schedule、输出路径及其自然产生的 validation metadata。
+
+| seed=2056 | static CE | late decay | treatment − control |
+|---|---:|---:|---:|
+| AUROC | 0.80332 | 0.81878 | +0.01547 |
+| AUPR | 0.69849 | 0.72030 | +0.02181 |
+| FPR95 | 0.59500 | 0.57550 | −1.95 pp |
+| OSCR | 0.58228 | 0.58862 | +0.00634 |
+| score KS | 0.46392 | 0.49433 | +0.03042 |
+| unknown below known-score q95 | 74.28% | 72.50% | −1.78 pp |
+| test known acceptance | 93.62% | 93.85% | +0.23 pp |
+| calibrated-threshold unknown rejection | 30.50% | 31.55% | +1.05 pp |
+| all-known accuracy / accepted-known accuracy | 68.15% / 69.97% | 68.02% / 69.65% | −0.13 / −0.32 pp |
+
+三 split 汇总：late decay 对 AUROC、OSCR、KS 和 unknown-below-known-q95 overlap proxy 的方向均一致有利；固定工作点 unknown rejection 在 2055/2056 上升、2054 下降，FPR95 在 2054/2056 改善、2055 恶化。seed=2056 显示 modest joint gain，但不足以消除前两 split 的 tradeoff。结论更新为：这是值得保留的训练目标候选，尚不是稳定解决方案；不改默认、不按既有 test 结果搜 schedule。若继续，须在新 split 上预注册同一固定 schedule 和验证规则，并共同报告排序、尾部、95% known-coverage 工作点及 known utility；先做 score placement/梯度尺度诊断也可能比继续加训练项更有信息量。完整协议与限制见 [`analysis/rejection_ce_decay_s2056_replication_20261021.md`](analysis/rejection_ce_decay_s2056_replication_20261021.md)，原始配置和指标见 [`analysis/rejection_ce_decay_s2056_replication.json`](analysis/rejection_ce_decay_s2056_replication.json)。
+
+seed=2056 的训练期逐项梯度审计显示 intervention 确实改变了 rejector 目标权衡：epoch 4 rejection-head known-CE 梯度范数 static/decay 为 `13.339/2.950`，mixed-pool uncertainty-PU 项为 `0.640/0.745`。这支持“后期降低已知专属压力、让 PU 相对占比上升”这一机制描述，但梯度范数本身不能证明它造成测试收益，也不能替代新 split 复核。
+
+### 2026-10-21 补充：late rejection-CE decay 第四 split 复核（seed=2057）
+
+为继续验证固定 schedule，而不是根据测试结果调参，在新的 semantic-hard seed=2057 上重复完全相同的 paired protocol：static CE 全程 `1.0`，late decay 前两轮为 `1.0`、最后两轮线性衰减至 `0.25`。两臂共享 split-matched teacher、student 初始化/结构、mixed pool（5,400，known prior 0.2）、PU 目标、epoch-4 validation known-accuracy checkpoint 规则、detector 和 known-validation-only 95% coverage 校准；两臂 calibration known acceptance 均为 94.923%。
+
+| seed=2057 | static CE | late decay | treatment − control |
+|---|---:|---:|---:|
+| AUROC | 0.80632 | 0.81454 | +0.00822 |
+| AUPR | 0.71442 | 0.72356 | +0.00913 |
+| FPR95 | 0.58650 | 0.58033 | −0.62 pp |
+| OSCR | 0.59509 | 0.59466 | −0.04 pp |
+| score KS | 0.45933 | 0.48158 | +0.02225 |
+| unknown below known-score q95 | 72.00% | 71.30% | −0.70 pp |
+| test known acceptance | 93.15% | 92.67% | −0.48 pp |
+| calibrated-threshold unknown rejection | 33.83% | 36.78% | +2.95 pp |
+| all-known accuracy / accepted-known accuracy | 69.77% / 71.64% | 69.02% / 71.37% | −0.75 / −0.27 pp |
+
+seed=2057 再次支持排序和 overlap 改善，同时工作点未知拒绝率增加；但 known acceptance 与 all-known accuracy 下降，OSCR 基本不变。因此这仍是“分离信号有益、known utility 有代价”的 tradeoff，不是无条件成功。
+
+四个 semantic-hard split（2054–2057）的 delta 汇总为：AUROC 四次均改善，KS 四次均改善，unknown-below-known-q95 overlap proxy 四次均下降；FPR95 三次改善，固定工作点 unknown rejection 三次增加，OSCR 三次增加且一次近似持平/略降。四次平均 delta 为 AUROC `+0.01494`、FPR95 `−0.00779`、OSCR `+0.00677`、unknown rejection `+0.01238`、overlap `−0.02425`；accepted-known accuracy 平均 `−0.00300`，并非一致提升。机制审计也跨 seed 复现：第 4 轮衰减组的 known-CE rejector 梯度约为静态组的 22%，PU/CE 梯度比约升至 `0.25`，但这只能说明训练信号确实重平衡，不能证明最终收益完全由该机制导致。
+
+结论：保留 late decay 作为有前景的训练目标候选，不改默认，不继续根据现有测试集搜索 schedule，也不宣称核心问题已解决。下一步若继续，应预先定义 validation-only 的 known utility / separation 联合 checkpoint 规则，或者用同一固定 schedule 做新的确认 split；任何新方法必须同时检查排序、尾部、固定 coverage 拒识和 known utility，不能只追求 unknown rejection。完整 seed=2057 报告见 [`analysis/rejection_ce_decay_s2057_replication_20261021.md`](analysis/rejection_ce_decay_s2057_replication_20261021.md)，原始结果见 [`analysis/rejection_ce_decay_s2057_replication.json`](analysis/rejection_ce_decay_s2057_replication.json)。
+
+### 2026-10-21：validation-only open-KS checkpoint 选择诊断（seed=2058）
+
+针对 late rejection-CE decay 多 split 显示“排序改善、工作点/known utility 不稳定”的现象，转而检查 checkpoint 选择是否是瓶颈。在新 semantic-hard seed=2058 上，配对比较 known-validation accuracy 选 checkpoint 与训练集内部留出的 known/novel open-validation 子集按 energy KS 选 checkpoint。两臂共享 split-matched teacher、训练划分、初始化/训练配置、mixed pool、detector 与 known-validation-only 95% coverage calibration；open-validation 占训练 partition 的 10%，最终测试标签不参与训练、选择或校准。
+
+open-KS 规则选第 4 轮，known-accuracy 规则选第 3 轮，但前者测试 AUROC 为 `0.78453` 对 `0.80007`、FPR95 为 `0.62667` 对 `0.60550`、OSCR 为 `0.56731` 对 `0.58668`、测试 score KS 为 `0.42800` 对 `0.45442`；95% coverage 校准工作点 unknown rejection 为 `25.70%` 对 `26.08%`，accepted-known accuracy 为 `70.13%` 对 `70.74%`。该单 seed 没有发现 open-KS 选择收益，说明当前小型 open-validation 子集的 KS 排序可能不够稳定；不改默认，也暂不扩展该分支多 seed 搜索。若重启，应先研究 selection score 方差/交叉拟合或更大训练内验证子集，并预注册 fresh-split 联合评估，不能依此测试集调参。完整分析见 [`analysis/open_checkpoint_selection_s2058_20261021.md`](analysis/open_checkpoint_selection_s2058_20261021.md)，机器可读结果见 [`analysis/open_checkpoint_selection_s2058.json`](analysis/open_checkpoint_selection_s2058.json)，配对 runner 为 [`scripts/run_open_checkpoint_selection_pair.py`](scripts/run_open_checkpoint_selection_pair.py)。
+
+### 2026-10-22：扩大 discovery 候选预算的独立配对验证（seed=2059）
+
+> **后续 wiring 审计已推翻本节的训练效果解释。** 原实验虽然配置了
+> feature-candidate gating，但候选掩码未应用到 `alpha_discovery_rejection_boundary`
+> 对应的 PU loss；四组旧 run 的每轮 `feature_candidate_ratio` 都为 0。因此本节
+> AUROC/工作点差异不能归因于训练期候选预算。旧候选池覆盖统计仅是描述性审计。
+> 修复后的配对结果见 [`analysis/rejection_candidate_budget_wired_s2059_20261022.md`](analysis/rejection_candidate_budget_wired_s2059_20261022.md)。
+
+checkpoint 选择方向没有改善后，转而检验更直接的候选覆盖瓶颈：固定 PU rejection-boundary loss 系数 `0.1`，只把训练期 `discovery_select_ratio` 从 `0.25` 提高至 `0.50`。两臂共用新的 semantic-hard seed=2059 split、split-matched teacher、学生结构/seed、四轮训练、mixed pool（5,400，known prior 0.2）、detector 和 known-validation-only 95% coverage calibration。最终测试标签仅作结果报告；另有冻结 pool 标签事后核验候选覆盖/污染，未参与选择。
+
+0.50 臂候选池 unknown recall 从 `28.80%` 升至 `56.41%`，known contamination 从 `7.85%` 升至 `9.74%`；novel class 最低/中位召回从 `3.97%/27.53%` 升至 `14.14%/55.67%`。最终测试 AUROC `0.81108→0.81322`、FPR95 `0.60083→0.59150`、OSCR `0.58980→0.59001`，排序有小幅改善；95% known-validation 校准后的 unknown rejection `29.18%→35.83%`，但测试 known acceptance `94.97%→93.28%`，且正确并被接受的 known 占全部 known 比例 `66.60%→65.85%`。因此 50% 带来较强候选覆盖和工作点拒识收益，但有已知类覆盖代价，尚非联合胜出，不改默认，也不在该测试 split 上扫中间预算。
+
+下一步应从固定预算转向预先定义、仅用 known validation 可审计的 candidate risk/coverage 规则，在 fresh split 上同时评估污染、尾类覆盖、固定覆盖拒识和 known utility；不要依据当前测试结果选择新预算。完整结果见 [`analysis/rejection_candidate_budget_s2059_20261022.md`](analysis/rejection_candidate_budget_s2059_20261022.md)，机器可读配对结果及配置见 [`analysis/rejection_candidate_budget_s2059.json`](analysis/rejection_candidate_budget_s2059.json)，两个候选审计见 `analysis/rejection_candidate_budget_s2059_candidate_audit_ratio*.json`，运行入口为 [`scripts/run_rejection_candidate_budget_pair.py`](scripts/run_rejection_candidate_budget_pair.py)。
+
+### 2026-10-22：候选预算 fresh-split 复核（seed=2060）
+
+> **后续 wiring 审计已推翻本节的训练效果解释。** `feature_candidate_ratio`
+> 四轮均为 0，PU rejection-boundary loss 使用完整混合池，故本节不是有效的
+> 0.25/0.50 训练处理复核。仅候选池覆盖/污染统计保留为事后描述，不能证明模型训练
+> 获益或无效。修复后的 fresh-split 配对实验正在运行，结果将另行记录。
+
+按 seed=2059 时预先提出的验证方案，在独立 semantic-hard seed=2060 上原样复核 `discovery_select_ratio=0.25` vs `0.50`，固定 PU rejection-boundary loss `0.1`、split-matched teacher、学生配置/seed、4 epoch、5,400 mixed pool（known prior 0.2）、detector 和 known-validation-only 95% coverage calibration。配置审计确认预期算法差异只有候选比例；测试标签仅用于最终报告，候选池标签仅用于训练后确定性覆盖/污染审计。
+
+候选覆盖效应得到复现：unknown recall `28.01%→55.60%`、known contamination `10.37%→11.04%`，novel class 最低/中位召回 `6.32%/25.32%→21.05%/53.59%`。但这些额外候选没有转化为更好的拒识：AUROC `0.79338→0.78876`、FPR95 `0.61983→0.64817`、OSCR `0.58783→0.58533`、校准阈值 unknown rejection `30.48%→29.55%`；known utility 仅小幅改善。因此 seed=2059 的开放集指标收益未在新 split 复现，两个 seed 共同支持“加大预算确实扩大候选覆盖，但检测性能收益不可靠”的判断。保留默认 0.25，停止此预算分支，不扫中间比例。下一步回到能区分 semantic-near unknown 且保护 known utility 的训练信号/表征方向，并预先固定多 split 配对协议。完整报告、配对配置、确定性审计见 [`analysis/rejection_candidate_budget_s2060_20261022.md`](analysis/rejection_candidate_budget_s2060_20261022.md)、[`analysis/rejection_candidate_budget_s2060.json`](analysis/rejection_candidate_budget_s2060.json) 和 `analysis/rejection_candidate_budget_s2060_candidate_audit_*.json`。
+
+### 2026-10-22 补充：修复候选预算训练接线并重跑 seed=2059
+
+事后检查发现此前 seed=2059/2060 两组预算实验没有实际改变训练期拒识边界的候选输入：候选 gating 的激活条件漏掉了 `alpha_discovery_rejection_boundary`，而 PU rejection-boundary loss 直接使用完整混合池；旧训练历史每轮 `feature_candidate_ratio=0`。因此旧两节中的模型指标不能作为候选预算的训练因果证据，旧 candidate-pool coverage 数字仅保留为描述性审计。原报告现已显式标注 superseded。
+
+首轮修复将候选 mask 应用到 unlabeled PU loss、按筛选后 known prior 校正；进一步审计后又补齐了 PU known-correction features/labels 的同一 known-only selector 子集化。最终 `wired3` seed=2059 两臂四轮候选比例严格记录为 0.25/0.50，有效 known prior 均为 0.20。0.50 相较 0.25：AUROC `0.80566→0.80516`、FPR95 `0.59300→0.59350`、OSCR `0.58795→0.58851`，校准工作点 unknown rejection `29.08%→32.48%`，但 known acceptance `94.62%→93.28%`，correct-and-accepted known/all-known `66.52%→66.00%`。因此这是“工作点拒识增加、known coverage/utility 付出代价”的 tradeoff，不是联合胜出；不改默认、不扫中间比例。最终报告见 [`analysis/rejection_candidate_budget_wired3_s2059_20261022.md`](analysis/rejection_candidate_budget_wired3_s2059_20261022.md)，机器结果见 [`analysis/rejection_candidate_budget_wired3_s2059.json`](analysis/rejection_candidate_budget_wired3_s2059.json)。修复代码位于 [`novel_discovery/pipeline.py`](novel_discovery/pipeline.py)，参数校验位于 [`train.py`](train.py)，配对入口为 [`scripts/run_rejection_candidate_budget_pair.py`](scripts/run_rejection_candidate_budget_pair.py)。
+
+### 2026-10-22 补充：修复接线后的 fresh-split 复核（seed=2060）
+
+在独立 semantic-hard seed=2060 上完成了同一 `wired3` 修复后的 0.25/0.50 配对训练。两臂均为四轮有效训练：候选率逐轮严格为 0.25/0.50，PU rejection-boundary 的 effective known prior 全程约 0.20，边界损失及其梯度均非零。0.50 相较 0.25 的 AUROC `0.77652→0.78157`、FPR95 `0.65100→0.63200`、OSCR `0.57354→0.58187`，校准工作点 unknown rejection `30.23%→31.18%`；但 known acceptance `92.90%→92.07%`，correct-and-accepted known/all-known `66.52%→66.45%`，AUPR `0.67465→0.67376`。因此该 split 上也是小幅 trade-off，而非联合胜出。
+
+结合修复后的 seed=2059（0.50 的 AUROC/FPR95 基本持平略差、工作点拒识增加但 known coverage/utility 下降），两个独立 split 共同说明：增大预算确实让更多 unknown 候选进入训练，但拒识收益不稳定且伴随 known coverage 代价。保留默认 0.25，停止候选预算支线，不扫描中间比例，下一步回到 semantic-near unknown 的表征/训练信号。完整报告见 [`analysis/rejection_candidate_budget_wired3_s2060_20261022.md`](analysis/rejection_candidate_budget_wired3_s2060_20261022.md)，机器结果见 [`analysis/rejection_candidate_budget_wired3_s2060.json`](analysis/rejection_candidate_budget_wired3_s2060.json)。
+
+验证：`python -m py_compile novel_discovery/pipeline.py train.py scripts/run_rejection_candidate_budget_pair.py` 通过；`python -m pytest tests/test_core_behaviors.py -q` 为 255 passed；`git diff --check` 通过。
+
+### 2026-10-22：固定 rejection CE late-decay 第五 split 复核（seed=2061）
+
+在独立 semantic-hard seed=2061 上复核此前预先固定的 schedule：static control 全程 CE 系数 1.0；late-decay 前两轮保持 1.0、最后两轮线性衰减至 0.25。两臂共享 split-matched teacher、模型配置/seed、5,400 mixed discovery pool（known prior 0.2）、detector、epoch-4 known-accuracy checkpoint 规则和仅 known validation 的 95% coverage 校准；配置审计确认有效训练参数差异只有 schedule。两臂均选择第 4 轮，validation calibration known acceptance 均为 94.931%，测试标签仅用于最终报告。
+
+Late-decay 相比 static 的 AUROC `0.80223→0.81942`、AUPR `0.69222→0.72419`、FPR95 `0.57700→0.56100`、OSCR `0.57412→0.58674`、KS `0.47525→0.49275`；unknown-below-known-q95 proxy 从 `75.53%` 降至 `70.83%`。校准工作点 unknown rejection 小幅提高 `29.83%→30.13%`，测试 known acceptance 提高 `1.17 pp`，all-known accuracy 提高 `0.65 pp`，但 accepted-known accuracy 下降 `0.15 pp`。这是较全面的正向单 split 结果，但工作点拒识增益很小，且已有 split 曾出现 utility tradeoff。
+
+截至本次，seed 2054–2057 与 2061 五次配对的 AUROC、KS、overlap proxy 均同向有利；FPR95、OSCR、固定覆盖 unknown rejection 各在五次中的四次改善。late-decay 值得保留为研究候选，仍不改默认、不按测试结果继续调 schedule，也不宣称核心问题已解决；后续若继续，应预注册同一 schedule 的 fresh-split 联合验证。完整报告与原始结果/配置见 [`analysis/rejection_ce_decay_s2061_replication_20261022.md`](analysis/rejection_ce_decay_s2061_replication_20261022.md) 和 [`analysis/rejection_ce_decay_s2061_replication.json`](analysis/rejection_ce_decay_s2061_replication.json)，运行脚本为 [`scripts/run_rejection_ce_decay_pair.py`](scripts/run_rejection_ce_decay_pair.py)。
+
+### 2026-10-22 补充：固定 rejection CE late-decay 第六 split 复核（seed=2062）
+
+在新的 semantic-hard seed=2062 上继续按预先固定的方案复核，而非搜索 schedule：static control 全程 CE 系数 `1.0`；late-decay 前两轮保持 `1.0`，最后两轮线性衰减至 `0.25`。两臂共享 split-matched teacher、模型与训练 seed、5,400 mixed discovery pool（known prior 0.2）、detector、known-accuracy checkpoint 规则及仅 known validation 的 95% coverage calibration；均选择第 4 轮，validation known acceptance 均为 94.923%。配置审计确认除预设 schedule 外没有有效训练参数差异；测试标签只用于最终报告。
+
+| seed=2062 | static CE | late decay | treatment − control |
+|---|---:|---:|---:|
+| AUROC | 0.79130 | 0.81254 | +0.02124 |
+| AUPR | 0.67962 | 0.71308 | +0.03347 |
+| FPR95 | 0.59650 | 0.56067 | −3.58 pp |
+| OSCR | 0.60212 | 0.61707 | +0.01496 |
+| Score KS | 0.44233 | 0.47867 | +0.03633 |
+| Unknown below known-score q95 | 77.10% | 71.83% | −5.28 pp |
+| Test known acceptance at calibrated threshold | 95.02% | 95.08% | +0.07 pp |
+| Calibrated-workpoint unknown rejection | 22.85% | 27.95% | +5.10 pp |
+| All-known / accepted-known accuracy | 71.00% / 72.60% | 71.83% / 73.01% | +0.83 / +0.40 pp |
+
+本 split 的排序、尾部、95%覆盖工作点和 known utility 均同向改善；这是有希望的独立复核，但不能单独外推为稳定收益。结合 2054–2057、2061、2062 六组配对，AUROC、KS 与 overlap proxy 六次方向一致有利；FPR95、OSCR、固定工作点 unknown rejection 各为五次改善。此前 split 的工作点回退及 utility tradeoff 仍需纳入判断，因此继续保留为研究候选，**不改默认、不宣称核心问题已解决**。后续仍需使用预先固定 schedule，在新 split 联合报告排序、尾部、校准工作点和 known utility，且不依据 test 调参。详见 [`analysis/rejection_ce_decay_s2062_replication_20261022.md`](analysis/rejection_ce_decay_s2062_replication_20261022.md)、[`analysis/rejection_ce_decay_s2062_replication.json`](analysis/rejection_ce_decay_s2062_replication.json) 与 [`scripts/run_rejection_ce_decay_pair.py`](scripts/run_rejection_ce_decay_pair.py)。
+
+### 2026-10-22 补充：固定 rejection CE late-decay 第七 split 复核（seed=2063）
+
+继续在独立 semantic-hard seed=2063 上按同一固定 schedule 做 paired replication，不搜索参数。配置、matched mixed pool、split-matched teacher、checkpoint 与 known-validation-only 95% coverage 校准与前述实验一致；两臂均选第 4 轮，validation known acceptance 均为 94.954%，有效训练配置差异仅为 CE 衰减 schedule。
+
+| seed=2063 | static CE | late decay | treatment − control |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.81283 / 0.73181 | 0.82605 / 0.75299 | +0.01322 / +0.02117 |
+| FPR95 | 0.62350 | 0.58683 | −3.67 pp |
+| OSCR / KS | 0.60134 / 0.47333 | 0.60574 / 0.50175 | +0.00440 / +0.02842 |
+| Unknown below known-score q95 | 68.70% | 64.78% | −3.93 pp |
+| Test known acceptance at calibrated threshold | 95.67% | 97.08% | +1.42 pp |
+| Calibrated-workpoint unknown rejection | 29.28% | 26.50% | −2.78 pp |
+| All-known / accepted-known accuracy | 70.17% / 71.64% | 69.50% / 70.54% | −0.67 / −1.10 pp |
+
+此 split 的排序和分布指标虽改善，但固定工作点反而少拒识 unknown，且 known utility 下降，是明确的联合目标失败案例。七组（2054–2057、2061–2063）中，late decay 的 AUROC、KS、overlap proxy 七次同向改善，FPR95 与 OSCR 六次改善，但固定工作点 unknown rejection 仅五次改善。由此应将其定位为 ranking-oriented 研究候选，而非已验证的 operating-point 方案；优先分析 calibration 到 test 的 known coverage shift 与工作点稳定性，继续保持默认不变，不据测试标签调参。完整记录见 [`analysis/rejection_ce_decay_s2063_replication_20261022.md`](analysis/rejection_ce_decay_s2063_replication_20261022.md) 和 [`analysis/rejection_ce_decay_s2063_replication.json`](analysis/rejection_ce_decay_s2063_replication.json)。
+
+### 2026-10-22 补充：late-decay 校准工作点迁移误差汇总（描述性审计）
+
+为明确排序收益为何没有稳定转成部署工作点收益，对七组既有 paired JSON 做统一汇总。定义 coverage error = 测试 known acceptance − validation calibration known acceptance（目标约 95%）；以下统计只是已完成实验的描述性结果，涉及 test known labels，不能用于选择阈值、schedule 或模型，也不代表 validation-only 稳定性估计。
+
+| 汇总项（百分点） | Static control | Late decay |
+|---|---:|---:|
+| 平均测试 known-coverage error（相对 95% 目标） | −0.57 | +0.03 |
+| 平均配对 known acceptance 变化（late − static） | — | +0.60 |
+| 平均配对 unknown rejection 变化（late − static） | — | +1.08 |
+| 平均配对 AUROC 变化 | — | +0.0159 |
+| 平均配对 accepted-known accuracy 变化 | — | −0.29 |
+
+late-decay 的测试 known-coverage error 绝对值中位数为 `1.15 pp`，seed 2063 为 `+2.08 pp`，恰与该 seed 的 unknown rejection 和 accepted-known accuracy 回退同时出现。七组中 late-decay 的 coverage error 绝对值大于 static 的有四组；它并未呈现更稳定地命中 95% 工作点的证据。另一方面，七组平均 unknown rejection 为正并不推翻 2063 的失败：均值掩盖了 seed 间方向波动，且排序指标的平均改善不等于在固定覆盖目标下可靠获益。
+
+这是测试后归纳，只用于修正研究判断：当前瓶颈不能简单归结为排序能力不足，校准到新 split 的绝对分数/coverage 迁移也是独立风险。现存配对结果仅保存 validation 校准接受率和测试汇总指标，没有逐样本 validation scores，因此无法用这些产物完成诚实的 validation-only bootstrap、阈值方差或分位数不确定性分析；本轮不补造推断，也不改算法默认。后续实验应在运行前预注册并保存已知 validation 的逐样本 reject score（以及 sample id / split / checkpoint 元数据），用 validation-only bootstrap 或重复划分估计阈值与目标 coverage 的不确定性；再在完全独立 fresh split 上一次性评估 coverage error、unknown rejection 和 known utility。不能用本表中的测试结果反向挑选校正办法。
+
+### 2026-10-22 补充：known-validation 阈值稳定性工具及 seed=2063 试运行
+
+为补齐逐样本校准数据的缺口，`discover` 新增显式 opt-in 参数 `--save-calibration-scores`。启用后在 discovery 输出目录写入 `calibration_scores.npz`，仅含 calibration known scores、预测类、基础数据集 source index 和实际校准阈值；报告记录 score mode、policy、样本数与索引哈希，不导出标签。默认关闭，不影响模型、阈值或既有产物。配套 [`scripts/audit_validation_threshold_stability.py`](scripts/audit_validation_threshold_stability.py) 仅用这些 known scores 做 bootstrap / out-of-bag 覆盖稳定性审计；[`scripts/export_ce_decay_calibration_scores.py`](scripts/export_ce_decay_calibration_scores.py) 可对冻结 CE-decay checkpoint 重跑 discovery 并导出分数，不能覆盖已有输出目录。
+
+在 seed 2061–2063 的六个冻结模型上重跑 discovery 导出分数；每个 static/late 配对都使用同一组 calibration known 样本（651、650、654 个，source-index SHA-256 配对一致）。每臂以相同 seed 做 5,000 次 bootstrap，得到以下 validation-only 经验诊断：
+
+| Seed | Static / late 阈值 bootstrap SD（score 单位） | Static / late OOB known acceptance 均值 |
+|---:|---:|---:|
+| 2061 | 0.353 / 0.218 | 94.79% / 94.75% |
+| 2062 | 0.301 / 0.229 | 94.82% / 94.82% |
+| 2063 | 0.320 / 0.403 | 94.79% / 94.75% |
+
+六个模型的 OOB known-acceptance 经验 2.5%–97.5% 分位范围约为 `90.50%–97.98%`，显示约 650 个 calibration 样本在 95% 尾部分位点仍有可见抽样波动；三个 seed 中 late-decay 阈值波动有时更小、有时更大，没有稳定优势。各模型的 score 尺度不同，阈值绝对值及 paired threshold delta 不应被解释为性能优劣。尤其这些 bootstrap/OOB 数值只描述同一 validation 样本分布内的有限样本 calibration 稳定性，**不能**解释或估计 test coverage shift，也不估计 unknown rejection。seed=2063 测试 known acceptance 的偏移仍只是独立测试集观察，不能据此修改校准算法。
+
+可复现的 paired/static 审计结果见 [`analysis/rejection_ce_decay_validation_stability_s2061_paired.json`](analysis/rejection_ce_decay_validation_stability_s2061_paired.json)、[`analysis/rejection_ce_decay_validation_stability_s2062_paired.json`](analysis/rejection_ce_decay_validation_stability_s2062_paired.json)、[`analysis/rejection_ce_decay_validation_stability_s2063_paired.json`](analysis/rejection_ce_decay_validation_stability_s2063_paired.json)；late-decay 单臂结果见 [`analysis/rejection_ce_decay_validation_stability_s2061_late.json`](analysis/rejection_ce_decay_validation_stability_s2061_late.json)、[`analysis/rejection_ce_decay_validation_stability_s2062_late.json`](analysis/rejection_ce_decay_validation_stability_s2062_late.json)、[`analysis/rejection_ce_decay_validation_stability_s2063_late.json`](analysis/rejection_ce_decay_validation_stability_s2063_late.json)。导出的 NPZ 留在本地 `runs/` 目录，不纳入版本控制。下一步需预注册一种 validation-only coverage-risk 处理，再在独立 fresh split 一次性评估其 coverage transfer、unknown rejection 与 known utility。当前不改默认、不启用 test-based threshold correction，也不把 bootstrap 区间称为跨 split 置信区间。
+
+### 2026-10-22 补充：class-conditional q95 的 validation OOB 复核
+
+为检验按预测类别分别校准是否能改善 95% known-coverage 的稳定性，对 seed 2061–2063 六个冻结 static/late 模型，仅使用各自已知验证分数与预测类别运行每臂 2,000 次 bootstrap/OOB；每类 calibration 样本少于 5 时回退到该次全局 q95。没有重训模型，也没有使用未知或 test 标签。
+
+| Seed | Arm | 全局 q95 OOB known acceptance | 类条件 q95 全量验证接受率 | 类条件 q95 OOB known acceptance |
+|---:|---|---:|---:|---:|
+| 2061 | static / late | 94.77% / 94.76% | 91.40% / 91.24% | 85.11% / 84.98% |
+| 2062 | static / late | 94.81% / 94.77% | 90.62% / 90.77% | 84.92% / 84.42% |
+| 2063 | static / late | 94.80% / 94.71% | 91.28% / 90.98% | 84.89% / 85.06% |
+| 均值 | 六臂 | **94.77%** | **91.05%** | **84.90%** |
+
+类条件 q95 的 OOB 接受率比全局规则低 9.87 pp，且在全量校准样本上也仅接受 90.62–91.40%；它不是 95% coverage 的可行替代方案。停止该校准分支，不事后降低最小类别样本数，也不按 test 结果调规则。该诊断只回答同分布已知验证样本有限样本行为，不能解释跨 split coverage shift，更没有评估 unknown rejection。全局 q95 和默认配置保持不变。下一步应预注册 label-safe coverage-transfer 方法并在独立 fresh split 联合评估 known acceptance、unknown rejection 与 accepted-known utility；训练/表征端对 hard unknown 的信号覆盖仍是核心算法方向。完整协议、局限与逐模型结果索引见 [`analysis/rejection_class_conditional_q95_oob_s2061_s2063_20261022.md`](analysis/rejection_class_conditional_q95_oob_s2061_s2063_20261022.md)。
+
+随后仅对 known-validation OOB 做了最小类别样本数敏感性审计（5/10/20/30/50；每设置 2,000 次重抽样），用来区分“类条件规则本身无效”与“类条件尾部分位数样本太少”。六臂均值的 OOB known acceptance 依次为 `84.89%/89.72%/94.49%/94.76%/94.80%`；对应平均真正采用类条件阈值的预测类别数为 `57.8/37.2/1.2/0/0`（共 60 类）。因此 20 个样本时覆盖率接近目标，是因为几乎全部退回全局阈值；30/50 时则完全退化为全局阈值。这解释了小类别尾部估计的不稳定，但没有产生新的有益算法，不能解释跨 split shift 或 unknown rejection。类条件分支继续停止，默认不变。可复现实验脚本、机器结果与结论见 [`scripts/audit_classwise_threshold_min_samples.py`](scripts/audit_classwise_threshold_min_samples.py)、[`analysis/rejection_classwise_threshold_min_samples_s2061_s2063_20261022.json`](analysis/rejection_classwise_threshold_min_samples_s2061_s2063_20261022.json) 和 [`analysis/rejection_classwise_threshold_min_samples_s2061_s2063_20261022.md`](analysis/rejection_classwise_threshold_min_samples_s2061_s2063_20261022.md)。
+
+### 2026-10-22 补充：candidate-gated shared-feature PU boundary 风险参考对齐
+
+代码数据流审计发现，mixed pool 的共享特征 PU boundary 会先按候选 mask 筛选 unlabeled features，再计算 mixed risk；但它此前仍使用完整 known batch 计算 known-risk correction，并使用筛选前 known prior。对 class-dependent gate，这两个项与被筛选后的 mixed distribution 不对应。以 `pi` 表示 gate 前 known prior、`s_k=P(S|known)`、`s_m=P(S|mixed)`，筛选后应使用 `pi_S=pi*s_k/s_m`，且 known-risk reference 必须由同一规则筛选 known training samples 得到。不能通过读取 mixed-pool 真标签估计 `s_k` 或 `s_m`。
+
+现有显式开关 `--discovery-knn-selection-conditional` 现可同时用于 shared-feature PU boundary NNPU：single-view candidate rule 在 mixed 与 known batch 上重放；shared-feature boundary 使用已筛选 known features/labels、条件先验和原有 unlabeled candidate mask。准备新配对实验时又发现该历史开关同时会把 mixed gate 从双视图均值切换为 first-view；若对照臂不固定 gate，这会混淆 prior/reference correction 与 selector event。为此另增 opt-in `--discovery-single-view-candidate-gating`，两臂可固定相同 first-view gate，仅 treatment 开启条件修正。两种 single-view 设置均与 cross-view gating 互斥，默认均关闭。训练日志额外报告 `discovery_boundary_effective_prior`。
+
+新增合成回归测试固定已知风险差异：筛选后 known reference 的 PU 风险为 `0.40`，错用完整 known batch 会得到 `0.70`；条件先验按 `pi*s_k/s_m` 计算，梯度有限且可回传。此处测试验证的是公式和 wiring 必要性，不是性能提升。已生成独立 semantic-hard seed 2064，并新增配对 runner [`scripts/run_selection_conditional_feature_boundary_pair.py`](scripts/run_selection_conditional_feature_boundary_pair.py)：raw 与 treatment 两臂都使用相同 first-view candidate gate，唯一算法差异是是否启用条件先验和筛选后 known reference；known validation-only 做 95% coverage 校准，pool/test 标签不得参与选择率估计或配置选择。完整协议见 [`analysis/selection_conditional_feature_boundary_wiring_20261022.md`](analysis/selection_conditional_feature_boundary_wiring_20261022.md)。
+
+seed 2064 配对实验已完成，逐臂结果和配置保存在 [`analysis/selection_conditional_feature_boundary_s2064.json`](analysis/selection_conditional_feature_boundary_s2064.json)。两臂验证集校准 known acceptance 均为 94.95%；测试集事后指标 raw→conditional：AUROC `0.78499→0.78546`、FPR95 `0.64450→0.63183`、OSCR `0.60645→0.60192`、KS `0.43842→0.43458`、unknown-below-known-q95 overlap `0.77275→0.76175`、阈值下 unknown rejection `23.70%→27.15%`、known acceptance `94.62%→94.00%`、accepted-known accuracy `74.16%→73.69%`。结果有取舍且幅度有限：拒绝率/FPR95略有改善，但 OSCR 和已知类效用下降；这是单 split 机制检查，不能据此宣称解决核心问题或调整默认值。日志中两臂边界 effective prior 均约为 `0.2`，条件臂的 known/mixed 选择率同为 `0.25`，本次没有观察到明显先验偏移。当前保留 opt-in 实现和合成 wiring 测试，暂停该分支扫参；只有之后出现独立证据支持 class-dependent selection 时再考虑 fresh-split 复现。协议及局限见 [`analysis/selection_conditional_feature_boundary_wiring_20261022.md`](analysis/selection_conditional_feature_boundary_wiring_20261022.md)。
+
+### 2026-10-22 补充：温和 rejection-CE 衰减复核（seed=2065）
+
+前七个 paired split 显示固定 late-decay schedule 多数改善排序指标，但 calibrated operating-point unknown rejection 并不稳定，因此在新 semantic-hard seed 2065 上只检验一个预先声明的较温和终点（epoch 3–4 衰减至 0.5），与全程 static CE=1.0 对照；不是端点扫描。两臂使用同一 split-matched teacher、初始化、四轮训练、5,400 mixed pool（known prior 0.2）、detector 和仅 known-validation 的 95% coverage 校准，配置差异仅为 CE schedule。校准 known acceptance 均为 94.977%。
+
+| seed=2065 | static CE | moderate decay | treatment − static |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.76714 / 0.65063 | 0.77087 / 0.64673 | +0.00373 / −0.00391 |
+| FPR95 | 0.66100 | 0.61950 | −4.15 pp |
+| OSCR / score KS | 0.58119 / 0.40317 | 0.58910 / 0.41575 | +0.00792 / +0.01258 |
+| Unknown below known-score q95 | 80.20% | 80.55% | +0.35 pp（重叠略差）|
+| Test known acceptance | 95.20% | 95.85% | +0.65 pp |
+| Calibrated-threshold unknown rejection | 19.10% | 17.08% | −2.03 pp |
+| All-known / accepted-known accuracy | 70.55% / 72.13% | 71.28% / 72.60% | +0.73 / +0.47 pp |
+
+温和衰减改善 AUROC、FPR95、OSCR、KS 和已知类效用，但 AUPR 下降、overlap proxy 略差，而且校准阈值下 unknown rejection 反而降低 2.03 pp。因此它未通过预设的联合目标；不能把排序或已知分类收益当作核心拒识问题的解决，也不据此推广 schedule、继续扫描终点或按测试集调阈值。保留现有默认配置不变，暂停 CE-decay 端点分支。下一步优先探索训练/表征端对 semantic-near hard unknown 的更有针对性监督，并同时保护 hard known；新的方法必须预先固定 paired fresh-split 协议，联合评估排序、尾部重叠、校准工作点拒识与 known utility。完整记录见 [`analysis/rejection_ce_decay_moderate_s2065_20261022.md`](analysis/rejection_ce_decay_moderate_s2065_20261022.md)、机器结果 [`analysis/rejection_ce_decay_moderate_s2065.json`](analysis/rejection_ce_decay_moderate_s2065.json) 和 runner [`scripts/run_rejection_ce_decay_pair.py`](scripts/run_rejection_ce_decay_pair.py)。
+
+### 2026-10-22 补充：rejection feature-margin 的 soft nnPU 风险形式试验（seed=2066）
+
+在新的 semantic-hard split 上配对比较 hard nnPU 与 soft nnPU，只改变 rejection feature-margin PU 风险形式；损失系数固定为 0.1、softness 固定为 0.05，不在此 split 上扫参。两臂共享 split-matched teacher、初始化和训练协议、5,400 样本 mixed pool、同一 feature rejector 与 known-validation-only 95% coverage 校准；mixed-pool 标签不参与训练决策，测试标签不参与训练、校准、checkpoint 或调参。
+
+| seed=2066 | hard nnPU | soft nnPU | soft − hard |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.79957 / 0.70215 | 0.81187 / 0.71928 | +0.01230 / +0.01713 |
+| FPR95 / OSCR | 0.60817 / 0.58200 | 0.59467 / 0.58527 | −1.35 pp / +0.00327 |
+| score KS | 0.45550 | 0.47767 | +0.02217 |
+| Unknown below known-score q95 | 73.58% | 69.70% | −3.88 pp（重叠减少）|
+| Test known acceptance | 94.40% | 95.15% | +0.75 pp |
+| Calibrated-threshold unknown rejection | 28.93% | 29.50% | +0.58 pp |
+| All-known / accepted-known accuracy | 68.40% / 70.16% | 68.12% / 69.40% | −0.28 / −0.76 pp |
+
+soft nnPU 在该 split 上改善了排序与 overlap proxy，并使校准工作点 unknown rejection 小幅增加；但拒识增益有限，accepted-known accuracy 同时下降。因此这是值得在独立 fresh split 上按同一固定协议复核的方向性信号，不是联合成功或核心问题已解决的证据。当前不改默认风险形式，不根据 seed 2066 调整 softness/系数。训练日志确认两臂的 rejection-PU feature-margin loss 均有非零训练信号，配置审计确认算法训练差异仅为风险形式；完整结果、协议与局限见 [`analysis/rejection_pu_risk_semantic_hard_s2066_20261022.md`](analysis/rejection_pu_risk_semantic_hard_s2066_20261022.md)、机器结果 [`analysis/rejection_pu_risk_semantic_hard_s2066.json`](analysis/rejection_pu_risk_semantic_hard_s2066.json) 和 runner [`scripts/run_semantic_hard_rejection_pu_risk_pair.py`](scripts/run_semantic_hard_rejection_pu_risk_pair.py)。下一步仅做固定配置 fresh-split 复核，并继续联合检查排序、尾部重叠、校准工作点拒识和 known utility。
+
+### seed=2067：固定配置 fresh-split 复核
+
+按 seed 2066 原样复核 hard/soft nnPU 配对，不调 softness 或系数。soft nnPU 在 seed 2067 提高 AUPR、改善 overlap proxy，并使校准工作点 unknown rejection 增加 2.80 pp；但 AUROC 基本持平、FPR95 恶化 0.42 pp、OSCR 下降，accepted-known accuracy 下降 0.92 pp。已知类效用也略降。故拒识工作点的局部收益没有伴随一致的排序/尾部改善和已知效用保持，仍未达联合成功标准。
+
+| seed=2067 | hard nnPU | soft nnPU | soft − hard |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.79696 / 0.70059 | 0.79658 / 0.70736 | −0.00038 / +0.00677 |
+| FPR95 / OSCR | 0.61017 / 0.58628 | 0.61433 / 0.57981 | +0.42 pp / −0.00647 |
+| score KS | 0.44717 | 0.44350 | −0.00367 |
+| Unknown below known-score q95 | 73.55% | 71.18% | −2.38 pp（重叠减少）|
+| Test known acceptance | 94.53% | 94.35% | −0.18 pp |
+| Calibrated-threshold unknown rejection | 28.63% | 31.43% | +2.80 pp |
+| All-known / accepted-known accuracy | 69.22% / 71.02% | 68.98% / 70.09% | −0.23 / −0.92 pp |
+
+结合 seed 2066，soft nnPU 对 overlap proxy 与校准点拒识有一定方向性，但多个排序指标不一致且两次 accepted-known accuracy 均下降；现有两个 split 不支持更改默认风险形式，也不支持宣称核心问题已解决。暂停该风险形式分支，不按这两个测试 split 调参。完整复核记录见 [`analysis/rejection_pu_risk_semantic_hard_s2067_20261022.md`](analysis/rejection_pu_risk_semantic_hard_s2067_20261022.md)，机器结果见 [`analysis/rejection_pu_risk_semantic_hard_s2067.json`](analysis/rejection_pu_risk_semantic_hard_s2067.json)。
+
+**固定配置第三次复核（seed 2069）：**在新的 semantic-hard split 上维持系数 0.1、softness 0.05，仅比较 hard/soft nnPU。soft nnPU 的 AUROC/FPR95/OSCR 有轻微改善（`0.79392→0.79734`、`0.63650→0.62017`、`0.59734→0.60061`），但校准点 unknown rejection 从 `23.05%` 降至 `19.78%`；accepted-known accuracy 也由 `72.22%` 微降至 `72.02%`。因此三次配对均未形成跨 seed 一致、同时改善拒识与 known utility 的结果，**维持 hard nnPU 默认并暂停此风险形式分支**，不按测试 split 调参。报告见 [`analysis/rejection_pu_risk_semantic_hard_s2069_20261022.md`](analysis/rejection_pu_risk_semantic_hard_s2069_20261022.md)，机器结果见 [`analysis/rejection_pu_risk_semantic_hard_s2069.json`](analysis/rejection_pu_risk_semantic_hard_s2069.json)。
+
+### seed=2067 checkpoint：训练候选池覆盖诊断
+
+**后续 MC Dropout 信号审计（2026-10-22）：**在相同两份冻结 checkpoint、相同 50% 候选预算上，以 20 次随机前向评估 predictive entropy、epistemic mutual information（MI），并测试 MI 与 uncertainty-head 的 50/50 percentile-rank 融合。单独 MC predictive entropy/MI 在 seed 2066、2067 均未超过当前 entropy+uncertainty 基线；但 MI-head rank fusion 在两个 split 上都提高总体 unknown recall、降低 known contamination，并提升 novel-class 最差召回：2066 为 `57.52%/7.96%/20.00%`（recall/contamination/min-class recall），基线为 `56.53%/9.56%/12.10%`；2067 为 `57.50%/8.00%/19.19%`，基线为 `56.37%/9.81%/8.25%`。novel-class 中位召回在 2066 提升（`60.85%` vs `58.28%`），在 2067 仅小幅提升（`58.41%` vs `57.21%`）。这是比单一总召回更完整的正向离线信号，但只有两个 checkpoint，且 MC 随机前向的种子稳定性尚未单独复核；因此**只列为候选机制，不改默认、不宣称训练收益**。下一步先做预注册 MC seed 重复稳定性检查；若方向保持，再将该排序实现为显式实验 selector，跑 matched fresh-split 配对训练并同时检查 known utility。原始 JSON：[`analysis/rejection_pu_mc_candidate_coverage_s2066.json`](analysis/rejection_pu_mc_candidate_coverage_s2066.json)、[`analysis/rejection_pu_mc_candidate_coverage_s2067.json`](analysis/rejection_pu_mc_candidate_coverage_s2067.json)；脚本支持 `--mc-samples`。
+
+**后续验证与决策（seed 2068）：**第二个 MC sampling stream 复核了离线候选池方向；随后在新 semantic-hard split 上，以共享 teacher、相同 student 配置和 50% 候选预算做配对训练，仅改变 selector。rank fusion 的 best validation known accuracy 为 `67.59%`（baseline `67.07%`），测试 known acceptance 为 `94.02%`（`93.93%`），accepted-known accuracy 为 `68.66%`（`68.49%`）；但 unknown rejection 降至 `28.65%`（baseline `29.78%`），AUROC 由 `0.8040` 降至 `0.7962`。因此冻结 checkpoint 上的小幅覆盖收益没有转化成最终拒识收益，**暂停 MC selector 支线，不升默认、不继续追加训练 seed**。实现保留为 opt-in 消融。配对结果、协议和限制见 [`analysis/rejection_pu_mc_candidate_coverage_20261022.md`](analysis/rejection_pu_mc_candidate_coverage_20261022.md)，机器结果见 [`analysis/rejection_mc_candidate_selector_s2068.json`](analysis/rejection_mc_candidate_selector_s2068.json)；runner 为 [`scripts/run_mc_candidate_selector_pair.py`](scripts/run_mc_candidate_selector_pair.py)。
+
+为回到更上游的核心瓶颈，复用 seed=2067 hard-nnPU 学生 checkpoint 做冻结候选池审计；known validation 仅用于校准，pool 标签仅用于选择完成后的召回/污染统计。等预算 50%（各选 2,700/5,400）下，当前 entropy+uncertainty selector 的 unknown recall/known contamination 为 `56.37%/9.81%`；shared-distance consensus 为 `56.90%/8.96%`，rank-fused entropy+support-boundary 为 `56.74%/9.22%`。最好的等预算替代仅带来 `+0.53 pp` unknown recall 和 `−0.85 pp` contamination，单 checkpoint 证据不足以支持改 selector 或进入训练。known-validation predicted-class q95 选取比例只有 26.46%，其 contamination 较低但 recall 也降到 30.49%，不能当作等预算收益。故该审计不改变默认，也不把池标签用于任何训练决策；下一步应提出能在预先固定 fresh split 上改善固定预算覆盖/污染的新 label-free 机制，再做成对训练验证。详见 [`analysis/rejection_pu_candidate_coverage_s2067_20261022.md`](analysis/rejection_pu_candidate_coverage_s2067_20261022.md) 和原始审计 [`analysis/rejection_pu_risk_candidate_coverage_s2067.json`](analysis/rejection_pu_risk_candidate_coverage_s2067.json)。
+
+### 2026-10-22 补充：semantic-hard proxy 表征损失配对实验（seed 2069）
+
+在新的 semantic-hard split 上只改变 `alpha_proxy`（`0` 对 `0.05`），保持 split-matched teacher、hard nnPU、mixed discovery pool、检测器及 known-validation-only 95% coverage 校准不变。配置审计确认算法训练差异只有该系数；treatment 的 proxy loss 四轮均非零（`2.3634→1.3926`），表明损失实际参与训练。结果并非联合改善：AUROC `0.79542→0.79661`、FPR95 `65.08%→61.93%`、OSCR `0.59438→0.59995` 和 accepted-known accuracy `72.03%→72.39%` 有小幅改善；但 AUPR `0.70055→0.69346` 下降，校准工作点 unknown rejection `25.03%→24.45%` 也下降。单一 fresh split 不足以证明泛化收益，且核心工作点拒识没有改善。因此**不改默认，暂停 proxy-loss 支线，不在该测试 split 扫权重**；后续优先回到直接针对 semantic-near 边界并保护 hard-known 的训练信号。若未来重启 proxy，只在预先固定的独立 split 上原样验证 `0.05`。完整协议与结果见 [`analysis/semantic_hard_proxy_s2069_20261022.md`](analysis/semantic_hard_proxy_s2069_20261022.md)，原始结果见 [`analysis/semantic_hard_proxy_s2069.json`](analysis/semantic_hard_proxy_s2069.json)，runner 为 [`scripts/run_semantic_hard_proxy_pair.py`](scripts/run_semantic_hard_proxy_pair.py)。
+### 2026-10-23: independent uncertainty-KD replication (seeds 2077/2078)
+
+The fresh-split triad completed for both seeds: `no_kd` (`alpha_kd=0`, not pure CE), `standard` (`alpha_kd=1`, standard logits KD), and `uncertainty` (`alpha_kd=1`, uncertainty-weighted logits KD). Each seed shared one teacher, split, training configuration, mixed-pool protocol, known-validation-only checkpoint selection, and automatic-K discovery. Feature KD and rejection-branch KD were zero in all arms; the uncertainty path applied nonuniform detached weights and nonzero KD.
+
+All six frozen students were then evaluated with fixed `0.5/0.5` validation-only uncertainty fusion. Calibration used only a disjoint known-validation subset. Every report passed `calibration_source=known_validation_only`, no label-use audit, and zero calibration-subset overlap.
+
+Mean uncertainty-KD minus standard-KD after fusion:
+
+| AUROC | AUPR | FPR95 | OSCR | unknown rejection | accepted-known accuracy | cluster NMI |
+|---:|---:|---:|---:|---:|---:|---:|
+| -0.0125 | -0.0086 | +0.0413 | -0.0084 | -0.0103 | -0.0026 | +0.0138 |
+
+The seed directions are mixed: seed 2077 is worse on the main rejection and OSCR outcomes, while seed 2078 improves AUROC/AUPR but worsens FPR95, OSCR, and known utility. The treatment is also not a consistent improvement over no-KD. Therefore uncertainty-weighted logits KD is not promoted to the default, and weighting-function search is stopped. The validation-only fusion remains an opt-in diagnostic, not evidence that uncertainty-KD training is effective.
+
+Machine-checked records: [`analysis/uncertainty_kd_replication_s2077_s2078_20261023.md`](analysis/uncertainty_kd_replication_s2077_s2078_20261023.md), [`analysis/uncertainty_kd_replication_s2077_s2078_summary.json`](analysis/uncertainty_kd_replication_s2077_s2078_summary.json), and [`scripts/summarize_uncertainty_kd_replication.py`](scripts/summarize_uncertainty_kd_replication.py). Any next objective ablation must use new pre-registered seeds and include a true CE-only arm; seeds 2077/2078 must not be tuned on.
+
+### 2026-10-23 收尾验证
+
+本轮只做结果与协议收尾，没有启动新的 GPU 训练，也没有根据 2077/2078 的测试结果继续调参。重新运行汇总脚本后，机器结果与本节结论一致；脚本会强制检查三臂的 `alpha_kd`/`kd_mode`、feature/rejection KD 开关、known-validation-only 校准、测试/混合池标签未用于选择，以及校准子集零重叠。
+
+代码与核心行为验证结果：`python -m py_compile scripts/summarize_uncertainty_kd_replication.py` 通过；`python scripts/summarize_uncertainty_kd_replication.py` 成功重生成 JSON/Markdown；`pytest -q tests/test_core_behaviors.py` 为 `256 passed`（仅 2 个既有 warning）；`git diff --check` 未发现空白错误。当前结论保持不变：uncertainty-KD 不提升为默认方法，validation-only uncertainty fusion 仅保留为 opt-in 诊断机制，后续新消融必须使用预注册的新 seed，并加入真正的 CE-only 对照。
+
+# 2026-10-24：fresh-split rejection 分支容量/初始化复核
+
+本轮围绕“基于不确定性知识蒸馏的新类发现”的核心瓶颈，先完成了 LayerNorm 单因素对照，再完成了 fresh semantic-hard seed=2081 的 rejection 初始化对照。LayerNorm（seed=2080）使 known-only rejection train→val probe 从 `21.74%` 提升到 `24.70%`、输出 rank95 从 `8` 提升到 `15`，但 discovery AUROC 从 `0.7673` 降至 `0.7615`、OSCR 从 `0.5924` 降至 `0.5868`，因此只记录为“部分恢复表征、未形成方法收益”，不作为默认方案。
+
+随后在全新的 seed=2081 semantic-hard 60/40 split 上，只改变 independent rejection encoder 的初始化：scratch CNN 对照 versus copied pretrained shared backbone。两臂共享 teacher、student/discovery 配置、四 epoch 预算、mixed nnPU、known-validation-only checkpoint/95% coverage calibration，test 标签只用于最终回顾性指标。结果显示 shared 初始化将 rejection output rank95 从 `8` 提升到 `26`，known-only train→val probe 从 `19.93%` 提升到 `73.04%`，并使 discovery AUROC `0.7762→0.8105`、FPR95 `0.6503→0.5772`、OSCR `0.5743→0.6011`，固定 coverage 下 unknown rejection `20.88%→23.13%`。这支持“scratch rejection 分支容量/初始化/优化利用不足”是当前首要问题，但仍只是单个 fresh seed 的机制复核，尚不能宣称核心问题已经解决。
+
+详细协议、产物和边界见 [`analysis/rejection_capacity_initialization_s2081_20261024.md`](analysis/rejection_capacity_initialization_s2081_20261024.md)。下一步优先在另一个预注册 fresh split 复核 scratch/shared 初始化，不叠加新的 uncertainty-KD weighting、VOS、PU 或 selector fusion 搜参。
+### 2026-10-24：第二个 fresh-split 初始化复核（seed=2082）
+
+按 seed=2081 的预注册协议完成第二次 scratch/shared 初始化对照。shared-backbone 将 known-only rejection train→val probe 从 `17.67%` 提升到 `74.00%`、rank95 从 `8` 提升到 `27`；discovery AUROC `0.7719→0.7982`、FPR95 `0.6680→0.5955`、OSCR `0.5748→0.6052`，固定 coverage 下 unknown rejection `24.53%→28.50%`，accepted-known accuracy `71.47%→72.89%`。seed=2081 与 2082 方向一致，支持把 scratch rejection 分支的容量/初始化/优化利用不足列为当前首要瓶颈，并将 shared-backbone 提升为主线候选基线。
+
+这仍不是核心问题已解决的证明：semantic-near novel/known overlap 仍存在，shared 初始化需要更多预注册 seed 复核；当前不叠加 uncertainty-KD weighting、VOS、PU 或 selector fusion 搜参。完整协议和边界见 [`analysis/rejection_capacity_initialization_s2082_20261024.md`](analysis/rejection_capacity_initialization_s2082_20261024.md)，机器结果见 [`analysis/rejection_encoder_init_fresh_s2082.json`](analysis/rejection_encoder_init_fresh_s2082.json)。
+两次 fresh split 的汇总见 [`analysis/rejection_capacity_initialization_fresh_summary_2081_2082.md`](analysis/rejection_capacity_initialization_fresh_summary_2081_2082.md)：shared 初始化相对 scratch 平均提升 known-only train→val rejection probe `54.72 pp`、AUROC `0.0303`、AUPR `0.0370`、OSCR `0.0286`，FPR95 下降 `7.28 pp`，固定 coverage 下 unknown rejection 提升 `3.11 pp`。因此当前主线候选固定为 shared-pretrained independent rejection branch；后续只在新预注册 split 上引入一个明确的 uncertainty-aware rejection 机制，不再回到 scratch 分支或同时叠加多个损失。
+### 2026-10-24：第三个 fresh-split rejection 分支复核（seed=2083）
+
+第三个 semantic-hard fresh split 延续同一预注册协议完成：`scratch_cnn` 对照与 `shared_backbone` treatment 共享 teacher、student/discovery 配置、4 epoch 预算、mixed nnPU、known-validation-only checkpoint/95% coverage calibration；test 标签仍只用于最终回顾指标。seed=2083 中，known-only rejection train→val probe 为 `18.41%→73.04%`，rank95 为 `8→28`，AUROC `0.7544→0.7899`，FPR95 `0.7115→0.6213`，OSCR `0.5489→0.5756`，固定覆盖下 unknown rejection `19.25%→23.85%`。
+
+seed=2081、2082、2083 的方向完全一致。三 seed treatment−control 平均变化为：known-only train→val probe `+54.69 pp`、rank95 `+19.0`、AUROC `+0.0320`、AUPR `+0.0402`、FPR95 `-7.86 pp`、OSCR `+0.0280`、固定覆盖 unknown rejection `+3.61 pp`。因此当前主线候选固定为 shared-pretrained independent rejection branch，停止继续投入 scratch、LayerNorm、uncertainty-KD weighting、VOS、PU 和 selector fusion 的无目的搜索。
+
+需要保留因果边界：`scratch_cnn` 与 `shared_backbone` 同时改变了 rejection 分支的架构/容量和初始化，三 seed 结果证明的是“branch configuration”稳定有效，不是 initialization-only 的纯因果结论；而且 semantic-near novel/known 的最终分数重叠尚未解决。后续只在 fresh split 上设计一个单因素、明确 uncertainty-aware 的 rejection 机制，并继续遵守 test/mixed-pool 真标签不得用于训练、checkpoint、阈值或超参数选择的约束。详细结果见 [`analysis/rejection_capacity_initialization_s2083_20261024.md`](analysis/rejection_capacity_initialization_s2083_20261024.md) 和 [`analysis/rejection_encoder_init_fresh_s2083.json`](analysis/rejection_encoder_init_fresh_s2083.json)。
+### 2026-10-24：shared-backbone uncertainty rejection feature-margin fresh split（seed=2084）
+
+在 shared-backbone 主线上进行了一个严格单因素实验：baseline 为 `alpha_discovery_uncertainty_feature_margin=0`，treatment 为 `0.05`，两臂固定 margin `0.2`，其余 teacher、split、student、mixed-pool nnPU、四 epoch、known-validation-only checkpoint 和 95% coverage calibration 完全一致。treatment 的 feature-margin loss、uncertainty 权重和梯度均非零，机制真实进入训练。
+
+seed=2084 上 treatment 的 AUROC `0.80924→0.81287`、AUPR `0.72029→0.72477`、OSCR `0.60484→0.61572`、KS `0.47000→0.48042`、all-known accuracy `70.75%→71.72%`、accepted-known accuracy `71.86%→72.75%`；unknown rejection 仅 `24.28%→24.48%`，FPR95 `0.60050→0.60183` 略差。因此这是“有希望但尚未确认”的正向机制信号，不是已经解决核心重叠问题的证据。该 loss 继续保持 opt-in，不改默认、不扫权重、不叠加其他损失；只在一个新的预注册 fresh seed 上用完全相同的 `0.05/0.2` 配置复核，若联合拒识/known utility 标准不能复现则停止该支线。协议和完整结果见 [`analysis/shared_rejection_uncertainty_margin_s2084_20261024.md`](analysis/shared_rejection_uncertainty_margin_s2084_20261024.md) 与 [`analysis/shared_rejection_uncertainty_margin_s2084_results.json`](analysis/shared_rejection_uncertainty_margin_s2084_results.json)。
+### 2026-10-24：uncertainty rejection feature-margin fresh replication（seed=2085）与支线停止
+
+按 2084 的预注册协议，在新的 semantic-hard seed=2085 上仅复核 `alpha_discovery_uncertainty_feature_margin=0.05`（margin `0.2`）对 shared-backbone rejection branch 的影响。treatment 的 loss、uncertainty 权重和梯度均非零，实验本身有效；但结果为 AUROC `0.80087→0.80612`、AUPR `0.70025→0.71517`、unknown rejection `30.35%→31.38%`、KS `0.46175→0.47292`，同时 FPR95 `0.57783→0.60533` 恶化、OSCR `0.58456→0.57720` 下降、all-known accuracy `68.97%→67.98%` 和 accepted-known accuracy `70.82%→69.51%` 下降。结合 seed=2084 的轻微正向结果，说明该 loss 带来的是 split-sensitive tradeoff，而非稳定的拒识/known utility 联合收益。
+
+因此正式停止 uncertainty-weighted rejection feature-margin 支线：不继续扫 alpha/margin，不叠加 VOS、额外 PU、uncertainty-KD 或 selector fusion，不改默认配置。该实验属于有效的负/不确定结果，不是无效运行；下一优先级回到 semantic-near novel/known overlap 在固定 known coverage 下的 label-free hard-unknown 信号与表示几何审计。完整复核见 [`analysis/shared_rejection_uncertainty_margin_replication_2084_2085_20261024.md`](analysis/shared_rejection_uncertainty_margin_replication_2084_2085_20261024.md)、[`analysis/shared_rejection_uncertainty_margin_s2085_20261024.md`](analysis/shared_rejection_uncertainty_margin_s2085_20261024.md) 和 [`analysis/shared_rejection_uncertainty_margin_s2084_20261024.md`](analysis/shared_rejection_uncertainty_margin_s2084_20261024.md)。
+### 2026-10-24：shared-backbone frozen uncertainty-fusion fresh audit（seed=2084/2085）
+
+在已完成的 shared-backbone baseline checkpoint 上做了 evaluation-only 的 uncertainty fusion 复核：control 是原始 `feature_rejector`，treatment 是固定 0.5/0.5 的 `feature_rejector_uncertainty_fusion`；uncertainty-to-error 映射和 95% known-coverage threshold 只用 known validation 拟合。没有重训、替换 checkpoint，也没有用 test/mixed-pool 真标签选 fusion 权重或阈值。
+
+fusion 在两个 fresh split 上都改善 AUROC/AUPR、OSCR、KS 和 calibrated unknown rejection；但 FPR95 在 2084 改善 `-2.25 pp`、在 2085 恶化 `+0.82 pp`，且 test known acceptance 分别下降 `0.38/0.97 pp`。因此它比刚停止的 training-time feature-margin 更有希望，但仍存在 split-dependent operating-point tradeoff。当前只保留为显式 opt-in 候选 score，不改默认、不在这两个 seed 上调 fusion 权重；若继续，必须在新 seed 上固定规则并联合报告 FPR95、unknown rejection、known acceptance、accepted-known accuracy、OSCR、automatic-K 和聚类质量。详细记录见 [`analysis/shared_rejection_uncertainty_fusion_fresh_s2084_s2085_20261024.md`](analysis/shared_rejection_uncertainty_fusion_fresh_s2084_s2085_20261024.md) 和 [`analysis/shared_rejection_uncertainty_fusion_fresh_s2084_s2085_20261024.json`](analysis/shared_rejection_uncertainty_fusion_fresh_s2084_s2085_20261024.json)。
+### 2026-10-24：semantic-hard classwise false-accept diagnostic（seed=2084/2085）
+
+对 shared-backbone baseline 的冻结输出做了事后 classwise/coarse false-accept 诊断，仅用于描述核心重叠结构。2084/2085 的总体 novel false-accept 分别为 `75.73%/69.65%`；people、flowers、trees 等 coarse group 在两个 split 都偏难，但 18 个共同 novel 类别的 classwise false-accept 相关仅 `r=0.453`。这说明 semantic-near overlap 确实集中在部分 coarse 结构中，却不足以支持从 test 标签导出类别权重或 selector 规则。该诊断没有改变模型、checkpoint、阈值或方法选择；下一步若做 taxonomy-aware 方法，必须只用 known train/validation 与固定 coarse metadata 预先定义信号，并联合报告 contamination、固定 coverage unknown rejection、FPR95、OSCR、known utility 和 class-tail coverage。详细记录见 [`analysis/semantic_hard_classwise_false_accept_s2084_s2085_20261024.md`](analysis/semantic_hard_classwise_false_accept_s2084_s2085_20261024.md)。
+
+### 2026-10-24：shared-backbone rejection 输入归一化单因素复核（seed=2087）
+
+在前三个 fresh split 已确认 `shared_backbone` rejection 分支优于 scratch 分支后，继续只检验一个因素：将 copied pretrained rejection encoder 的输出在 rejection projector 前做 `LayerNorm`。control/treatment 共享 split-matched teacher、student/discovery 配置、四 epoch、mixed-pool nnPU、known-validation-only checkpoint 选择和 95% known-coverage calibration；唯一算法差异是 `independent_rejection_input_norm=none` vs `layernorm`。VOS、rejection decorrelation、额外 PU、uncertainty-KD 和 selector fusion 均关闭，test 标签只用于最终回顾指标。
+
+| 指标 | none | LayerNorm | treatment - control |
+|---|---:|---:|---:|
+| AUROC | 0.80773 | 0.80401 | -0.00373 |
+| AUPR | 0.71504 | 0.70008 | -0.01496 |
+| FPR95 | 0.59800 | 0.57767 | -2.03 pp |
+| OSCR | 0.59779 | 0.59184 | -0.00596 |
+| score KS | 0.45892 | 0.46342 | +0.00450 |
+| unknown below known q95 | 70.15% | 72.90% | +2.75 pp |
+| test known acceptance | 92.97% | 94.22% | +1.25 pp |
+| calibrated unknown rejection | 36.28% | 29.38% | -6.90 pp |
+| accepted-known accuracy | 71.96% | 70.85% | -1.11 pp |
+| rejection rank95 | 28 | 29 | +1 |
+| known train→validation rejection probe | 71.52% | 72.56% | +1.04 pp |
+
+LayerNorm 只带来很小的表征变化和 FPR95 改善，却降低 AUROC/AUPR/OSCR、固定工作点 unknown rejection、分数重叠和 known utility；因此未通过预注册联合标准。该方向正式停止，不改默认配置，也不在该 split 上继续调归一化位置或强度。当前 shared-backbone 仍只是主线候选基线，semantic-near novel/known overlap 尚未解决。下一步回到 hard-unknown supervision/data protocol，仍只预注册一个 label-free 单因素机制，并联合报告候选污染、尾类覆盖、固定 coverage 拒识、排序指标和 known utility。完整记录见 [`analysis/shared_rejection_input_norm_s2087_20261024.md`](analysis/shared_rejection_input_norm_s2087_20261024.md)、[`analysis/shared_rejection_input_norm_representation_s2087.json`](analysis/shared_rejection_input_norm_representation_s2087.json) 和 [`scripts/run_shared_rejection_input_norm_pair.py`](scripts/run_shared_rejection_input_norm_pair.py)。
+
+### 2026-10-24：semantic-hard shared-boundary selector 来源对照（seed=2088）
+
+本轮完成了一次严格的 fresh-split 单因素配对：control 由 student 选择 shared-feature support-boundary candidates，treatment 由 split-matched frozen teacher 选择 candidates。两臂共享 teacher、shared-backbone rejection branch、mixed pool `5400`、known prior `0.2`、candidate ratio `0.25`、selection-conditional soft nnPU、standard KD、known-validation-only checkpoint 和 95% known-coverage calibration；uncertainty-KD、VOS、额外 PU、fusion 和其他 selector 均关闭。pool/test 真标签未参与训练、checkpoint、阈值或方法选择，候选污染和逐类召回仅作 mask 形成后的 retrospective audit。
+
+| 指标 | student selector | teacher selector | teacher − student |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.75429 / 0.64148 | 0.75562 / 0.64354 | +0.00134 / +0.00206 |
+| FPR95 / OSCR | 0.67733 / 0.55125 | 0.66200 / 0.55518 | −1.53 pp / +0.00393 |
+| calibrated unknown rejection | 19.15% | 15.88% | −3.28 pp |
+| test known acceptance | 95.55% | 96.27% | +0.72 pp |
+| accepted-known accuracy | 70.02% | 69.60% | −0.42 pp |
+| cluster NMI / ARI | 0.51560 / 0.16458 | 0.50065 / 0.13788 | −0.01495 / −0.02670 |
+| candidate contamination / unknown recall | 10.88% / 27.90% | 15.37% / 26.47% | +4.49 / −1.43 pp |
+
+两臂的 candidate ratio、effective prior、boundary loss 和 rejection-branch gradient 均通过审计，说明实验真实执行；但 teacher selector 没有改善核心 fixed-coverage 拒识，且候选污染和聚类变差。因此该方向记录为有效负结果，不改默认配置，不继续在该 split 上扫描 selector 或预算。当前核心瓶颈仍是 semantic-near novel/known 的 rejection 表征与分数重叠。完整报告见 [`analysis/semantic_hard_boundary_selector_s2088_20261024.md`](analysis/semantic_hard_boundary_selector_s2088_20261024.md)，机器结果见 [`analysis/semantic_hard_boundary_selector_s2088_retry.json`](analysis/semantic_hard_boundary_selector_s2088_retry.json)，runner 见 [`scripts/run_semantic_hard_boundary_selector_pair.py`](scripts/run_semantic_hard_boundary_selector_pair.py)。
+
+### 2026-10-24：fixed validation-only uncertainty fusion 第四个 fresh split（seed=2089）
+
+在 2084–2086 的固定 fusion 复核后，按原预注册规则在全新的 semantic-hard seed=2089 上继续验证：control 是 `feature_rejector`，treatment 是固定的 `0.5` feature-rejector score + `0.5` known-validation-calibrated uncertainty risk。两臂使用同一个冻结 shared-backbone student checkpoint，95% threshold 和 uncertainty-to-error 映射只使用 known validation；没有训练期 uncertainty loss，也没有使用 test/mixed-pool 真标签选择方法或权重。
+
+| 指标 | feature rejector | fixed uncertainty fusion | treatment − control |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.78817 / 0.68296 | 0.79408 / 0.70571 | +0.00591 / +0.02274 |
+| FPR95 / OSCR | 0.62850 / 0.58219 | 0.63233 / 0.58702 | +0.38 pp / +0.00482 |
+| calibrated unknown rejection | 23.90% | 26.38% | +2.48 pp |
+| test known acceptance | 95.25% | 95.50% | +0.25 pp |
+| accepted-known accuracy | 70.78% | 70.68% | −0.10 pp |
+| cluster K | 35 | 27 | −8 |
+| cluster NMI / ARI | 0.48763 / 0.16233 | 0.47290 / 0.21278 | −0.01473 / +0.05045 |
+
+seed=2089 满足预注册联合标准。结合 seed=2084–2086，固定 fusion 在 4 个 fresh split 中通过 `3/4`，平均 AUROC/AUPR、OSCR 和 calibrated unknown rejection 均改善；但 known acceptance 在四个 split 都下降，且聚类指标并不一致。因此它仍是目前最有希望的显式 opt-in uncertainty score，不提升为默认，也不继续在这些 split 上搜索 fusion 权重或 score mode。完整报告见 [`analysis/shared_rejection_fusion_fresh_s2089_20261024.md`](analysis/shared_rejection_fusion_fresh_s2089_20261024.md)，机器结果见 [`analysis/shared_rejection_fusion_fresh_s2089.json`](analysis/shared_rejection_fusion_fresh_s2089.json)，四 split 汇总见 [`analysis/shared_rejection_fusion_fresh_2084_2089_summary_20261024.md`](analysis/shared_rejection_fusion_fresh_2084_2089_summary_20261024.md)。
+
+随后对 seed=2089 的冻结 checkpoint 做了 evaluation-only calibration stability audit。control/fusion 都只导出 `731` 个 known-validation score，source index 完全对齐，metadata 确认不含 test 样本且没有导出标签。2,000 次 paired bootstrap/OOB 显示 known acceptance 均值为 `94.83%/94.76%`，但 OOB 2.5–97.5% 区间分别约为 `91.13–97.99%` 和 `90.87–97.78%`。这说明 95% 尾部分位数存在明显有限样本不确定性；它是 calibration risk 诊断，不是 unknown rejection 或跨 split coverage 的证据。完整记录见 [`analysis/shared_rejection_fusion_calibration_s2089_20261024.md`](analysis/shared_rejection_fusion_calibration_s2089_20261024.md)，机器结果见 [`analysis/shared_rejection_fusion_calibration_s2089.json`](analysis/shared_rejection_fusion_calibration_s2089.json)，导出/审计脚本见 [`scripts/audit_shared_rejection_fusion_calibration.py`](scripts/audit_shared_rejection_fusion_calibration.py)。
+
+同一 evaluation-only 审计随后扩展到 2084、2085、2086 冻结 checkpoint。四个 split 的 OOB known acceptance 均值为 control `0.9479`、fusion `0.9480`，平均 OOB 区间宽度约为 `0.0688/0.0689`；因此 validation q95 的有限样本波动具有跨 split 一致性，不能把单次命中 95% 当作稳定 coverage transfer 的证明。该审计没有产生新的性能选择，也没有使用 test/mixed-pool 标签；fusion 继续保留为 opt-in。汇总见 [`analysis/shared_rejection_fusion_calibration_2084_2089_summary_20261024.md`](analysis/shared_rejection_fusion_calibration_2084_2089_summary_20261024.md)，脚本见 [`scripts/summarize_shared_rejection_fusion_calibration.py`](scripts/summarize_shared_rejection_fusion_calibration.py)。
+
+进一步补充了 fusion 分量导出与几何审计：seed=2089 的两个 known-validation z-score 分量完全重构最终 fusion score，Pearson 相关为 `0.6594`，约 `43.37%` 的 known validation 样本两个分量同时为正；rejector 分量连续，而 isotonic calibrated uncertainty 分量只有 `14` 个离散值。说明当前 known-acceptance trade-off 更可能来自相关风险信号的固定叠加与 uncertainty 校准的粗粒度，而不是 raw score scale 或代码接线错误。该诊断不改变固定 `0.5/0.5` 规则，也不据此调权重；若后续验证 gated/conservative fusion，必须作为新的单因素方法在 fresh split 上预注册。详细记录见 [`analysis/shared_rejection_fusion_components_s2089_20261024.md`](analysis/shared_rejection_fusion_components_s2089_20261024.md)，机器结果见 [`analysis/shared_rejection_fusion_components_s2089.json`](analysis/shared_rejection_fusion_components_s2089.json)。
+
+### 2026-10-24：signed class-conditional support boundary fresh pair（seed=2091）
+
+为检验“现有 PU-kNN boundary 只对混合池做向外风险、没有显式保护已知样本 support 内部”这一机制假设，新增了严格 opt-in 的 `signed_support` 目标。control 使用原有 `outward` PU-kNN 风险；treatment 在相同 nnPU 混合池风险之外，对带标签 known train batch 中落在自身类别 support 外的样本施加向内梯度。两臂共享 fresh semantic-hard split、teacher、四 epoch 预算、selection-conditional single-view shared-boundary 候选事件、kNN bank、检测器和 known-validation-only 95% coverage 校准；唯一算法因素为 `discovery_knn_boundary_objective`。
+
+seed=2091 的目标和梯度均真实生效：两臂每个 epoch 的 boundary gradient 都非零，平均范数为 `1.465`（outward）和 `1.710`（signed）。但 treatment 的 AUROC/AUPR 仅小幅变化，FPR95 从 `0.57483` 恶化到 `0.60117`，OSCR 从 `0.58735` 降到 `0.58102`，固定 coverage 下 unknown rejection 从 `28.95%` 降到 `25.63%`，accepted-known accuracy 也下降 `0.91 pp`。因此该机制没有改善核心 fixed-coverage 拒识问题，停止 signed-kNN boundary 分支，不扫描权重、margin、radius 或 selector，不改默认；保留为有效但明确的负结果，下一步回到表示容量与 hard-unknown 信号覆盖审计。完整记录见 [`analysis/signed_knn_boundary_pair_s2091_20261024.md`](analysis/signed_knn_boundary_pair_s2091_20261024.md)，机器结果见 [`analysis/signed_knn_boundary_pair_s2091.json`](analysis/signed_knn_boundary_pair_s2091.json)，runner 和 post-run audit 分别见 [`scripts/run_signed_knn_boundary_pair.py`](scripts/run_signed_knn_boundary_pair.py) 与 [`scripts/audit_signed_knn_boundary_pair.py`](scripts/audit_signed_knn_boundary_pair.py)。
+### 2026-10-24：fixed validation-only uncertainty fusion 第五个 fresh split（seed=2092）
+
+按预注册协议完成了新的 semantic-hard seed=2092 复核。control 为
+`feature_rejector`，treatment 为固定的 `0.5 × feature-rejector + 0.5 ×
+known-validation-calibrated uncertainty risk`；两臂共享同一个 frozen
+shared-backbone student checkpoint、mixed-pool nnPU 训练协议和
+known-validation-only 95% coverage calibration。没有使用 test/mixed-pool
+标签进行训练、checkpoint 选择、阈值校准、score 选择或 fusion 权重选择。
+
+seed=2092 的结果为：AUROC `0.80063→0.81616`，AUPR
+`0.70208→0.73331`，FPR95 `0.59500→0.57983`，OSCR
+`0.59817→0.60692`，固定 coverage 未知拒绝 `25.30%→34.08%`，接受后
+known accuracy `72.01%→72.14%`；test known acceptance 从 `95.08%` 降至
+`94.22%`，该 trade-off 明确保留记录。该 split 通过预注册联合标准。
+
+合并 2084、2085、2086、2089、2092 五个 fresh split 后，固定 fusion 在
+`4/5` 个 split 通过联合标准，平均 AUROC/AUPR/OSCR/固定 coverage 未知拒绝
+均改善，但 known acceptance 在五个 split 均下降（平均 `-0.57 pp`）。因此
+该 score 现在是有较强复现信号的显式 opt-in 候选，仍不改默认，也不再扫描
+fusion 权重、阈值或 score mode；它没有解决 semantic-near novel/known 的
+核心重叠问题。完整记录见 [`analysis/shared_rejection_fusion_fresh_s2092_20261024.md`](analysis/shared_rejection_fusion_fresh_s2092_20261024.md)、
+[`analysis/shared_rejection_fusion_fresh_2084_2092_summary_20261024.md`](analysis/shared_rejection_fusion_fresh_2084_2092_summary_20261024.md)
+和 [`analysis/shared_rejection_fusion_fresh_s2092.json`](analysis/shared_rejection_fusion_fresh_s2092.json)。下一步回到 rejection 表征容量与
+label-free hard-unknown signal coverage，不继续在 fusion 上调参。
+
+### 2026-10-24：fixed validation-only uncertainty fusion 第六个 fresh split（seed=2098）
+
+按预注册协议完成 seed=2098，control/treatment 共用同一新训练并冻结的 student checkpoint，仅 discovery `score_mode` 不同；协议审计确认其余 rejector 字段、threshold policy、mixed nnPU 和 known-validation-only calibration 均匹配。固定 0.5/0.5 fusion 相比 feature-rejector control：AUROC `0.79023→0.81372`、AUPR `0.68181→0.73346`、FPR95 `0.60500→0.60750`、OSCR `0.60291→0.61293`、known-validation-target 工作点 unknown rejection `23.325%→30.125%`，accepted-known accuracy `73.211%→72.813%`。因此该 split 通过全部预注册联合标准；实际 known acceptance 为 `95.45%`，仍需考虑有限验证样本带来的 coverage 波动。
+
+六个 fresh split 合并后为 `5/6` 通过；平均 AUROC/AUPR/OSCR 与工作点 unknown rejection 均改善。known acceptance 不是每个 split 都下降（六个中四降、两升），因此将其描述为 split-dependent operating-point trade-off。固定 fusion 继续作为 opt-in 候选，不提升默认，不根据该 split 调权重，也不声称已解决 semantic-near novel/known overlap。汇总见 [`analysis/shared_rejection_fusion_fresh_2084_2098_summary_20261024.md`](analysis/shared_rejection_fusion_fresh_2084_2098_summary_20261024.md)，seed=2098 详细记录见 [`analysis/shared_rejection_fusion_fresh_s2098_20261024.md`](analysis/shared_rejection_fusion_fresh_s2098_20261024.md)，预注册协议见 [`analysis/shared_rejection_fusion_fresh_s2098_protocol_20261024.md`](analysis/shared_rejection_fusion_fresh_s2098_protocol_20261024.md)。后续优先回到 label-free hard-unknown 训练信号覆盖与已知类 support 保护，而不是继续扫描 fusion 权重。
+
+### 2026-10-24：fixed validation-only uncertainty fusion 第七个 fresh split（seed=2103）
+
+按预注册固定 0.5/0.5 fusion 协议完成第七个 semantic-hard split。control/treatment 共用同一冻结 student、mixed-pool nnPU 训练与 known-validation-only 95% coverage 校准；配对审计确认除 `score_mode` 外协议字段一致，阈值策略一致，验证接受率均为 94.9176%，未使用 test/mixed-pool labels。
+
+| seed=2103 | feature-rejector control | fixed fusion | treatment - control |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.804584 / 0.696878 | 0.812403 / 0.707485 | +0.007820 / +0.010606 |
+| FPR95 / OSCR | 0.582667 / 0.608177 | 0.563167 / 0.612898 | -1.95 pp / +0.004722 |
+| Test known acceptance | 94.233% | 94.617% | +0.38 pp |
+| calibrated-workpoint unknown rejection | 28.475% | 28.075% | -0.40 pp |
+| accepted-known accuracy | 72.957% | 72.697% | -0.26 pp |
+| accepted-correct fraction | 68.750% | 68.783% | +0.03 pp |
+| automatic K / NMI / ARI | 41 / 0.48050 / 0.13902 | 36 / 0.47741 / 0.13655 | -5 / -0.00308 / -0.00247 |
+
+**判定：未通过预注册联合标准。** 虽然 AUROC、AUPR、FPR95、OSCR 均改善，但固定校准工作点 unknown rejection 下降 0.40 pp，低于要求的至少 +2 pp。该 split 再次说明排序改善不能直接等同新类拒识成功。七个 fresh split 汇总为 `5/7` 通过，平均 paired delta：AUROC `+0.01168`、AUPR `+0.02534`、FPR95 `-0.733 pp`、OSCR `+0.00607`、unknown rejection `+4.39 pp`。固定 fusion 继续保持 opt-in，不改默认、不根据测试结果搜索权重；当前 evidence 表明有平均收益但存在明确 split-dependent operating-point trade-off。详见 [seed=2103 详细报告](analysis/shared_rejection_fusion_fresh_s2103_20261024.md)、[七 split 汇总](analysis/shared_rejection_fusion_fresh_2084_2103_summary_20261024.md) 和[预注册协议](analysis/shared_rejection_fusion_fresh_s2103_protocol_20261024.md)。
+
+### 2026-10-24：rejection embedding 压缩 fresh 对照（seed=2099）
+
+基于 seed=2094 中 256d 端到端变差、但 rejection rank95 仅为 32 的现象，预注册检验 128d control 对 64d treatment，测试“减少可能冗余维度是否提升泛化”。runner 最初因默认 split 路径硬编码 2094 而在训练前拒绝 seed 2099；已修正为默认按 `--seed` 生成 split 路径后，同一条件成功运行。fresh split 两臂仅 `rejection_feature_dim` 不同，使用 split-matched teacher、shared-backbone 初始化、四 epoch、mixed nnPU、known-validation checkpoint 与 known-validation-only 95% coverage calibration；test/mixed-pool 标签未用于训练或选择。
+
+64d 未通过预注册联合标准：AUROC `0.78112→0.78023`、AUPR `0.67144→0.67099`、FPR95 `0.62167→0.63483`、OSCR `0.59059→0.58737`、校准工作点 unknown rejection `21.20%→19.63%`、accepted-known accuracy `72.02%→71.66%`。维度压缩假设在该 fresh split 上不获支持；停止维度搜索，不在 seed 2099 扫更小/中间维数，也不改默认。该负结果促使后续工作回到训练信号覆盖和 label-free known-support guard，而非继续后验容量调参。预注册协议、结果与机器记录分别见 [`analysis/rejection_embedding_compression_protocol_s2099_20261024.md`](analysis/rejection_embedding_compression_protocol_s2099_20261024.md)、[`analysis/rejection_embedding_compression_s2099_20261024.md`](analysis/rejection_embedding_compression_s2099_20261024.md) 和 [`analysis/rejection_embedding_compression_s2099.json`](analysis/rejection_embedding_compression_s2099.json)。
+
+此前又对五个 paired discovery report 做了严格协议复核：除预注册的
+`score_mode` 外，control/treatment 的 rejector supervision、mixed-pool
+语义、hard-label 开关和阈值策略必须逐字段一致；汇总脚本现在会在发现任何
+隐藏协议差异时直接报错，并由 [`tests/test_fresh_fusion_summary.py`](tests/test_fresh_fusion_summary.py)
+覆盖该约束。2084–2086 的冻结 rejection 表征审计也已确定性复跑并与原始
+JSON 完全一致；该审计仍只是机制证据，不是新的端到端方法收益。
+复跑记录见 [`analysis/rejection_representation_audit_rerun_check_20261024.md`](analysis/rejection_representation_audit_rerun_check_20261024.md)。
+
+### 2026-10-24：shared-backbone rejection embedding capacity 对照（seed=2094）
+
+为检验 shared-backbone independent rejection branch 的低有效秩是否只是
+embedding dimension 不足，完成了预注册的单因素对照：control 使用
+`rejection_feature_dim=128`，treatment 使用 `256`。两臂共享同一 teacher、
+semantic-hard 60/40 split、四 epoch 预算、mixed-pool nnPU、known-validation
+checkpoint 选择和 known-validation-only 95% coverage 校准；runner 审计确认
+除维度和输出路径外没有配置差异，test/mixed-pool 真值未用于训练、选择或校准。
+
+| 指标 | 128 维 | 256 维 | treatment-control |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.80622 / 0.71190 | 0.79232 / 0.68061 | -0.01390 / -0.03129 |
+| FPR95 / OSCR | 0.58417 / 0.60444 | 0.60650 / 0.59630 | +2.23 pp / -0.00814 |
+| 固定 coverage 未知拒绝 | 31.43% | 22.55% | -8.88 pp |
+| test known acceptance | 93.92% | 95.22% | +1.30 pp |
+| accepted-known accuracy | 72.37% | 71.92% | -0.45 pp |
+| score KS / unknown below known q95 | 0.45833 / 72.15% | 0.44467 / 77.08% | -0.01367 / +4.93 pp |
+
+确定性表征审计确认 treatment 的输出形状确实为 `[10000, 256]`，但有效秩只从
+`rank95=29` 增至 `32`，participation 从 `16.90` 降至 `16.59`，
+rejection→shared cross-R² 从 `0.61072` 升至 `0.64721`。因此简单扩容没有产生
+新的可用拒识信息，且端到端指标全面变差；该方向记录为有效负结果，不改默认配置，
+也不在 seed=2094 上继续扫描维度。完整协议、机器结果和表征审计见
+[`analysis/rejection_capacity_protocol_s2094_20261024.md`](analysis/rejection_capacity_protocol_s2094_20261024.md)、
+[`analysis/rejection_capacity_s2094.json`](analysis/rejection_capacity_s2094.json)、
+[`analysis/rejection_capacity_s2094_baseline_representation_audit.json`](analysis/rejection_capacity_s2094_baseline_representation_audit.json)
+和 [`analysis/rejection_capacity_s2094_capacity_256_representation_audit.json`](analysis/rejection_capacity_s2094_capacity_256_representation_audit.json)。
+下一步转向新的、明确 label-free hard-unknown signal 机制，不继续在容量或 fusion 权重上盲目搜索。
+
+### 2026-10-24：MC-dropout selector 稳定性审计与下一步配对实验
+
+针对此前冻结 checkpoint 上出现的 MC-dropout 候选池正向信号，固定
+`shared_rejection_uncertainty_margin_s2084_baseline/student.pt`、混合池 5,400、
+候选比例 0.5 和 MC=20，只改变随机前向 seed（0/1/2/3）。池标签只在选择完成后
+用于 contamination、unknown recall 和尾类覆盖统计，未参与 selector、训练、阈值或方法选择。
+
+四个随机 seed 的平均结果为：当前 entropy+uncertainty 的 contamination/unknown
+recall/novel median recall 为 `9.37%/56.64%/55.91%`；MC epistemic MI 为
+`11.76%/55.15%/58.14%`，selector 平均 Jaccard `0.699`；MC epistemic + head
+uncertainty 为 `7.64%/57.73%/62.20%`，平均 Jaccard `0.939`；epistemic/head
+rank fusion 为 `8.20%/57.37%/63.85%`，平均 Jaccard `0.802`。因此
+`mc_epistemic_plus_head_uncertainty` 是较稳定的候选池诊断信号，但它仍不是端到端
+训练收益；rank-fusion 的尾类最小召回更差，也不作为下一轮训练因素。
+
+该审计只支持在全新 semantic-hard split 上做一次预注册单因素配对：control 为
+`entropy_uncertainty`，treatment 为 `mc_epistemic_head_fusion`；shared-backbone
+independent rejection、mixed-pool nnPU、候选比例 0.5、MC=20、known-validation-only
+95% coverage calibration 以及其他训练设置全部固定。不扫描 MC 次数、候选比例或融合
+权重，不改默认配置。若联合拒识与 known utility 不能改善，则关闭 MC selector 支线，
+回到 label-free hard-unknown 表征机制。完整汇总见
+[`analysis/mc_dropout_selector_stability_s2084_20261024.md`](analysis/mc_dropout_selector_stability_s2084_20261024.md)，
+协议见 [`analysis/mc_dropout_selector_stability_protocol_20261024.md`](analysis/mc_dropout_selector_stability_protocol_20261024.md)。
+
+**配对实验结论更正（seed=2095）：** 实际完成的 treatment 是固定 50/50 rank fusion，
+不是上述审计分数更好的 raw `epistemic MI + head uncertainty`。两臂其余设置匹配；
+rank fusion 的 AUROC/AUPR/OSCR 分别从 `0.80676/0.71930/0.62289` 变为
+`0.80524/0.71489/0.62097`，unknown rejection 从 `28.58%` 降至 `24.55%`，
+known acceptance 则升高 `1.10 pp`。因此这不是联合收益，关闭 rank-fusion 训练支线，
+不扫权重或预算。raw-sum 与 rank-fusion 是不同算法；raw-sum selector 已实现为独立
+opt-in 模式并加单元测试，但没有端到端结果，不能据此宣称有效。seed=2095 的详细
+协议、指标和证据边界见
+[`analysis/mc_candidate_selector_pair_s2095_20261024.md`](analysis/mc_candidate_selector_pair_s2095_20261024.md)。
+随后按冻结协议在独立 semantic-hard seed=2096 上测试审计支持的 raw
+`epistemic MI + head uncertainty` selector。AUROC/AUPR/OSCR 分别提升
+`0.00342/0.00087/0.01316`，unknown rejection 提升 `1.35 pp`，known
+acceptance 仅下降 `0.10 pp`，accepted-known accuracy 提升 `1.31 pp`。
+这是方向一致但仅单 split 的初步正向证据，拒识绝对水平仍低；保持 opt-in，
+不调权重/预算，需在另一个 untouched split 上按同条件复核后才考虑更广泛结论。
+报告见 [`analysis/mc_rawsum_selector_pair_s2096_20261024.md`](analysis/mc_rawsum_selector_pair_s2096_20261024.md)。
+随后按同条件在 untouched semantic-hard seed=2097 复核。配置核验确认除
+`rejector_candidate_mode` 及输出路径/已选 checkpoint 统计外，训练配置没有其他差异；
+两臂 discovery 配置一致，均使用 mixed-pool nnPU feature rejector，并仅用 known
+validation 做 95% coverage 校准。seed=2097 的 AUROC/AUPR/FPR95 小幅改善，但 OSCR、
+unknown rejection（`30.18%→29.85%`）、accepted-known accuracy
+（`70.15%→69.46%`）略降，known acceptance 增加 `1.05 pp`。因此 raw-sum selector
+在两次配对中只呈现不一致的探索性信号，仍不足以证明联合收益，且绝对未知拒识率
+仍低；不据测试集调参、不改默认值，并停止该 selector 分支的权重/预算探索。
+这项辅助候选选择实验也不等同于验证“基于不确定性知识蒸馏的新类发现”核心主张；
+后续回到 semantic-near known/novel 表征与分数重叠，以及保护 hard-known 的 label-free
+hard-unknown 训练信号。保留 shared-pretrained independent rejection branch 为当前基线候选；
+此前 uncertainty-KD 复核方向混合，不盲目再扫不确定性权重，若改 KD 目标须预注册并与
+standard KD 和当前 no-KD 参考做隔离对照。
+seed=2097 详细协议和结果见
+[`analysis/mc_rawsum_selector_pair_s2097_20261024.md`](analysis/mc_rawsum_selector_pair_s2097_20261024.md)。
+
+### 2026-10-24：MC epistemic + head uncertainty raw-sum seed=2100 复核
+
+按预注册协议在独立 semantic-hard seed=2100 完成了 raw
+`epistemic MI + head uncertainty` selector 的第三次端到端配对复核。
+control 为 `entropy_uncertainty`，treatment 为
+`mc_epistemic_plus_head_uncertainty`；两臂共享同一 split-matched teacher、
+50% 候选预算、20 次 MC、四 epoch、shared-pretrained independent rejection
+branch、mixed-pool nnPU、known-validation-only checkpoint 和 95% coverage
+calibration。配置和 artifact 审计通过，`hard_labels_used=false` 且
+`test_labels_used_for_training_or_calibration=false`。
+
+| 指标 | entropy control | MC raw-sum | treatment - control |
+|---|---:|---:|---:|
+| AUROC | 0.78725 | 0.77700 | -0.01025 |
+| AUPR | 0.67502 | 0.66572 | -0.00930 |
+| FPR95 | 0.59667 | 0.61017 | +1.35 pp |
+| OSCR | 0.59643 | 0.58837 | -0.00806 |
+| Test known acceptance | 96.03% | 95.93% | -0.10 pp |
+| calibrated unknown rejection | 19.55% | 18.40% | -1.15 pp |
+| accepted-known accuracy | 72.20% | 72.03% | -0.17 pp |
+| correctly accepted fraction | 69.33% | 69.10% | -0.23 pp |
+
+seed=2100 未通过预注册联合标准：排序、OSCR、固定 coverage unknown
+rejection 均下降，FPR95 恶化 1.35 pp。与 seed=2096 的正向结果、seed=2097
+的混合结果合并后，raw-sum selector 的跨 split 证据仍不稳定，停止候选比例、
+MC 次数和 score 权重搜索，不改默认配置。该结果是有效的负配对实验，但只否定
+当前 selector 支线，不能推出所有不确定性信号或 uncertainty-KD 都无效。后续回到
+semantic-near known/novel 表征与分数重叠，以及 label-free hard-unknown 信号覆盖；
+完整记录见 [`analysis/mc_rawsum_selector_pair_s2100_20261024.md`](analysis/mc_rawsum_selector_pair_s2100_20261024.md)。
+
+### 2026-10-24：direct teacher uncertainty transfer seed=2101
+
+为补上当前 uncertainty-KD 实现中的机制缺口，在独立 semantic-hard seed=2101
+上比较了原有 student confidence target 与直接回归 frozen teacher uncertainty
+head 的 `teacher` target；teacher 本身没有 independent rejection branch，
+该标量被传给 student rejection-uncertainty head。两臂共享 teacher、shared-pretrained
+independent rejection branch、mixed-pool nnPU、四 epoch、known-validation-only
+checkpoint 和 95% coverage calibration；配置审计仅发现 target mode、路径和
+validation-selected checkpoint 字段差异。treatment 的 uncertainty loss 四个
+epoch 均非零：`0.10910, 0.09345, 0.08793, 0.08549`，因此实验真实执行了直接
+teacher uncertainty 蒸馏。
+
+| 指标 | confidence target | teacher target | treatment - control |
+|---|---:|---:|---:|
+| AUROC | 0.79122 | 0.79483 | +0.00361 |
+| AUPR | 0.68374 | 0.67594 | -0.00780 |
+| FPR95 | 0.60633 | 0.59400 | -1.23 pp |
+| OSCR | 0.59700 | 0.60812 | +0.01112 |
+| calibrated unknown rejection | 26.15% | 19.90% | -6.25 pp |
+| accepted-known accuracy | 72.89% | 73.52% | +0.62 pp |
+| correctly accepted fraction | 68.62% | 70.23% | +1.62 pp |
+| automatic K / NMI / ARI | 35 / 0.49603 / 0.16340 | 32 / 0.51229 / 0.15693 | -3 / +0.01626 / -0.00647 |
+
+该 treatment 未通过联合标准：虽然 AUROC、FPR95、OSCR 和 known utility 部分改善，
+但核心 fixed-coverage unknown rejection 下降 `6.25 pp`，AUPR 也下降。因此“学生
+学到了教师 uncertainty 数值”已被确认，但标量 uncertainty 一致性没有转化为新类
+拒识收益；停止该直接 target 变体，不调 MSE 系数、不替换 teacher score、不改默认。
+这不等于否定所有 uncertainty distillation，后续继续围绕 semantic-near novel/known
+分数重叠和 hard-unknown 信号覆盖。完整报告见
+[`analysis/teacher_uncertainty_transfer_s2101_20261024.md`](analysis/teacher_uncertainty_transfer_s2101_20261024.md)。
+
+### 2026-10-24：rejection-feature KD fresh split seed=2102
+
+为直接测试“基于不确定性知识蒸馏”是否能改善 rejection 表征而不是只匹配标量
+uncertainty，在 fresh semantic-hard seed=2102 上比较了 `alpha_rejection_feat_kd=0`
+与 `0.1`。两臂共享带 128 维 rejection embedding 的冻结 teacher、shared-pretrained
+independent rejection branch、四 epoch、mixed-pool nnPU、known-validation checkpoint
+selection 和 95% known-coverage calibration。新增的
+`teacher_rejection_feature_dim=128` 只用于保证两臂加载同一个 teacher 架构；配置审计
+确认除该单因素、路径和 validation-selected checkpoint 字段外没有训练配置差异，且
+没有使用 mixed-pool/test labels。
+
+该路径真实生效：treatment rejection-feature KD loss 为
+`0.227385, 0.165860, 0.144463, 0.133811`，对应 rejection 梯度范数为
+`0.056047, 0.037592, 0.032083, 0.028235`；control 全程为零。结果为 AUROC
+`0.800266→0.806794`、AUPR `0.697525→0.704745`、FPR95
+`59.03%→58.63%`、OSCR `0.612721→0.624250`，但 calibrated unknown rejection
+`31.275%→25.025%`，下降 `6.25 pp`；accepted-known accuracy 仅
+`74.491%→74.630%`。因此它与 direct teacher-uncertainty transfer 一样，改善了
+排序/表征诊断却没有改善核心 fixed-coverage unknown rejection，未通过联合标准。
+停止该 KD 目标和系数在此 split 上的继续搜索，不改默认；保留显式 teacher rejection
+维度参数以保证后续实验可复现。完整记录见
+[`analysis/rejection_feature_kd_s2102_20261024.md`](analysis/rejection_feature_kd_s2102_20261024.md)。
+
+### 2026-10-25：rejection-feature KD weighting mechanism split seed=2104
+
+seed=2102 的 no-KD vs uncertainty-weighted KD 对照无法区分 feature KD 本身与
+teacher-uncertainty weighting 的影响。因此在 fresh semantic-hard seed=2104 固定
+`alpha_rejection_feat_kd=0.1`，只比较 rejection-feature KD 的 uniform weighting 与
+detached teacher-uncertainty weighting；两臂共享同一 split-matched teacher、student
+recipe、四 epoch、mixed-pool nnPU、known-validation checkpoint 和 95% coverage
+calibration。主 logits KD 的 uncertainty weighting 在两臂中保持不变。配置、标签隔离、
+非零 loss/梯度及 discovery 均通过审计，没有使用 mixed-pool hard labels 或 test labels。
+
+不确定性加权相对均匀权重的变化为：AUROC `0.792513→0.781977`（`-0.010536`）、
+AUPR `0.693633→0.674539`（`-0.019094`）、FPR95 `61.97%→63.30%`
+（恶化 `1.33 pp`）、OSCR `0.586225→0.578877`，固定 known-validation 95% coverage
+下 unknown rejection `26.50%→21.95%`（下降 `4.55 pp`），accepted-known accuracy
+`71.13%→70.67%`。自动聚类 NMI `0.47619→0.47428`、ARI
+`0.15111→0.13029`，也未见改善。两臂 feature-KD loss 四 epoch 均非零；uniform 为
+`0.437950, 0.300136, 0.258880, 0.235789`，uncertainty-weighted 为
+`0.255388, 0.198873, 0.172720, 0.157698`，对应 rejection 梯度也非零，因此这是
+真实执行的机制负结果，而非未生效路径。
+
+结论：seed=2104 上 uncertainty weighting 相较 uniform 有害，未通过预注册联合标准；
+停止该 weighting 变体，不改默认。这个配对不能单独证明 uniform feature KD 优于 no-KD，
+也不能据一个 split 推广到所有 uncertainty KD。runner 首次完成训练和 discovery 后曾因
+收尾代码硬编码 arm 名称而在汇总阶段失败；修复 arm 映射和完整产物的 summary-only
+路径后，已从现存产物成功审计并写出最终结果。报告和机器结果分别见
+[`analysis/rejection_feature_kd_weighting_s2104_20261025.md`](analysis/rejection_feature_kd_weighting_s2104_20261025.md)
+与 [`analysis/rejection_feature_kd_weighting_s2104.json`](analysis/rejection_feature_kd_weighting_s2104.json)。
+
+**机制解释更正：** 后续核验 seed=2104 split-matched teacher 的 known-validation
+uncertainty 输出发现，head uncertainty 对抽查样本全部精确饱和为 `1.0`；seed=2102/2104
+训练日志中的 `exp(-u)` 权重标准差约为 `2e-8/4e-9`，即近似常数 `e^-1`，而非有意义的
+样本级重加权。故前述 endpoint 数值仍是实际结果，但不能据此断言“uncertainty weighting
+有害”；更准确的解释是该 teacher head 在此设定下退化，实验比较近似常数缩放的 feature-KD。
+已停止用这两轮结果推断样本级 uncertainty weighting 的因果效果，并补做非退化 MC epistemic
+权重对照。
+
+### 2026-10-25：rejection-feature KD 的非退化 MC uncertainty weighting（seed=2105）
+
+为修复上述归因缺口，在 fresh semantic-hard split seed=2105 固定 rejection-feature KD
+系数 `0.1`，比较 uniform weighting 与 MC epistemic uncertainty weighting；两臂 main logits
+KD 均固定为 standard，其他训练、teacher、student、mixed-pool nnPU、checkpoint 和 95%
+known-validation coverage calibration 条件一致。MC uncertainty 由 teacher 的 stochastic
+dropout passes 计算。runner 逐 epoch 检查权重标准差，确保不是退化常数；uncertainty 臂的
+四个 epoch 标准差为 `0.01448, 0.01474, 0.01456, 0.01467`，feature-KD loss 和 rejection
+梯度均非零。
+
+MC 加权相对 uniform 的变化：AUROC `0.777539→0.779926`（`+0.002388`）、AUPR
+`0.682091→0.684291`（`+0.002201`）、FPR95 改善 `0.15 pp`、OSCR `+0.000248`；但
+fixed-coverage unknown rejection `29.75%→28.50%`（下降 `1.25 pp`），自动聚类 NMI/ARI
+分别下降 `0.00214/0.00765`。因此未达到预注册的至少 `+2 pp` unknown rejection 联合门槛，
+不晋升为有效方法，也不在 seed=2105 调 MC 次数或系数。该结论仅针对当前 MC-epistemic
+rejection-feature weighting 变体；uniform feature KD 相对 no-KD 仍未由本实验回答。
+
+详细报告与机器结果分别见
+[`analysis/rejection_feature_kd_mc_epistemic_s2105_20261025.md`](analysis/rejection_feature_kd_mc_epistemic_s2105_20261025.md)
+和 [`analysis/rejection_feature_kd_mc_epistemic_s2105.json`](analysis/rejection_feature_kd_mc_epistemic_s2105.json)。
+
+### 2026-10-25：uniform rejection-feature KD 相对 no-KD 的归因复核（seed=2106）
+
+seed=2105 的 uniform feature-KD vs MC uncertainty weighting 不能回答
+feature-KD 本身相对 no-KD 是否有效，因此在新的 semantic-hard seed=2106 上补做
+了单因素配对。control 关闭 `alpha_rejection_feat_kd`，treatment 固定为
+`0.1` 且使用 uniform weighting；两臂共享同一个 split-matched teacher、student
+配方、standard logits KD、四 epoch、mixed-pool nnPU、known-validation checkpoint
+选择、feature-rejector 评分和 95% known-coverage 校准。没有使用 mixed-pool/test
+真标签进行训练、选择或校准。
+
+| 指标 | no feature KD | uniform feature KD | treatment - control |
+|---|---:|---:|---:|
+| AUROC | 0.797788 | 0.789474 | -0.008313 |
+| AUPR | 0.697152 | 0.681160 | -0.015992 |
+| FPR95 | 59.867% | 60.933% | +1.067 pp |
+| OSCR | 0.573681 | 0.568502 | -0.005179 |
+| known acceptance | 95.917% | 95.683% | -0.233 pp |
+| calibrated unknown rejection | 22.200% | 21.925% | -0.275 pp |
+| accepted-known accuracy | 68.341% | 68.333% | -0.008 pp |
+| automatic K / NMI / ARI | 32 / 0.495570 / 0.163382 | 33 / 0.475731 / 0.141455 | +1 / -0.019838 / -0.021927 |
+
+treatment 的 feature-KD loss 四个 epoch 为 `0.428973, 0.289000, 0.247891,
+0.230172`，rejection feature-KD 梯度均非零；control 的该项全程为零，说明
+机制真实生效。结果在排序、固定 coverage 拒识、OSCR、候选纯度和聚类质量上均未
+改善，未通过预注册门槛。该 fresh split 回答了此前的归因缺口：uniform
+rejection-feature KD 本身没有得到支持，因此停止该确切配方，不改默认配置，也不
+继续扫描系数或 weighting。完整协议、运行时恢复说明和结果见
+[`analysis/rejection_feature_kd_uniform_vs_none_protocol_s2106_20261025.md`](analysis/rejection_feature_kd_uniform_vs_none_protocol_s2106_20261025.md)
+与
+[`analysis/rejection_feature_kd_uniform_vs_none_s2106.json`](analysis/rejection_feature_kd_uniform_vs_none_s2106.json)。
+
+### 2026-10-25：shared-backbone rejection training budget 对照（seed=2107）
+
+在停止 rejection-feature KD 后，针对当前核心瓶颈“shared-backbone rejection
+分支可能在四轮训练下尚未充分优化”做了新的单因素 fresh-split 实验。control
+使用 4 个 student epoch，treatment 使用 8 个 epoch；两臂共享同一
+split-matched teacher、shared-backbone independent rejection branch、训练目标、
+mixed-pool nnPU、checkpoint 规则、feature-rejector 评分和 known-validation-only
+95% coverage calibration。没有加入任何新的 uncertainty-KD、VOS、boundary、selector
+或 fusion，mixed/test 真标签没有参与训练、选择或校准。
+
+| 指标 | 4 epochs | 8 epochs | treatment - control |
+|---|---:|---:|---:|
+| AUROC | 0.782367 | 0.811315 | +0.028947 |
+| AUPR | 0.677964 | 0.714516 | +0.036552 |
+| FPR95 | 64.933% | 58.783% | -6.150 pp |
+| OSCR | 0.570402 | 0.606348 | +0.035946 |
+| known acceptance | 95.133% | 95.667% | +0.533 pp |
+| calibrated unknown rejection | 23.500% | 25.600% | +2.100 pp |
+| accepted-known accuracy | 69.516% | 71.446% | +1.930 pp |
+| automatic K / NMI / ARI | 35 / 0.491531 / 0.153857 | 38 / 0.486975 / 0.140670 | +3 / -0.004556 / -0.013187 |
+| candidate purity before purification | 76.299% | 79.751% | +3.452 pp |
+
+seed=2107 的 8 epoch 相对 4 epoch 改善 AUROC `+0.028947`、AUPR `+0.036552`、
+FPR95 `-6.150 pp`、OSCR `+0.035946`、calibrated unknown rejection `+2.100 pp`，
+accepted-known accuracy `+1.930 pp`；但 NMI/ARI 略降。随后在 seed=2108 原样复核，
+AUROC `+0.031401`、AUPR `+0.049057`、FPR95 `-3.283 pp`、OSCR `+0.048989`、
+unknown rejection `+13.375 pp`、accepted-known accuracy `+4.163 pp`，候选纯度
+`+2.415 pp`；但测试 known acceptance 下降 `1.783 pp`，NMI/ARI 分别下降
+`0.035410/0.006973`。第三个 fresh split seed=2109 中，AUROC `+0.018197`、AUPR
+`+0.023756`、FPR95 `-4.833 pp`、OSCR `+0.030156`、accepted-known accuracy
+`+1.529 pp`，但 unknown rejection 下降 `1.175 pp`，NMI/ARI 分别下降
+`0.006324/0.014407`。三 split 平均变化：AUROC `+0.02618`、AUPR `+0.03645`、
+FPR95 `-4.756 pp`、OSCR `+0.03836`、unknown rejection `+4.767 pp`（仅 2/3
+split 改善）、accepted-known accuracy `+2.540 pp`、NMI `-0.01543`、ARI
+`-0.01152`。因此 8 epoch 稳定改善排序和已知类 utility，但 novel rejection 不稳定、
+聚类下降；维持 opt-in 并停止继续扫预算，不修改默认。seed=2107 协议/结果见
+[`analysis/rejection_epoch_budget_protocol_s2107_20261025.md`](analysis/rejection_epoch_budget_protocol_s2107_20261025.md)
+和 [`analysis/rejection_epoch_budget_s2107.json`](analysis/rejection_epoch_budget_s2107.json)，
+seed=2108 见 [`analysis/rejection_epoch_budget_protocol_s2108_20261025.md`](analysis/rejection_epoch_budget_protocol_s2108_20261025.md)
+和 [`analysis/rejection_epoch_budget_s2108.json`](analysis/rejection_epoch_budget_s2108.json)。运行入口为
+以及 seed=2109 的 [`analysis/rejection_epoch_budget_protocol_s2109_20261025.md`](analysis/rejection_epoch_budget_protocol_s2109_20261025.md)
+和 [`analysis/rejection_epoch_budget_s2109.json`](analysis/rejection_epoch_budget_s2109.json)。运行入口为
+[`scripts/run_rejection_epoch_budget_pair.py`](scripts/run_rejection_epoch_budget_pair.py)。
+
+### 2026-10-25：拒识校准稳定性与聚类表征诊断（seeds=2107–2109）
+
+对已有 4/8-epoch checkpoint 做 known-validation-only OOB/bootstrap 审计（每臂 1000 次），三 split 的
+OOB known acceptance 均约 `94.7%–94.8%`，与目标 `95%` 接近；因此目前没有看到“校准样本有限导致阈值接受率明显不稳”的证据。
+但这是已知类 validation 的有限样本稳定性检查，不估计测试集 coverage transfer、unknown rejection 或跨 split/domain shift。
+seed=2108 的 8 epoch 阈值较 4 epoch 低约 `1.152` 分数单位，尽管 OOB acceptance 基本不变；这与其测试 known
+acceptance 下降 `1.783 pp` 同时出现，但不能据此断言阈值平移导致覆盖迁移变化。完整机器审计见
+[`analysis/rejection_epoch_calibration_oob_s2107.json`](analysis/rejection_epoch_calibration_oob_s2107.json)、
+[`analysis/rejection_epoch_calibration_oob_s2108.json`](analysis/rejection_epoch_calibration_oob_s2108.json)、
+[`analysis/rejection_epoch_calibration_oob_s2109.json`](analysis/rejection_epoch_calibration_oob_s2109.json)。
+
+另对相同 frozen checkpoint 比较聚类输入 `projection_pca` 与 `feature_pca`，训练、评分器与阈值均不变；六组比较中
+拒识/coverage 指标完全相同，NMI/ARI 均上升。8 epoch 三 split 的 NMI 增量为 `+0.07559/+0.04666/+0.08229`，
+ARI 增量为 `+0.11160/+0.05122/+0.15338`，自动 K 分别从 `38→41、39→40、37→37`。但该诊断使用测试标签计算
+事后聚类指标，只能视为探索性线索，不据此更改默认值或宣称新类发现方法已验证；已锁定 seed=2110 的独立复核，协议见
+[`analysis/rejection_cluster_feature_replication_protocol_s2110_20261025.md`](analysis/rejection_cluster_feature_replication_protocol_s2110_20261025.md)，
+运行入口见 [`scripts/run_rejection_cluster_feature_replication.py`](scripts/run_rejection_cluster_feature_replication.py)。
+
+seed=2110 独立复核已完成：在同一个四 epoch checkpoint、同一个 feature-rejector 分数和 known-validation-only 95%
+校准下，仅切换聚类输入。两臂 AUROC `0.789447`、AUPR `0.685280`、FPR95 `62.817%`、OSCR `0.569943`、
+测试 known acceptance `95.617%`、固定阈值 unknown rejection `22.625%` 与 accepted-known accuracy `69.078%`
+完全一致；真实 K=40，自动 K 从 `36` 变为 `34`，故 K 绝对误差从 4 增至 6。全体 novel 样本聚类 NMI/ARI 从 `0.456326/0.213457` 升至
+`0.547689/0.319961`（`+0.091362/+0.106505`）；候选 novel 子集 NMI/ARI 从 `0.520367/0.214286`
+升至 `0.603958/0.333923`，候选聚类 ACC 提升 `11.713 pp`。即 `feature_pca` 改善聚类但不改变拒识/已知类效用，
+独立复核方向与探索性结果一致。因本次只有一个确认 split，且前述三个 split 已用于提出假设，仍不修改默认；需更多预注册
+独立 split 才能判断稳定性。结果与边界说明见
+[`analysis/rejection_cluster_feature_replication_s2110_20261025.md`](analysis/rejection_cluster_feature_replication_s2110_20261025.md)，
+机器结果见 [`analysis/rejection_cluster_feature_replication_s2110.json`](analysis/rejection_cluster_feature_replication_s2110.json)。
+
+第二个独立 split=2111 复核也已完成：`feature_pca` 相对 `projection_pca` 的全体 novel NMI/ARI 从
+`0.429551/0.195642` 升至 `0.489437/0.261508`（`+0.059886/+0.065867`）；候选 novel NMI/ARI
+提升 `+0.093887/+0.130051`，候选聚类 ACC 提升 `11.216 pp`；真实 K=40，自动 K 从 31 变为 30，K 绝对误差从 9 增至 10。AUROC `0.801594`、
+AUPR `0.700395`、FPR95 `59.517%`、OSCR `0.583340`、测试 known acceptance `95.467%`、unknown rejection
+`23.850%`、accepted-known accuracy `70.059%` 均逐项完全一致。2110/2111 两个独立复核的全体 novel 平均 NMI/ARI
+增量为 `+0.07562/+0.08619`，候选 novel 平均增量为 `+0.08874/+0.12484`。因此该变化稳定作用于聚类阶段，未改善
+拒识，且自动 K 误差在两 split 都略有增加，体现簇一致性与类别数估计间的权衡。因此不能据此声称完整新类发现算法整体改善；默认仍保持不变。详见
+[`analysis/rejection_cluster_feature_replication_s2111_20261025.md`](analysis/rejection_cluster_feature_replication_s2111_20261025.md)、
+[`analysis/rejection_cluster_feature_replication_protocol_s2111_20261025.md`](analysis/rejection_cluster_feature_replication_protocol_s2111_20261025.md)
+和 [`analysis/rejection_cluster_feature_replication_s2111.json`](analysis/rejection_cluster_feature_replication_s2111.json)。
+
+### 2026-10-25：feature_pca 上四种既有无标签 Auto-K 准则对照（seed=2112）
+
+针对新类聚类一致性提高、但自动 K 低估的问题，在新 semantic-hard split=2112 上固定同一模型、`feature_pca`、拒识分数、候选池、KMeans 和 known-validation-only 95% 校准，只比较既有的 silhouette、composite、stability、diagonal-GMM BIC 四种 K 准则。候选池 1,362 个样本，事后 purity 为 78.49%（1,069 个真实 novel）；这些真值仅用于最终报告。测试/混合池标签没有进入训练、checkpoint 选择、校准或 K/准则选择。
+
+| K 准则 | Auto K（真实 K=40） | K 绝对误差 | unknown-only NMI / ARI / ACC |
+|---|---:|---:|---:|
+| silhouette | 26 | 14 | 0.589488 / 0.354387 / 45.837% |
+| composite | 20 | 20 | 0.569246 / 0.321009 / 44.153% |
+| stability | 20 | 20 | 0.569246 / 0.321009 / 44.153% |
+| diagonal-GMM BIC | 20 | 20 | 0.569246 / 0.321009 / 44.153% |
+
+Silhouette 在这四者中聚类指标最好，但仍低估 14 类；其余三种均选 K=20，低估 20 类。四臂拒识和已知类效用严格相同：AUROC `0.807539`、AUPR `0.709452`、FPR95 `57.983%`、OSCR `0.605835`、测试 known acceptance `95.117%`、unknown rejection `26.725%`、accepted-known accuracy `71.964%`。本实验没有找到解决 K 估计的有效准则，因此不改默认，也不依据本 split 测试指标继续调参。结论是 feature_pca 对簇一致性有帮助，但不能单独修复自动类别数估计；下一步应提出新的、预注册且跨 split 检验的无标签类别粒度信号。详细结果见 [`analysis/auto_k_selector_s2112_20261025.md`](analysis/auto_k_selector_s2112_20261025.md)、机器结果见 [`analysis/auto_k_selector_s2112.json`](analysis/auto_k_selector_s2112.json)，runner 为 [`scripts/run_auto_k_selector_sweep.py`](scripts/run_auto_k_selector_sweep.py)。
+
+### 2026-10-25：feature_pca 下 4-vs-8 epoch 独立交互复核（seed=2113）
+
+旧 seed=2107–2109 的测试集事后诊断提示 `feature_pca` 下 8 epoch 可能同时降低 K 误差，因此在新 seed=2113 锁定同一 teacher/student recipe、feature-rejector、`feature_pca`、silhouette Auto-K 和 known-validation-only 95% 校准，只比较 4 与 8 个 student epoch。配置审计确认除 epoch/checkpoint 路径元数据外无其他变化；test/mixed 标签未用于训练、checkpoint 选择或校准。
+
+| 指标 | 4 epoch | 8 epoch | 变化 |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.799805 / 0.700038 | 0.825805 / 0.731109 | +0.026000 / +0.031071 |
+| FPR95 / OSCR | 59.000% / 0.589808 | 54.933% / 0.625881 | -4.067 pp / +0.036073 |
+| known acceptance / unknown rejection | 95.367% / 24.825% | 94.200% / 32.375% | -1.167 pp / +7.550 pp |
+| accepted-known accuracy | 70.814% | 73.496% | +2.682 pp |
+| Auto-K / 绝对 K 误差（真 K=40） | 35 / 5 | 37 / 3 | 误差 -2 |
+| unknown-only NMI / ARI / ACC | 0.566624 / 0.301486 / 45.720% | 0.530119 / 0.257946 / 40.154% | -0.036504 / -0.043541 / -5.566 pp |
+
+8 epoch 提升拒识、排序、known utility 和 K 估计，但 unknown-only NMI/ARI 同时下降，known acceptance 下降 1.167 pp，因此未通过预注册联合门槛，不晋升为整体有效方法，也不在该 split 上继续调参或改默认。结论是训练预算改善了拒识和 K 估计，却牺牲簇一致性；需要未来跨 split 研究多目标权衡。详细报告、协议和机器结果见 [`analysis/rejection_epoch_feature_pca_replication_s2113_20261025.md`](analysis/rejection_epoch_feature_pca_replication_s2113_20261025.md)、[`analysis/rejection_epoch_feature_pca_replication_protocol_s2113_20261025.md`](analysis/rejection_epoch_feature_pca_replication_protocol_s2113_20261025.md)、[`analysis/rejection_epoch_feature_pca_s2113_v2.json`](analysis/rejection_epoch_feature_pca_s2113_v2.json)。
+
+把旧的 exploratory seeds=2107–2109 与 seed=2113 独立复核作描述性汇总：AUROC 四 split 全提升，平均 `+0.02614`；unknown rejection 三 split 提升、平均 `+5.463 pp`；Auto-K 绝对误差四 split 全下降、平均减少 `6.25` 类。但 unknown-only NMI/ARI 只有 1/4 split 同时改善，平均分别下降 `0.01796/0.03167`；known acceptance 两 split 下降。前三个 split 曾用于提出假设，不能作为确认性重复，因此当前证据说明 8 epoch 是稳定的排序/K 估计与簇一致性之间的权衡，不是整体新类发现提升；维持四 epoch 默认。逐 split 数据和证据等级见 [`analysis/rejection_epoch_feature_pca_four_split_summary_20261025.md`](analysis/rejection_epoch_feature_pca_four_split_summary_20261025.md)。
+### 2026-10-26：外部 CIFAR-10 Outlier Exposure 对 semantic-hard rejection 的配对复核（seed=2120）
+
+本实验只改变 rejection 分支的 `alpha_outlier_rejection_uniform`：control 使用 CIFAR-10 feature-margin exposure（权重 `0.05`），treatment 在此基础上增加 uniform-logit OE（权重 `0.05`）。两臂共享 fresh semantic-hard 60/40 split、teacher、shared-backbone independent rejection encoder、standard logits KD、mixed-pool NNPU、known-validation-only checkpoint 和 95% known-coverage calibration；test/mixed 标签未用于训练、checkpoint、校准或方法选择。treatment 的 uniform 项四个 epoch 均真实非零（`5.494114/5.494877/5.420017/5.350533`），control 全程为 `0`。
+
+| 指标 | margin-only | margin+uniform | 变化 |
+|---|---:|---:|---:|
+| AUROC / AUPR | 0.812349 / 0.718763 | 0.816958 / 0.720796 | +0.004608 / +0.002033 |
+| FPR95 / OSCR | 57.183% / 0.605984 | 57.233% / 0.609894 | +0.050 pp / +0.003910 |
+| known acceptance / unknown rejection | 93.383% / 33.825% | 94.050% / 32.350% | +0.667 pp / **-1.475 pp** |
+| accepted-known accuracy | 72.461% | 72.461% | +0.0003 pp |
+| candidate purity / count | 77.314% / 1,750 | 78.377% / 1,651 | +1.063 pp / -99 |
+| Auto-K（真 K=40） | 37（误差 3） | 35（误差 5） | 误差 +2 |
+| all-unknown NMI / ARI | 0.451151 / 0.211137 | 0.441755 / 0.209432 | -0.009396 / -0.001705 |
+
+uniform-logit OE 小幅改善排序指标和 candidate purity，但固定 known coverage 下 unknown rejection 下降 `1.475 pp`，且 Auto-K 与部分聚类指标变差，未通过预注册联合门槛。因此不修改默认配置，不继续扫描该权重；该方向保留为正式负结果。详细结果、完整分数重叠指标、标签隔离审计和可复现路径见 [`analysis/rejection_oe_semantic_hard_s2120_20261026.md`](analysis/rejection_oe_semantic_hard_s2120_20261026.md)、[`analysis/rejection_oe_semantic_hard_s2120.json`](analysis/rejection_oe_semantic_hard_s2120.json) 和 [`scripts/run_rejection_oe_semantic_hard_pair.py`](scripts/run_rejection_oe_semantic_hard_pair.py)。

@@ -26,6 +26,8 @@ from tqdm import tqdm
 
 from .losses import (
     classification_loss,
+    feature_cross_covariance_loss,
+    feature_variance_floor_loss,
     discovery_consistency_loss,
     discovery_unknown_loss,
     discovery_view_loss,
@@ -46,7 +48,9 @@ from .losses import (
     supervised_radius_loss,
     supervised_center_margin_loss,
     supervised_contrastive_loss,
+    superclass_aware_supervised_contrastive_loss,
     uncertainty_alignment_loss,
+    teacher_uncertainty_distillation_loss,
     weighted_energy_margin_loss,
     weighted_unknown_bce,
     unknown_feature_margin_loss,
@@ -56,11 +60,13 @@ from .losses import (
     pu_unknown_feature_boundary_loss,
     knn_support_boundary_loss,
     pu_knn_support_boundary_loss,
+    signed_pu_knn_support_boundary_loss,
     selection_conditional_known_prior,
     objectosphere_loss,
     uncertainty_separation_loss,
     uncertainty_ranking_loss,
     nnpu_known_uncertainty_loss,
+    uncertainty_weights,
     outlier_exposure_uniform_loss,
 )
 from .joint_discovery import (
@@ -291,7 +297,12 @@ def make_pseudo_unknown(
     return mixed + (noise_scale * 1.5) * torch.randn_like(mixed)
 
 
-def pseudo_forward_from_features(model, features: torch.Tensor, stochastic: bool = True):
+def pseudo_forward_from_features(
+    model,
+    features: torch.Tensor,
+    stochastic: bool = True,
+    rejection_features: torch.Tensor | None = None,
+):
     """Classify perturbed pseudo-unknown features with the model heads."""
     features = torch.nn.functional.dropout(
         features,
@@ -299,7 +310,20 @@ def pseudo_forward_from_features(model, features: torch.Tensor, stochastic: bool
         training=stochastic,
     )
     logits = model.classifier(features)
-    if hasattr(model, "rejection_forward"):
+    if rejection_features is not None and hasattr(model, "rejection_head_forward"):
+        rejection_features = torch.nn.functional.dropout(
+            rejection_features,
+            p=model.dropout_p,
+            training=stochastic,
+        )
+        _, _, uncertainty = model.rejection_head_forward(rejection_features)
+    elif getattr(model, "independent_rejection_encoder_enabled", False):
+        # Feature-synthesized VOS samples have no image from which the
+        # independent rejection encoder could produce an embedding. Their
+        # classification/energy objective remains valid, but they must not
+        # silently train the image-based rejector.
+        uncertainty = features.new_zeros(features.size(0))
+    elif hasattr(model, "rejection_forward"):
         _, _, uncertainty = model.rejection_forward(features)
     else:
         uncertainty = torch.sigmoid(model.uncertainty_head(features)).squeeze(-1)
@@ -556,6 +580,57 @@ def select_discovery_candidates(
         indices = torch.topk(score, k=count, largest=True).indices
         mask = torch.zeros(batch_size, dtype=torch.bool, device=logits.device)
         mask[indices] = True
+    return mask
+
+
+def select_mc_epistemic_head_candidates(
+    epistemic: torch.Tensor,
+    head_uncertainty: torch.Tensor,
+    ratio: float = 0.25,
+) -> torch.Tensor:
+    """Select by fixed 50/50 rank fusion of MC epistemic MI and head uncertainty."""
+    epistemic = epistemic.detach().reshape(-1).float()
+    head_uncertainty = head_uncertainty.detach().reshape(-1).to(epistemic.device).float()
+    if epistemic.numel() == 0 or epistemic.shape != head_uncertainty.shape:
+        raise ValueError("epistemic and head_uncertainty must be nonempty aligned vectors")
+    if not torch.isfinite(epistemic).all() or not torch.isfinite(head_uncertainty).all():
+        raise ValueError("candidate uncertainty scores must be finite")
+    if not 0.0 < float(ratio) <= 1.0:
+        raise ValueError("ratio must be in (0, 1]")
+
+    def rank(values: torch.Tensor) -> torch.Tensor:
+        order = torch.argsort(values, stable=True)
+        ranks = torch.empty_like(values)
+        ranks[order] = torch.linspace(0.0, 1.0, len(values), device=values.device)
+        return ranks
+
+    score = 0.5 * rank(epistemic) + 0.5 * rank(head_uncertainty)
+    count = min(len(score), max(1, int(np.ceil(len(score) * float(ratio)))))
+    indices = torch.argsort(score, descending=True, stable=True)[:count]
+    mask = torch.zeros(len(score), dtype=torch.bool, device=score.device)
+    mask[indices] = True
+    return mask
+
+
+def select_mc_epistemic_plus_head_candidates(
+    epistemic: torch.Tensor,
+    head_uncertainty: torch.Tensor,
+    ratio: float = 0.25,
+) -> torch.Tensor:
+    """Select a fixed budget by the audited raw sum of epistemic MI and head uncertainty."""
+    epistemic = epistemic.detach().reshape(-1).float()
+    head_uncertainty = head_uncertainty.detach().reshape(-1).to(epistemic.device).float()
+    if epistemic.numel() == 0 or epistemic.shape != head_uncertainty.shape:
+        raise ValueError("epistemic and head_uncertainty must be nonempty aligned vectors")
+    if not torch.isfinite(epistemic).all() or not torch.isfinite(head_uncertainty).all():
+        raise ValueError("candidate uncertainty scores must be finite")
+    if not 0.0 < float(ratio) <= 1.0:
+        raise ValueError("ratio must be in (0, 1]")
+    score = epistemic + head_uncertainty
+    count = min(len(score), max(1, int(np.ceil(len(score) * float(ratio)))) )
+    indices = torch.argsort(score, descending=True, stable=True)[:count]
+    mask = torch.zeros(len(score), dtype=torch.bool, device=score.device)
+    mask[indices] = True
     return mask
 
 
@@ -1238,9 +1313,22 @@ def uncertainty_pu_predictions(
             known_output["uncertainty"],
             torch.cat([output["uncertainty"] for output in unlabeled_outputs]),
         )
-    known_uncertainty = model.rejection_forward(known_output["features"].detach())[2]
+    known_rejection = known_output.get("rejection_features")
+    if known_rejection is not None and getattr(
+        model, "independent_rejection_encoder_enabled", False
+    ):
+        known_uncertainty = model.rejection_head_forward(known_rejection.detach())[2]
+    else:
+        known_uncertainty = model.rejection_forward(
+            known_output["features"].detach()
+        )[2]
     unlabeled_uncertainty = [
-        model.rejection_forward(output["features"].detach())[2]
+        (
+            model.rejection_head_forward(output["rejection_features"].detach())[2]
+            if output.get("rejection_features") is not None
+            and getattr(model, "independent_rejection_encoder_enabled", False)
+            else model.rejection_forward(output["features"].detach())[2]
+        )
         for output in unlabeled_outputs
     ]
     return known_uncertainty, torch.cat(unlabeled_uncertainty)
@@ -1413,7 +1501,14 @@ def train_one_epoch_teacher(
         pseudo_images = make_pseudo_unknown(images, mode=pseudo_mode)
         pseudo_out = model(pseudo_images)
         pseudo_features = pseudo_out["features"] + pseudo_feature_noise * torch.randn_like(pseudo_out["features"])
-        pseudo_logits, pseudo_uncertainty = pseudo_forward_from_features(model, pseudo_features)
+        pseudo_rejection_features = pseudo_out.get("rejection_features")
+        if pseudo_rejection_features is not None:
+            pseudo_rejection_features = pseudo_rejection_features + (
+                pseudo_feature_noise * torch.randn_like(pseudo_rejection_features)
+            )
+        pseudo_logits, pseudo_uncertainty = pseudo_forward_from_features(
+            model, pseudo_features, rejection_features=pseudo_rejection_features
+        )
         loss_pseudo = pseudo_unknown_loss(pseudo_logits, pseudo_uncertainty)
         loss_energy = energy_margin_loss(
             out["logits"], pseudo_logits, margin=energy_margin, temperature=energy_temperature
@@ -1551,9 +1646,15 @@ def train_one_epoch_student(
     alpha_unc: float = 0.1,
     alpha_rejection_known_ce: float = 0.0,
     alpha_rejection_supcon: float = 0.0,
+    alpha_rejection_superclass_supcon: float = 0.0,
+    rejection_coarse_by_known_label=None,
     alpha_rejection_center: float = 0.0,
+    alpha_rejection_decorrelation: float = 0.0,
+    alpha_rejection_variance_floor: float = 0.0,
+    rejection_variance_floor: float = 0.05,
     alpha_rejection_kd: float = 0.0,
     alpha_rejection_feat_kd: float = 0.0,
+    rejection_feature_kd_weighting: str = "inherit",
     alpha_discovery_rejection_pu_feature_margin: float = 0.0,
     discovery_rejection_pu_risk: str = "hard_nnpu",
     discovery_rejection_pu_softness: float = 0.05,
@@ -1625,6 +1726,7 @@ def train_one_epoch_student(
     discovery_feature_separation_temperature: float = 0.1,
     discovery_feature_candidate_gating: bool = False,
     discovery_cross_view_gating: bool = False,
+    discovery_single_view_candidate_gating: bool = False,
     discovery_cross_view_aggregation: str = "intersection",
     discovery_feature_candidate_space: str = "shared",
     discovery_feature_candidate_soft_floor: float = 0.25,
@@ -1650,6 +1752,7 @@ def train_one_epoch_student(
     discovery_knn_selection_conditional: bool = False,
     discovery_knn_aggregation: str = "max",
     discovery_knn_temperature: float = 0.1,
+    discovery_knn_boundary_objective: str = "outward",
     alpha_discovery_uncertainty_separation: float = 0.0,
     discovery_uncertainty_loss: str = "bce",
     discovery_uncertainty_margin: float = 0.1,
@@ -1777,11 +1880,17 @@ def train_one_epoch_student(
     teacher.eval()
     ce_meter = AverageMeter()
     kd_meter = AverageMeter()
+    kd_weight_mean_meter = AverageMeter()
+    kd_weight_std_meter = AverageMeter()
+    kd_weight_ess_meter = AverageMeter()
     feat_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
     rejection_ce_meter = AverageMeter()
     rejection_supcon_meter = AverageMeter()
+    rejection_superclass_supcon_meter = AverageMeter()
     rejection_center_meter = AverageMeter()
+    rejection_decorrelation_meter = AverageMeter()
+    rejection_variance_floor_meter = AverageMeter()
     rejection_kd_meter = AverageMeter()
     rejection_feat_kd_meter = AverageMeter()
     sc_meter = AverageMeter()
@@ -1838,9 +1947,15 @@ def train_one_epoch_student(
     feature_candidate_unknown_recall_meter = AverageMeter()
     feature_candidate_known_selection_rate_meter = AverageMeter()
     feature_candidate_view_agreement_meter = AverageMeter()
+    # These per-class counters are retrospective diagnostics only.  The raw
+    # mixed-pool labels never enter a loss, candidate mask, prior estimate,
+    # checkpoint decision, or threshold calibration.
+    feature_candidate_novel_selected_by_raw_label = {}
+    feature_candidate_novel_total_by_raw_label = {}
     discovery_knn_mixed_selection_rate_meter = AverageMeter()
     discovery_knn_known_selection_rate_meter = AverageMeter()
     discovery_knn_effective_prior_meter = AverageMeter()
+    discovery_boundary_effective_prior_meter = AverageMeter()
     joint_meter = AverageMeter()
     joint_consistency_meter = AverageMeter()
     joint_balance_meter = AverageMeter()
@@ -1879,6 +1994,7 @@ def train_one_epoch_student(
     rejection_parameters = []
     if audit_loss_gradients:
         for module_name in (
+            "rejection_encoder",
             "rejection_projector",
             "rejection_classifier",
             "rejection_uncertainty_head",
@@ -1903,11 +2019,28 @@ def train_one_epoch_student(
                 source=kd_uncertainty_source,
                 mc_samples=kd_mc_samples,
             )
+        diagnostic_kd_weights = uncertainty_weights(
+            teacher_kd_uncertainty_value,
+            mode=uncertainty_weight_mode,
+            uncertainty_weight_min=uncertainty_weight_min,
+            uncertainty_weight_max=uncertainty_weight_max,
+        )
+        kd_weight_ess_fraction = (
+            diagnostic_kd_weights.sum().square()
+            / (diagnostic_kd_weights.square().sum().clamp_min(1e-12)
+               * max(int(diagnostic_kd_weights.numel()), 1))
+        )
         s_out = student(images)
         loss_ce = classification_loss(s_out["logits"], labels)
-        loss_unc = uncertainty_alignment_loss(
-            s_out["uncertainty"], s_out["logits"], labels, target_mode=uncertainty_target_mode
-        )
+        if uncertainty_target_mode == "teacher":
+            loss_unc = teacher_uncertainty_distillation_loss(
+                s_out["uncertainty"], teacher_kd_uncertainty_value
+            )
+        else:
+            loss_unc = uncertainty_alignment_loss(
+                s_out["uncertainty"], s_out["logits"], labels,
+                target_mode=uncertainty_target_mode,
+            )
         loss_rejection_ce = s_out["logits"].new_tensor(0.0)
         if alpha_rejection_known_ce > 0.0 and s_out.get("rejection_logits") is not None:
             loss_rejection_ce = classification_loss(s_out["rejection_logits"], labels)
@@ -1916,11 +2049,45 @@ def train_one_epoch_student(
             loss_rejection_supcon = supervised_contrastive_loss(
                 s_out["rejection_features"], labels
             )
+        loss_rejection_superclass_supcon = s_out["logits"].new_tensor(0.0)
+        if alpha_rejection_superclass_supcon > 0.0:
+            if s_out.get("rejection_logits") is None:
+                raise ValueError("superclass-aware rejection SupCon requires a rejection branch")
+            if rejection_coarse_by_known_label is None:
+                raise ValueError("superclass-aware rejection SupCon requires a known-label coarse map")
+            coarse_map = torch.as_tensor(
+                rejection_coarse_by_known_label, device=device, dtype=torch.long
+            )
+            if labels.numel() and ((labels < 0).any() or (labels >= coarse_map.numel()).any()):
+                raise ValueError("superclass-aware loss received a label outside the known-class map")
+            coarse_labels = coarse_map[labels]
+            loss_rejection_superclass_supcon = superclass_aware_supervised_contrastive_loss(
+                s_out["rejection_features"], labels, coarse_labels
+            )
         loss_rejection_center = s_out["logits"].new_tensor(0.0)
         if alpha_rejection_center > 0.0 and s_out.get("rejection_logits") is not None:
             loss_rejection_center = supervised_center_loss(
                 s_out["rejection_features"], labels
             )
+        loss_rejection_decorrelation = s_out["logits"].new_tensor(0.0)
+        if (
+            alpha_rejection_decorrelation > 0.0
+            and s_out.get("rejection_logits") is not None
+        ):
+            loss_rejection_decorrelation = feature_cross_covariance_loss(
+                s_out["features"], s_out["rejection_features"]
+            )
+        loss_rejection_variance_floor = s_out["logits"].new_tensor(0.0)
+        if (
+            alpha_rejection_variance_floor > 0.0
+            and s_out.get("rejection_logits") is not None
+        ):
+            known_mask = labels >= 0
+            if int(known_mask.sum().item()) >= 2:
+                loss_rejection_variance_floor = feature_variance_floor_loss(
+                    s_out["rejection_features"][known_mask],
+                    floor=rejection_variance_floor,
+                )
         loss_rejection_kd = s_out["logits"].new_tensor(0.0)
         loss_rejection_feat_kd = s_out["logits"].new_tensor(0.0)
         if s_out.get("rejection_logits") is not None and t_out.get("rejection_logits") is not None:
@@ -1936,15 +2103,36 @@ def train_one_epoch_student(
                     uncertainty_weight_max=uncertainty_weight_max,
                 )
             if alpha_rejection_feat_kd > 0.0:
+                if rejection_feature_kd_weighting not in {
+                    "inherit", "uniform", "teacher_uncertainty"
+                }:
+                    raise ValueError(
+                        "rejection_feature_kd_weighting must be inherit, "
+                        "uniform, or teacher_uncertainty"
+                    )
+                use_rejection_feature_uncertainty = (
+                    kd_mode == "uncertainty"
+                    if rejection_feature_kd_weighting == "inherit"
+                    else rejection_feature_kd_weighting == "teacher_uncertainty"
+                )
                 loss_rejection_feat_kd = feature_distillation_loss(
                     s_out["rejection_features"],
                     t_out["rejection_features"],
                     teacher_uncertainty=(
-                        teacher_kd_uncertainty_value if kd_mode == "uncertainty" else None
+                        teacher_kd_uncertainty_value
+                        if use_rejection_feature_uncertainty
+                        else None
                     ),
                     uncertainty_weight_mode=uncertainty_weight_mode,
                     uncertainty_weight_min=uncertainty_weight_min,
                     uncertainty_weight_max=uncertainty_weight_max,
+                )
+            elif rejection_feature_kd_weighting not in {
+                "inherit", "uniform", "teacher_uncertainty"
+            }:
+                raise ValueError(
+                    "rejection_feature_kd_weighting must be inherit, "
+                    "uniform, or teacher_uncertainty"
                 )
         loss_kd = distillation_loss(
             s_out["logits"],
@@ -1984,7 +2172,14 @@ def train_one_epoch_student(
         pseudo_images = make_pseudo_unknown(images, mode=pseudo_mode)
         pseudo_out = student(pseudo_images)
         pseudo_features = pseudo_out["features"] + pseudo_feature_noise * torch.randn_like(pseudo_out["features"])
-        pseudo_logits, pseudo_uncertainty = pseudo_forward_from_features(student, pseudo_features)
+        pseudo_rejection_features = pseudo_out.get("rejection_features")
+        if pseudo_rejection_features is not None:
+            pseudo_rejection_features = pseudo_rejection_features + (
+                pseudo_feature_noise * torch.randn_like(pseudo_rejection_features)
+            )
+        pseudo_logits, pseudo_uncertainty = pseudo_forward_from_features(
+            student, pseudo_features, rejection_features=pseudo_rejection_features
+        )
         loss_pseudo = pseudo_unknown_loss(pseudo_logits, pseudo_uncertainty)
         loss_energy = energy_margin_loss(
             s_out["logits"], pseudo_logits, margin=energy_margin, temperature=energy_temperature
@@ -2236,6 +2431,7 @@ def train_one_epoch_student(
         discovery_knn_mixed_selection_rate = 0.0
         discovery_knn_known_selection_rate = 0.0
         discovery_knn_effective_prior = float(discovery_knn_known_prior)
+        discovery_boundary_effective_prior = float(discovery_boundary_known_prior)
         discovery_knn_known_selection_mask = None
         discovery_uncertainty_feature_margin_weight_mean = 0.0
         discovery_uncertainty_pu_weight_mean = 0.0
@@ -2272,10 +2468,17 @@ def train_one_epoch_student(
                 discovery_iter = iter(discovery_loader)
                 discovery_images = next(discovery_iter)
             discovery_is_known = None
+            discovery_raw_labels = None
             if len(discovery_images) == 2:
                 first_view, second_view = discovery_images
             else:
-                first_view, second_view, _, _, discovery_is_known = discovery_images
+                (
+                    first_view,
+                    second_view,
+                    _discovery_labels,
+                    discovery_raw_labels,
+                    discovery_is_known,
+                ) = discovery_images
             first_view = first_view.to(device)
             second_view = second_view.to(device)
             first_out = student(first_view)
@@ -2895,13 +3098,18 @@ def train_one_epoch_student(
                     or alpha_discovery_boundary > 0.0
                     or alpha_discovery_knn_boundary > 0.0
                     or alpha_discovery_rejection_knn_boundary > 0.0
+                    or alpha_discovery_rejection_boundary > 0.0
                     or alpha_discovery_objectosphere > 0.0
                 )
             ):
-                if discovery_knn_selection_conditional and discovery_cross_view_gating:
+                if (
+                    (discovery_knn_selection_conditional
+                     or discovery_single_view_candidate_gating)
+                    and discovery_cross_view_gating
+                ):
                     raise ValueError(
-                        "selection-conditional PU requires single-view candidate "
-                        "selection; disable --discovery-cross-view-gating"
+                        "single-view candidate selection is incompatible with "
+                        "cross-view gating"
                     )
                 if discovery_selection_model is None:
                     first_feature_selection = first_out
@@ -2910,7 +3118,10 @@ def train_one_epoch_student(
                     with torch.no_grad():
                         first_feature_selection = discovery_selection_model(first_view)
                         second_feature_selection = discovery_selection_model(second_view)
-                if discovery_knn_selection_conditional:
+                if (
+                    discovery_knn_selection_conditional
+                    or discovery_single_view_candidate_gating
+                ):
                     paired_feature_mask = select_single_view_discovery_candidates(
                         first_feature_selection,
                         candidate_space=discovery_feature_candidate_space,
@@ -3096,7 +3307,10 @@ def train_one_epoch_student(
                         first_score=first_feature_candidate_score,
                         second_score=second_feature_candidate_score,
                     )
-                if discovery_knn_selection_conditional:
+                if (
+                    discovery_knn_selection_conditional
+                    or alpha_discovery_rejection_boundary > 0.0
+                ):
                     if discovery_selection_model is None:
                         known_selection_output = s_out
                     else:
@@ -3127,6 +3341,13 @@ def train_one_epoch_student(
                     discovery_knn_effective_prior = float(
                         selection_conditional_known_prior(
                             discovery_knn_known_prior,
+                            discovery_knn_known_selection_rate,
+                            discovery_knn_mixed_selection_rate,
+                        ).item()
+                    )
+                    discovery_boundary_effective_prior = float(
+                        selection_conditional_known_prior(
+                            discovery_boundary_known_prior,
                             discovery_knn_known_selection_rate,
                             discovery_knn_mixed_selection_rate,
                         ).item()
@@ -3179,6 +3400,20 @@ def train_one_epoch_student(
                         feature_candidate_known_selection_rate = float(
                             diagnostic_selected[diagnostic_known].float().mean().item()
                         )
+                    if discovery_raw_labels is not None:
+                        diagnostic_raw = discovery_raw_labels.to(device).long()
+                        novel_rows = ~diagnostic_known
+                        for raw_label in torch.unique(diagnostic_raw[novel_rows]).tolist():
+                            class_rows = novel_rows & (diagnostic_raw == int(raw_label))
+                            raw_key = str(int(raw_label))
+                            feature_candidate_novel_total_by_raw_label[raw_key] = (
+                                feature_candidate_novel_total_by_raw_label.get(raw_key, 0)
+                                + int(class_rows.sum().item())
+                            )
+                            feature_candidate_novel_selected_by_raw_label[raw_key] = (
+                                feature_candidate_novel_selected_by_raw_label.get(raw_key, 0)
+                                + int((diagnostic_selected & class_rows).sum().item())
+                            )
                 if discovery_cross_view_gating:
                     intersection_count = int((first_view_mask & second_view_mask).sum().item())
                     union_count = int((first_view_mask | second_view_mask).sum().item())
@@ -3567,14 +3802,31 @@ def train_one_epoch_student(
                     second_feature_values = second_feature_values[feature_candidate_masks[1]]
                 if discovery_boundary_mode == "pu":
                     boundary_loss = pu_unknown_feature_boundary_loss
+                    boundary_known_features = s_out["features"]
+                    boundary_known_labels = labels
+                    if (
+                        discovery_knn_selection_conditional
+                        and discovery_knn_known_selection_mask is not None
+                    ):
+                        boundary_known_features = boundary_known_features[
+                            discovery_knn_known_selection_mask
+                        ]
+                        boundary_known_labels = boundary_known_labels[
+                            discovery_knn_known_selection_mask
+                        ]
                     boundary_kwargs = {
-                        "known_prior": discovery_boundary_known_prior,
+                        "known_prior": (
+                            discovery_boundary_effective_prior
+                            if discovery_knn_selection_conditional
+                            else discovery_boundary_known_prior
+                        ),
                         "risk_mode": discovery_boundary_pu_risk,
                         "softness": discovery_boundary_pu_softness,
                     }
                     loss_discovery_boundary = 0.5 * (
                         boundary_loss(
-                            s_out["features"], labels, first_feature_values,
+                            boundary_known_features, boundary_known_labels,
+                            first_feature_values,
                             student.classifier.weight,
                             similarity_margin=discovery_boundary_margin,
                             prototype_weight=discovery_boundary_prototype_weight,
@@ -3582,7 +3834,8 @@ def train_one_epoch_student(
                             **boundary_kwargs,
                         )
                         + boundary_loss(
-                            s_out["features"], labels, second_feature_values,
+                            boundary_known_features, boundary_known_labels,
+                            second_feature_values,
                             student.classifier.weight,
                             similarity_margin=discovery_boundary_margin,
                             prototype_weight=discovery_boundary_prototype_weight,
@@ -3621,7 +3874,35 @@ def train_one_epoch_student(
                 second_knn_weights = None
                 if feature_candidate_weights is not None:
                     first_knn_weights, second_knn_weights = feature_candidate_weights
-                if discovery_knn_risk in {"pure", "naive_mixed"}:
+                if discovery_knn_boundary_objective not in {"outward", "signed_support"}:
+                    raise ValueError(
+                        "discovery_knn_boundary_objective must be 'outward' or "
+                        "'signed_support'"
+                    )
+                if discovery_knn_boundary_objective == "signed_support":
+                    if discovery_knn_risk not in {"hard_nnpu", "soft_nnpu"}:
+                        raise ValueError(
+                            "signed_support kNN boundary requires an NNPU risk"
+                        )
+                    knn_boundary = signed_pu_knn_support_boundary_loss
+                    knn_kwargs = {
+                        "known_features": (
+                            s_out["features"][discovery_knn_known_selection_mask]
+                            if discovery_knn_selection_conditional
+                            and discovery_knn_known_selection_mask is not None
+                            else s_out["features"]
+                        ),
+                        "known_labels": (
+                            labels[discovery_knn_known_selection_mask]
+                            if discovery_knn_selection_conditional
+                            and discovery_knn_known_selection_mask is not None
+                            else labels
+                        ),
+                        "known_prior": discovery_knn_effective_prior,
+                        "risk_mode": discovery_knn_risk,
+                        "softness": discovery_knn_softness,
+                    }
+                elif discovery_knn_risk in {"pure", "naive_mixed"}:
                     knn_boundary = knn_support_boundary_loss
                     knn_kwargs = {}
                 else:
@@ -3687,7 +3968,35 @@ def train_one_epoch_student(
                     first_rejection_knn_weights, second_rejection_knn_weights = (
                         feature_candidate_weights
                     )
-                if discovery_knn_risk in {"pure", "naive_mixed"}:
+                if discovery_knn_boundary_objective not in {"outward", "signed_support"}:
+                    raise ValueError(
+                        "discovery_knn_boundary_objective must be 'outward' or "
+                        "'signed_support'"
+                    )
+                if discovery_knn_boundary_objective == "signed_support":
+                    if discovery_knn_risk not in {"hard_nnpu", "soft_nnpu"}:
+                        raise ValueError(
+                            "signed_support kNN boundary requires an NNPU risk"
+                        )
+                    rejection_knn_boundary = signed_pu_knn_support_boundary_loss
+                    rejection_knn_kwargs = {
+                        "known_features": (
+                            s_out["rejection_features"][discovery_knn_known_selection_mask]
+                            if discovery_knn_selection_conditional
+                            and discovery_knn_known_selection_mask is not None
+                            else s_out["rejection_features"]
+                        ),
+                        "known_labels": (
+                            labels[discovery_knn_known_selection_mask]
+                            if discovery_knn_selection_conditional
+                            and discovery_knn_known_selection_mask is not None
+                            else labels
+                        ),
+                        "known_prior": discovery_knn_effective_prior,
+                        "risk_mode": discovery_knn_risk,
+                        "softness": discovery_knn_softness,
+                    }
+                elif discovery_knn_risk in {"pure", "naive_mixed"}:
                     rejection_knn_boundary = knn_support_boundary_loss
                     rejection_knn_kwargs = {}
                 else:
@@ -3835,15 +4144,36 @@ def train_one_epoch_student(
                     )
                 first_rejection = first_out["rejection_features"]
                 second_rejection = second_out["rejection_features"]
+                boundary_known_features = s_out["rejection_features"]
+                boundary_known_labels = labels
+                boundary_known_prior = discovery_boundary_known_prior
+                if feature_candidate_masks is not None:
+                    if (
+                        not discovery_knn_selection_conditional
+                        or discovery_knn_known_selection_mask is None
+                    ):
+                        raise ValueError(
+                            "PU rejection-boundary candidate gating requires "
+                            "selection-conditional known selection and prior"
+                        )
+                    first_rejection = first_rejection[feature_candidate_masks[0]]
+                    second_rejection = second_rejection[feature_candidate_masks[1]]
+                    boundary_known_features = boundary_known_features[
+                        discovery_knn_known_selection_mask
+                    ]
+                    boundary_known_labels = boundary_known_labels[
+                        discovery_knn_known_selection_mask
+                    ]
+                    boundary_known_prior = discovery_boundary_effective_prior
                 boundary_kwargs = {
-                    "known_prior": discovery_boundary_known_prior,
+                    "known_prior": boundary_known_prior,
                     "risk_mode": discovery_boundary_pu_risk,
                     "softness": discovery_boundary_pu_softness,
                 }
                 loss_discovery_rejection_boundary = 0.5 * (
                     pu_unknown_feature_boundary_loss(
-                        s_out["rejection_features"],
-                        labels,
+                        boundary_known_features,
+                        boundary_known_labels,
                         first_rejection,
                         student.rejection_classifier.weight,
                         similarity_margin=discovery_boundary_margin,
@@ -3852,8 +4182,8 @@ def train_one_epoch_student(
                         **boundary_kwargs,
                     )
                     + pu_unknown_feature_boundary_loss(
-                        s_out["rejection_features"],
-                        labels,
+                        boundary_known_features,
+                        boundary_known_labels,
                         second_rejection,
                         student.rejection_classifier.weight,
                         similarity_margin=discovery_boundary_margin,
@@ -3989,7 +4319,10 @@ def train_one_epoch_student(
             + alpha_unc * loss_unc
             + alpha_rejection_known_ce * loss_rejection_ce
             + alpha_rejection_supcon * loss_rejection_supcon
+            + alpha_rejection_superclass_supcon * loss_rejection_superclass_supcon
             + alpha_rejection_center * loss_rejection_center
+            + alpha_rejection_decorrelation * loss_rejection_decorrelation
+            + alpha_rejection_variance_floor * loss_rejection_variance_floor
             + alpha_kd * loss_kd
             + alpha_feat_kd * loss_feat_kd
             + alpha_rejection_kd * loss_rejection_kd
@@ -4096,6 +4429,12 @@ def train_one_epoch_student(
                     "known_ce_term": alpha_rejection_known_ce * loss_rejection_ce,
                     "supcon_term": alpha_rejection_supcon * loss_rejection_supcon,
                     "center_term": alpha_rejection_center * loss_rejection_center,
+                    "decorrelation_term": (
+                        alpha_rejection_decorrelation * loss_rejection_decorrelation
+                    ),
+                    "variance_floor_term": (
+                        alpha_rejection_variance_floor * loss_rejection_variance_floor
+                    ),
                     "kd_term": alpha_rejection_kd * loss_rejection_kd,
                     "feat_kd_term": alpha_rejection_feat_kd * loss_rejection_feat_kd,
                     "discovery_margin_term": (
@@ -4247,11 +4586,25 @@ def train_one_epoch_student(
             update_ema_model(discovery_selection_model, student, decay=discovery_ema_decay)
         ce_meter.update(loss_ce.item(), images.size(0))
         kd_meter.update(loss_kd.item(), images.size(0))
+        kd_weight_mean_meter.update(diagnostic_kd_weights.mean().item(), images.size(0))
+        kd_weight_std_meter.update(
+            diagnostic_kd_weights.std(unbiased=False).item(), images.size(0)
+        )
+        kd_weight_ess_meter.update(kd_weight_ess_fraction.item(), images.size(0))
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
         rejection_supcon_meter.update(loss_rejection_supcon.item(), images.size(0))
+        rejection_superclass_supcon_meter.update(
+            loss_rejection_superclass_supcon.item(), images.size(0)
+        )
         rejection_center_meter.update(loss_rejection_center.item(), images.size(0))
+        rejection_decorrelation_meter.update(
+            loss_rejection_decorrelation.item(), images.size(0)
+        )
+        rejection_variance_floor_meter.update(
+            loss_rejection_variance_floor.item(), images.size(0)
+        )
         rejection_kd_meter.update(loss_rejection_kd.item(), images.size(0))
         rejection_feat_kd_meter.update(loss_rejection_feat_kd.item(), images.size(0))
         sc_meter.update(loss_supcon.item(), images.size(0))
@@ -4359,6 +4712,9 @@ def train_one_epoch_student(
         discovery_knn_effective_prior_meter.update(
             discovery_knn_effective_prior, images.size(0)
         )
+        discovery_boundary_effective_prior_meter.update(
+            discovery_boundary_effective_prior, images.size(0)
+        )
         joint_meter.update(loss_joint_discovery.item(), images.size(0))
         joint_consistency_meter.update(joint_consistency.item(), images.size(0))
         joint_balance_meter.update(joint_balance.item(), images.size(0))
@@ -4412,11 +4768,18 @@ def train_one_epoch_student(
     stats = {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
+        "kd_uncertainty_weight_applied": bool(kd_mode == "uncertainty"),
+        "kd_weight_mean": kd_weight_mean_meter.avg,
+        "kd_weight_std": kd_weight_std_meter.avg,
+        "kd_weight_ess_fraction": kd_weight_ess_meter.avg,
         "feat_kd": feat_kd_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,
         "rejection_supcon": rejection_supcon_meter.avg,
+        "rejection_superclass_supcon": rejection_superclass_supcon_meter.avg,
         "rejection_center": rejection_center_meter.avg,
+        "rejection_decorrelation": rejection_decorrelation_meter.avg,
+        "rejection_variance_floor": rejection_variance_floor_meter.avg,
         "rejection_kd": rejection_kd_meter.avg,
         "rejection_feat_kd": rejection_feat_kd_meter.avg,
         "supcon": sc_meter.avg,
@@ -4488,6 +4851,48 @@ def train_one_epoch_student(
         "feature_candidate_known_selection_rate": (
             feature_candidate_known_selection_rate_meter.avg
         ),
+        "feature_candidate_novel_recall_by_raw_label": {
+            raw_label: {
+                "selected": int(feature_candidate_novel_selected_by_raw_label[raw_label]),
+                "total": int(feature_candidate_novel_total_by_raw_label[raw_label]),
+                "recall": float(
+                    feature_candidate_novel_selected_by_raw_label[raw_label]
+                    / max(feature_candidate_novel_total_by_raw_label[raw_label], 1)
+                ),
+            }
+            for raw_label in sorted(feature_candidate_novel_total_by_raw_label, key=int)
+        },
+        "feature_candidate_novel_recall_summary": {
+            "classes": int(len(feature_candidate_novel_total_by_raw_label)),
+            "min": float(
+                min(
+                    (
+                        feature_candidate_novel_selected_by_raw_label[key]
+                        / max(feature_candidate_novel_total_by_raw_label[key], 1)
+                    )
+                    for key in feature_candidate_novel_total_by_raw_label
+                )
+            )
+            if feature_candidate_novel_total_by_raw_label
+            else 0.0,
+            "median": float(
+                np.median(
+                    [
+                        feature_candidate_novel_selected_by_raw_label[key]
+                        / max(feature_candidate_novel_total_by_raw_label[key], 1)
+                        for key in feature_candidate_novel_total_by_raw_label
+                    ]
+                )
+            )
+            if feature_candidate_novel_total_by_raw_label
+            else 0.0,
+            "zero_recall_classes": int(
+                sum(
+                    feature_candidate_novel_selected_by_raw_label[key] == 0
+                    for key in feature_candidate_novel_total_by_raw_label
+                )
+            ),
+        },
         "feature_candidate_view_agreement": (
             feature_candidate_view_agreement_meter.avg
         ),
@@ -4499,6 +4904,9 @@ def train_one_epoch_student(
         ),
         "discovery_knn_effective_prior": (
             discovery_knn_effective_prior_meter.avg
+        ),
+        "discovery_boundary_effective_prior": (
+            discovery_boundary_effective_prior_meter.avg
         ),
         "joint_discovery": joint_meter.avg,
         "joint_consistency": joint_consistency_meter.avg,
@@ -6821,6 +7229,49 @@ def compute_open_score(
         score += rejector_weight * normalized_component(
             outputs["feature_rejector_score"], "feature_rejector_score"
         )
+    elif score_mode in {
+        "feature_rejector_uncertainty_fusion",
+        "feature_rejector_uncertainty_conjunction",
+    }:
+        if "feature_rejector_score" not in outputs:
+            raise ValueError(
+                f"{score_mode} requires a fitted rejector"
+            )
+        if "calibrated_uncertainty_error" not in outputs:
+            raise ValueError(
+                f"{score_mode} requires validation-calibrated uncertainty"
+            )
+        if normalization is None:
+            raise ValueError(
+                f"{score_mode} requires known-validation normalization"
+            )
+
+        def normalized_component(values, key):
+            if key not in normalization:
+                raise ValueError(
+                    f"{score_mode} requires known-validation statistics for {key}"
+                )
+            stats = normalization[key]
+            return (np.asarray(values, dtype=float) - float(stats["mean"])) / max(
+                float(stats["std"]), 1e-6
+            )
+
+        rejector_component = normalized_component(
+            outputs["feature_rejector_score"], "feature_rejector_score"
+        )
+        uncertainty_component = normalized_component(
+            outputs["calibrated_uncertainty_error"],
+            "calibrated_uncertainty_error",
+        )
+        if score_mode == "feature_rejector_uncertainty_fusion":
+            # Fixed 0.5/0.5 ablation: no validation/test-label tuning and no
+            # extra fusion-weight search is permitted for this mechanism.
+            score = 0.5 * rejector_component + 0.5 * uncertainty_component
+        else:
+            # Fixed conservative conjunction: avoid double-counting correlated
+            # risk signals by requiring both standardized components to be high.
+            # This is a separate pre-registered score mode, not a tuned weight.
+            score = np.minimum(rejector_component, uncertainty_component)
     elif score_mode == "margin_uncertainty":
         logits = np.asarray(outputs["logits"], dtype=float)
         top2 = np.sort(np.partition(logits, -2, axis=1)[:, -2:], axis=1)
@@ -6882,6 +7333,10 @@ def fit_score_normalization(
     )
     if "feature_rejector_score" in outputs_known:
         result["feature_rejector_score"] = stats(outputs_known["feature_rejector_score"])
+    if "calibrated_uncertainty_error" in outputs_known:
+        result["calibrated_uncertainty_error"] = stats(
+            outputs_known["calibrated_uncertainty_error"]
+        )
     if "known_support_score" in outputs_known:
         result["known_support_score"] = stats(outputs_known["known_support_score"])
     if "knn_distance" in outputs_known:

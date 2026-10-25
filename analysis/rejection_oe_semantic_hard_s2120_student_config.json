@@ -1,0 +1,11 @@
+{
+  "source_student_config": "C:\\Users\\13520\\Desktop\\dachuang\\analysis\\rejection_feature_kd_mc_epistemic_s2105_student_config.json",
+  "single_changed_factor": "alpha_outlier_rejection_uniform",
+  "control": 0.0,
+  "treatment": 0.05,
+  "fixed_outlier_feature_margin_weight": 0.05,
+  "fixed_outlier_feature_margin": 0.2,
+  "seed": 2120,
+  "split_path": "C:\\Users\\13520\\Desktop\\dachuang\\splits_cifar100_semantic_hard_seed2120\\cifar100_60_40_semantic_hard.json",
+  "teacher_checkpoint": "C:\\Users\\13520\\Desktop\\dachuang\\runs\\rejection_oe_semantic_hard_s2120_teacher\\teacher.pt"
+}

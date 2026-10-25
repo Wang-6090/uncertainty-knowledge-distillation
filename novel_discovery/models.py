@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -76,6 +78,30 @@ class MobileNetBackbone(nn.Module):
         return torch.flatten(x, 1)
 
 
+class IndependentRejectionEncoder(nn.Module):
+    """Small image encoder dedicated to rejection, not shared classification."""
+
+    def __init__(self, out_dim: int) -> None:
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(1),
+        )
+        self.projection = nn.Linear(128, out_dim)
+        self.out_dim = int(out_dim)
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        return self.projection(torch.flatten(self.features(images), 1))
+
+
 class UKDNet(nn.Module):
     def __init__(
         self,
@@ -86,6 +112,9 @@ class UKDNet(nn.Module):
         pretrained: bool = False,
         cifar_stem: bool = False,
         rejection_feature_dim: int = 0,
+        independent_rejection_encoder: bool = False,
+        independent_rejection_encoder_init: str = "shared_backbone",
+        independent_rejection_input_norm: str = "none",
     ) -> None:
         super().__init__()
         if backbone == "mobilenet_v3_small":
@@ -98,6 +127,30 @@ class UKDNet(nn.Module):
         feat_dim = self.encoder.out_dim
         self.classifier = nn.Linear(feat_dim, num_classes)
         self.rejection_feature_dim = int(rejection_feature_dim)
+        self.independent_rejection_encoder_enabled = bool(
+            independent_rejection_encoder
+        )
+        if independent_rejection_encoder_init not in {
+            "scratch_cnn",
+            "shared_backbone",
+            "random_backbone",
+        }:
+            raise ValueError(
+                "independent_rejection_encoder_init must be 'scratch_cnn', "
+                "'shared_backbone', or 'random_backbone'"
+            )
+        self.independent_rejection_encoder_init = (
+            independent_rejection_encoder_init
+        )
+        if independent_rejection_input_norm not in {"none", "layernorm"}:
+            raise ValueError(
+                "independent_rejection_input_norm must be 'none' or 'layernorm'"
+            )
+        if independent_rejection_input_norm != "none" and not independent_rejection_encoder:
+            raise ValueError(
+                "independent_rejection_input_norm requires an independent rejection encoder"
+            )
+        self.independent_rejection_input_norm = independent_rejection_input_norm
         if self.rejection_feature_dim < 0:
             raise ValueError("rejection_feature_dim must be non-negative")
         if self.rejection_feature_dim > 0:
@@ -119,6 +172,10 @@ class UKDNet(nn.Module):
                 nn.Linear(rejection_hidden, 1),
             )
         else:
+            if self.independent_rejection_encoder_enabled:
+                raise ValueError(
+                    "independent_rejection_encoder requires rejection_feature_dim > 0"
+                )
             self.rejection_projector = None
             self.rejection_classifier = None
             self.rejection_uncertainty_head = None
@@ -132,17 +189,75 @@ class UKDNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(feat_dim, proj_dim),
         )
+        # Build the optional encoder after every legacy module. Random
+        # same-backbone initialization is additionally RNG-isolated below.
+        self.rejection_encoder = (
+            (
+                copy.deepcopy(self.encoder)
+                if independent_rejection_encoder_init == "shared_backbone"
+                else self._build_independent_rejection_encoder(
+                    backbone=backbone,
+                    pretrained=pretrained,
+                    cifar_stem=cifar_stem,
+                    feat_dim=feat_dim,
+                    init_mode=independent_rejection_encoder_init,
+                )
+            )
+            if self.independent_rejection_encoder_enabled
+            else None
+        )
+        self.rejection_input_norm = (
+            nn.LayerNorm(feat_dim)
+            if self.independent_rejection_encoder_enabled
+            and independent_rejection_input_norm == "layernorm"
+            else nn.Identity()
+        )
+
+    @staticmethod
+    def _build_independent_rejection_encoder(
+        *,
+        backbone: str,
+        pretrained: bool,
+        cifar_stem: bool,
+        feat_dim: int,
+        init_mode: str,
+    ) -> nn.Module:
+        if init_mode == "scratch_cnn":
+            return IndependentRejectionEncoder(feat_dim)
+        if init_mode != "random_backbone":
+            raise ValueError(f"Unsupported independent rejection init: {init_mode}")
+
+        # Same architecture and parameter count as the copied-backbone arm,
+        # but initialized randomly. Preserve the global RNG stream so creating
+        # this optional encoder cannot change legacy heads or later sampling.
+        with torch.random.fork_rng(devices=[]):
+            if backbone == "mobilenet_v3_small":
+                return MobileNetBackbone(pretrained=False)
+            return ResNetBackbone(
+                backbone, pretrained=False, cifar_stem=cifar_stem
+            )
 
     def forward(self, x: torch.Tensor, stochastic: bool = False):
         feat = self.encoder(x)
         feat = F.dropout(feat, p=self.dropout_p, training=stochastic)
         logits = self.classifier(feat)
         if self.rejection_projector is None:
+            rejection_raw_input = feat
+            rejection_input = feat
             rejection_features = feat
             rejection_logits = None
             uncertainty = torch.sigmoid(self.uncertainty_head(feat)).squeeze(-1)
         else:
-            rejection_features = self.rejection_projector(feat)
+            rejection_raw_input = (
+                self.rejection_encoder(x)
+                if self.rejection_encoder is not None
+                else feat
+            )
+            rejection_input = self.rejection_input_norm(rejection_raw_input)
+            rejection_input = F.dropout(
+                rejection_input, p=self.dropout_p, training=stochastic
+            )
+            rejection_features = self.rejection_projector(rejection_input)
             rejection_logits = self.rejection_classifier(rejection_features)
             uncertainty = torch.sigmoid(
                 self.rejection_uncertainty_head(rejection_features)
@@ -151,6 +266,8 @@ class UKDNet(nn.Module):
         return {
             "logits": logits,
             "features": feat,
+            "rejection_raw_input": rejection_raw_input,
+            "rejection_input": rejection_input,
             "rejection_features": rejection_features,
             "rejection_logits": rejection_logits,
             "proj": proj,
@@ -158,11 +275,27 @@ class UKDNet(nn.Module):
         }
 
     def rejection_forward(self, features: torch.Tensor):
-        """Apply the optional rejection branch to encoder-space features."""
+        """Apply the legacy shared-feature rejection projector.
+
+        For an independent image encoder, use ``rejection_head_forward`` on
+        the rejection embedding returned by ``forward`` instead.
+        """
         if self.rejection_projector is None:
             uncertainty = torch.sigmoid(self.uncertainty_head(features)).squeeze(-1)
             return features, None, uncertainty
+        if self.rejection_encoder is not None:
+            raise RuntimeError(
+                "independent rejection mode needs image inputs; use the "
+                "rejection embedding returned by forward"
+            )
         rejection_features = self.rejection_projector(features)
+        return self.rejection_head_forward(rejection_features)
+
+    def rejection_head_forward(self, rejection_features: torch.Tensor):
+        """Apply rejection classifier and uncertainty head to embeddings."""
+        if self.rejection_projector is None:
+            uncertainty = torch.sigmoid(self.uncertainty_head(rejection_features)).squeeze(-1)
+            return rejection_features, None, uncertainty
         rejection_logits = self.rejection_classifier(rejection_features)
         uncertainty = torch.sigmoid(
             self.rejection_uncertainty_head(rejection_features)
@@ -210,6 +343,9 @@ def build_model(
     pretrained: bool = False,
     cifar_stem: bool = False,
     rejection_feature_dim: int = 0,
+    independent_rejection_encoder: bool = False,
+    independent_rejection_encoder_init: str = "shared_backbone",
+    independent_rejection_input_norm: str = "none",
 ) -> UKDNet:
     return UKDNet(
         num_classes=num_classes,
@@ -219,4 +355,7 @@ def build_model(
         pretrained=pretrained,
         cifar_stem=cifar_stem,
         rejection_feature_dim=rejection_feature_dim,
+        independent_rejection_encoder=independent_rejection_encoder,
+        independent_rejection_encoder_init=independent_rejection_encoder_init,
+        independent_rejection_input_norm=independent_rejection_input_norm,
     )

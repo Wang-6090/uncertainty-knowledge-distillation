@@ -1,0 +1,17 @@
+{
+  "seeds": {
+    "2114": "C:\\Users\\13520\\Desktop\\dachuang\\analysis\\uncertainty_kd_mc_epistemic_s2114_2116_s2114.json",
+    "2115": "C:\\Users\\13520\\Desktop\\dachuang\\analysis\\uncertainty_kd_mc_epistemic_s2114_2116_s2115.json",
+    "2116": "C:\\Users\\13520\\Desktop\\dachuang\\analysis\\uncertainty_kd_mc_epistemic_s2114_2116_s2116.json"
+  },
+  "planned_seeds": [
+    2114,
+    2115,
+    2116
+  ],
+  "objective_profile": "current_auxiliary",
+  "kd_uncertainty_source": "mc_epistemic",
+  "kd_mc_samples": 4,
+  "single_changed_factor": "kd_mode",
+  "status": "completed"
+}
