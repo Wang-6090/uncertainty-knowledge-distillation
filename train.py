@@ -231,6 +231,8 @@ def discovery_training_requirements(args):
     uses_discovery_regularizer = (
         args.alpha_discovery > 0.0
         or args.alpha_discovery_feature_consistency > 0.0
+        or args.alpha_discovery_rejection_consistency > 0.0
+        or args.alpha_discovery_rejection_score_consistency > 0.0
         or args.alpha_discovery_projection_consistency > 0.0
         or args.alpha_discovery_unknown > 0.0
         or args.alpha_discovery_energy > 0.0
@@ -283,7 +285,7 @@ def parse_args(argv=None):
     def add_common(p):
         p.add_argument("--dataset", default="cifar100", choices=["cifar100", "imagefolder", "toy", "fake"])
         p.add_argument("--data-root", default="./data")
-        p.add_argument("--split-path", default="./splits.json")
+        p.add_argument("--split-path", default="./splits/default.json")
         p.add_argument("--num-known", type=int, default=60)
         p.add_argument("--seed", type=int, default=42)
         p.add_argument(
@@ -1150,6 +1152,25 @@ def parse_args(argv=None):
         help=(
             "Align two augmentations of discovery-pool samples in backbone "
             "feature space without assigning pseudo labels."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-consistency",
+        type=float,
+        default=0.0,
+        help=(
+            "Align two augmentations in the rejection representation. In a "
+            "mixed pool, the existing paired candidate gate restricts this "
+            "loss to high-risk boundary candidates."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-score-consistency",
+        type=float,
+        default=0.0,
+        help=(
+            "Align the scalar uncertainty/rejection-risk proxy across two "
+            "augmentations of each discovery-pool sample."
         ),
     )
     p.add_argument(
@@ -2165,17 +2186,28 @@ def parse_args(argv=None):
             "unified",
             "unified_pca",
         ],
-        default="projection_pca",
+        default="feature_pca",
         help=(
-            "Representation used for clustering; projection_pca is the default "
-            "because it performed best in the current CIFAR-100 comparison."
+            "Representation used for clustering; feature_pca is the default "
+            "because it improves clustering quality without changing the "
+            "rejection score or known-coverage calibration. Use projection_pca "
+            "as the controlled ablation."
         ),
     )
     p.add_argument(
         "--cluster-selection",
-        choices=["silhouette", "composite", "stability", "gmm_bic"],
+        choices=[
+            "silhouette",
+            "composite",
+            "stability",
+            "bootstrap_stability",
+            "gmm_bic",
+        ],
         default="silhouette",
-        help="K selection criterion: silhouette, composite metrics, stability, or diagonal-GMM BIC.",
+        help=(
+            "K selection criterion: silhouette, composite metrics, legacy seed "
+            "stability, bootstrap_stability, or diagonal-GMM BIC."
+        ),
     )
     p.add_argument(
         "--max-auto-clusters",
@@ -2221,11 +2253,35 @@ def parse_args(argv=None):
     )
     p.add_argument(
         "--candidate-purify",
-        choices=["none", "open_score", "entropy", "head_uncertainty", "uncertainty_consensus", "knn_support", "open_knn_support"],
+        choices=[
+            "none",
+            "open_score",
+            "entropy",
+            "head_uncertainty",
+            "head_uncertainty_classwise",
+            "head_uncertainty_weighted",
+            "uncertainty_consensus",
+            "knn_support",
+            "open_knn_support",
+        ],
         default="none",
-        help="Purify rejected candidates only before clustering; detection metrics are unchanged.",
+        help=(
+            "Purify rejected candidates before clustering; detection metrics are "
+            "unchanged. head_uncertainty_weighted keeps all candidates and "
+            "uses soft k-means weights."
+        ),
     )
     p.add_argument("--candidate-keep-ratio", type=float, default=1.0)
+    p.add_argument(
+        "--cluster-candidate-mode",
+        choices=["detector", "feature_rejector_rank"],
+        default="detector",
+        help=(
+            "Candidate source for clustering. detector uses thresholded detector "
+            "rejections; feature_rejector_rank preserves that count but ranks "
+            "the unlabeled pool with the raw feature-rejector score."
+        ),
+    )
     p.add_argument(
         "--support-quantile",
         type=float,
@@ -3895,6 +3951,10 @@ def fit_student(args):
             discovery_loader=discovery_loader,
             alpha_discovery=args.alpha_discovery,
             alpha_discovery_feature_consistency=args.alpha_discovery_feature_consistency,
+            alpha_discovery_rejection_consistency=args.alpha_discovery_rejection_consistency,
+            alpha_discovery_rejection_score_consistency=(
+                args.alpha_discovery_rejection_score_consistency
+            ),
             alpha_discovery_projection_consistency=args.alpha_discovery_projection_consistency,
             alpha_discovery_unknown=args.alpha_discovery_unknown,
             alpha_discovery_energy=args.alpha_discovery_energy,
@@ -5108,6 +5168,7 @@ def discover(args):
         cluster_n_init=args.cluster_n_init,
         cluster_stability_repeats=args.cluster_stability_repeats,
         max_auto_clusters=args.max_auto_clusters,
+        cluster_candidate_mode=args.cluster_candidate_mode,
         candidate_purify=args.candidate_purify,
         candidate_keep_ratio=args.candidate_keep_ratio,
         enable_clustering=not args.skip_clustering,
@@ -5285,6 +5346,9 @@ def discover(args):
         "cluster_diagnostics": detail.get("cluster_diagnostics", []),
         "threshold_type": result.get("threshold_type"),
         "candidate_purify": detail.get("candidate_purify"),
+        "cluster_candidate_mode": detail.get(
+            "cluster_candidate_mode", args.cluster_candidate_mode
+        ),
         "candidate_keep_ratio": detail.get("candidate_keep_ratio"),
         "candidate_purification": detail.get("candidate_purification"),
     })

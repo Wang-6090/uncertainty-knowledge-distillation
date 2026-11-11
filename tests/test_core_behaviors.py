@@ -115,6 +115,7 @@ from novel_discovery.pipeline import (
     calibrate_open_threshold,
     purify_candidate_mask,
     candidate_purification_score,
+    select_cluster_candidate_mask,
     evaluate_candidate_purification,
     select_discovery_candidates,
     select_mc_epistemic_plus_head_candidates,
@@ -4929,6 +4930,45 @@ class DiscoveryReportTest(unittest.TestCase):
         self.assertEqual(mask.sum(), 2)
         self.assertTrue(mask[2])
         self.assertEqual(report["removed_count"], 1)
+
+    def test_classwise_purification_ranks_only_inside_candidate_pool(self):
+        outputs = {
+            "entropy": np.zeros(6),
+            "head_uncertainty": np.array([0.1, 100.0, 0.9, 0.2, 100.0, 0.8]),
+            "logits": np.array(
+                [
+                    [3.0, 0.0],
+                    [3.0, 0.0],
+                    [3.0, 0.0],
+                    [0.0, 3.0],
+                    [0.0, 3.0],
+                    [0.0, 3.0],
+                ]
+            ),
+        }
+        candidate_mask = np.array([True, False, True, True, False, True])
+        scores = candidate_purification_score(
+            outputs,
+            "head_uncertainty_classwise",
+            candidate_mask=candidate_mask,
+        )
+        self.assertEqual(scores[1], 0.0)
+        self.assertEqual(scores[4], 0.0)
+        self.assertGreater(scores[2], scores[0])
+        self.assertGreater(scores[5], scores[3])
+
+    def test_feature_rejector_cluster_candidate_mode_preserves_count(self):
+        outputs = {
+            "feature_rejector_score": np.array([0.9, 0.8, 0.7, 0.6, 0.5]),
+        }
+        detector_mask = np.array([False, True, False, True, False])
+        selected = select_cluster_candidate_mask(
+            outputs, detector_mask, mode="feature_rejector_rank"
+        )
+        self.assertEqual(int(selected.sum()), int(detector_mask.sum()))
+        self.assertTrue(
+            np.array_equal(selected, np.array([True, True, False, False, False]))
+        )
 
     def test_run_discovery_reports_candidate_pool_purity(self):
         outputs = {

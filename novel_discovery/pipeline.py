@@ -29,6 +29,7 @@ from .losses import (
     feature_cross_covariance_loss,
     feature_variance_floor_loss,
     discovery_consistency_loss,
+    discovery_scalar_consistency_loss,
     discovery_unknown_loss,
     discovery_view_loss,
     distillation_loss,
@@ -1705,6 +1706,8 @@ def train_one_epoch_student(
     discovery_energy_pu_softness: float = 0.05,
     alpha_discovery_uniform: float = 0.0,
     alpha_discovery_feature_consistency: float = 0.0,
+    alpha_discovery_rejection_consistency: float = 0.0,
+    alpha_discovery_rejection_score_consistency: float = 0.0,
     alpha_discovery_projection_consistency: float = 0.0,
     alpha_discovery_feature_margin: float = 0.0,
     discovery_feature_margin: float = 0.2,
@@ -1914,6 +1917,8 @@ def train_one_epoch_student(
     discovery_rejection_feature_margin_meter = AverageMeter()
     discovery_rejection_feature_separation_meter = AverageMeter()
     discovery_feature_consistency_meter = AverageMeter()
+    discovery_rejection_consistency_meter = AverageMeter()
+    discovery_rejection_score_consistency_meter = AverageMeter()
     discovery_projection_consistency_meter = AverageMeter()
     discovery_uncertainty_feature_margin_meter = AverageMeter()
     discovery_uncertainty_feature_margin_weight_meter = AverageMeter()
@@ -2302,6 +2307,8 @@ def train_one_epoch_student(
         loss_discovery_rejection_feature_margin = s_out["logits"].new_tensor(0.0)
         loss_discovery_rejection_feature_separation = s_out["logits"].new_tensor(0.0)
         loss_discovery_feature_consistency = s_out["logits"].new_tensor(0.0)
+        loss_discovery_rejection_consistency = s_out["logits"].new_tensor(0.0)
+        loss_discovery_rejection_score_consistency = s_out["logits"].new_tensor(0.0)
         loss_discovery_projection_consistency = s_out["logits"].new_tensor(0.0)
         loss_discovery_uncertainty_feature_margin = s_out["logits"].new_tensor(0.0)
         loss_discovery_objectosphere = s_out["logits"].new_tensor(0.0)
@@ -2442,6 +2449,8 @@ def train_one_epoch_student(
             or alpha_discovery_energy_pu > 0.0
             or alpha_discovery_uniform > 0.0
             or alpha_discovery_feature_consistency > 0.0
+            or alpha_discovery_rejection_consistency > 0.0
+            or alpha_discovery_rejection_score_consistency > 0.0
             or alpha_discovery_projection_consistency > 0.0
             or alpha_discovery_feature_margin > 0.0
             or alpha_discovery_rejection_feature_margin > 0.0
@@ -2483,6 +2492,16 @@ def train_one_epoch_student(
             second_view = second_view.to(device)
             first_out = student(first_view)
             second_out = student(second_view)
+            if alpha_discovery_rejection_score_consistency > 0.0:
+                # The uncertainty head is the trainable scalar proxy for the
+                # final rejection risk. Aligning this scalar preserves the
+                # risk ordering target without forcing the full rejection
+                # feature vectors to coincide.
+                loss_discovery_rejection_score_consistency = (
+                    discovery_scalar_consistency_loss(
+                        first_out["uncertainty"], second_out["uncertainty"]
+                    )
+                )
             if alpha_discovery_known_consistency > 0.0:
                 if discovery_pool_mode != "mixed":
                     raise ValueError(
@@ -3099,6 +3118,7 @@ def train_one_epoch_student(
                     or alpha_discovery_knn_boundary > 0.0
                     or alpha_discovery_rejection_knn_boundary > 0.0
                     or alpha_discovery_rejection_boundary > 0.0
+                    or alpha_discovery_rejection_consistency > 0.0
                     or alpha_discovery_objectosphere > 0.0
                 )
             ):
@@ -3356,6 +3376,20 @@ def train_one_epoch_student(
                 # optional intersection gate trades recall for cleaner pseudo-unknowns.
                 feature_candidate_masks = (paired_feature_mask, paired_feature_mask)
                 feature_candidate_ratio = paired_feature_mask.float().mean().item()
+                if alpha_discovery_rejection_consistency > 0.0:
+                    if first_out.get("rejection_features") is None:
+                        raise ValueError(
+                            "rejection consistency requires --rejection-feature-dim > 0"
+                        )
+                    first_rejection_values = first_out["rejection_features"][
+                        feature_candidate_masks[0]
+                    ]
+                    second_rejection_values = second_out["rejection_features"][
+                        feature_candidate_masks[1]
+                    ]
+                    loss_discovery_rejection_consistency = discovery_consistency_loss(
+                        first_rejection_values, second_rejection_values
+                    )
                 if (
                     discovery_feature_candidate_space
                     == "shared_boundary_soft_consensus"
@@ -4345,6 +4379,8 @@ def train_one_epoch_student(
             + alpha_discovery_energy_pu * loss_discovery_energy_pu
             + alpha_discovery_uniform * loss_discovery_uniform
             + alpha_discovery_feature_consistency * loss_discovery_feature_consistency
+            + alpha_discovery_rejection_consistency
+            * loss_discovery_rejection_consistency
             + alpha_discovery_projection_consistency * loss_discovery_projection_consistency
             + alpha_discovery_feature_margin * loss_discovery_feature_margin
             + alpha_discovery_rejection_feature_margin
@@ -4437,6 +4473,14 @@ def train_one_epoch_student(
                     ),
                     "kd_term": alpha_rejection_kd * loss_rejection_kd,
                     "feat_kd_term": alpha_rejection_feat_kd * loss_rejection_feat_kd,
+                    "discovery_consistency_term": (
+                        alpha_discovery_rejection_consistency
+                        * loss_discovery_rejection_consistency
+                    ),
+                    "discovery_score_consistency_term": (
+                        alpha_discovery_rejection_score_consistency
+                        * loss_discovery_rejection_score_consistency
+                    ),
                     "discovery_margin_term": (
                         alpha_discovery_rejection_feature_margin
                         * loss_discovery_rejection_feature_margin
@@ -4634,6 +4678,12 @@ def train_one_epoch_student(
         discovery_feature_consistency_meter.update(
             loss_discovery_feature_consistency.item(), images.size(0)
         )
+        discovery_rejection_consistency_meter.update(
+            loss_discovery_rejection_consistency.item(), images.size(0)
+        )
+        discovery_rejection_score_consistency_meter.update(
+            loss_discovery_rejection_score_consistency.item(), images.size(0)
+        )
         discovery_projection_consistency_meter.update(
             loss_discovery_projection_consistency.item(), images.size(0)
         )
@@ -4803,6 +4853,10 @@ def train_one_epoch_student(
         "discovery_rejection_feature_margin": discovery_rejection_feature_margin_meter.avg,
         "discovery_rejection_feature_separation": discovery_rejection_feature_separation_meter.avg,
         "discovery_feature_consistency": discovery_feature_consistency_meter.avg,
+        "discovery_rejection_consistency": discovery_rejection_consistency_meter.avg,
+        "discovery_rejection_score_consistency": (
+            discovery_rejection_score_consistency_meter.avg
+        ),
         "discovery_projection_consistency": discovery_projection_consistency_meter.avg,
         "discovery_uncertainty_feature_margin": discovery_uncertainty_feature_margin_meter.avg,
         "discovery_uncertainty_feature_margin_weight_mean": (
@@ -7683,10 +7737,26 @@ def candidate_purification_score(
     outputs: Dict[str, np.ndarray],
     mode: str = "none",
     open_score: np.ndarray | None = None,
+    candidate_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Build a label-free ranking used only to clean the cluster candidate pool."""
     if mode == "none":
         return np.zeros(len(outputs["entropy"]), dtype=float)
+    if mode == "head_uncertainty_weighted":
+        return _rank_normalize_numpy(outputs["head_uncertainty"])
+    if mode == "head_uncertainty_classwise":
+        scores = np.asarray(outputs["head_uncertainty"], dtype=float)
+        classes = np.asarray(outputs["logits"]).argmax(axis=1)
+        result = np.zeros(len(scores), dtype=float)
+        valid = (
+            np.ones(len(scores), dtype=bool)
+            if candidate_mask is None
+            else np.asarray(candidate_mask, dtype=bool)
+        )
+        for class_id in np.unique(classes):
+            indices = np.flatnonzero((classes == class_id) & valid)
+            result[indices] = _rank_normalize_numpy(scores[indices])
+        return result
     if mode == "open_score":
         if open_score is None:
             raise ValueError("open_score purification requires an open-set score")
@@ -7746,6 +7816,43 @@ def evaluate_candidate_purification(
     return {"before": summarize(candidate_mask), "after": summarize(purified_mask)}
 
 
+def select_cluster_candidate_mask(
+    outputs: Dict[str, np.ndarray],
+    detector_candidate_mask: np.ndarray,
+    mode: str = "detector",
+) -> np.ndarray:
+    """Choose a label-free candidate pool for clustering.
+
+    Detection and novel-class clustering need not use the same ranking. The
+    optional feature-rejector mode preserves the detector's candidate count,
+    but re-ranks the complete unlabeled evaluation pool with the raw
+    feature-rejector score. The default keeps thresholded detector candidates.
+    """
+    detector_candidate_mask = np.asarray(detector_candidate_mask, dtype=bool)
+    if mode == "detector":
+        return detector_candidate_mask
+    if mode != "feature_rejector_rank":
+        raise ValueError(f"Unsupported cluster candidate mode: {mode}")
+    if "feature_rejector_score" not in outputs:
+        raise ValueError(
+            "feature_rejector_rank requires feature_rejector_score in outputs"
+        )
+    scores = np.asarray(outputs["feature_rejector_score"], dtype=float)
+    if scores.shape != detector_candidate_mask.shape:
+        raise ValueError("feature_rejector_score must align with detector candidates")
+    count = int(detector_candidate_mask.sum())
+    if count == 0:
+        return np.zeros_like(detector_candidate_mask)
+    if count == len(detector_candidate_mask):
+        return np.ones_like(detector_candidate_mask)
+    if not np.isfinite(scores).all():
+        raise ValueError("feature_rejector_score contains non-finite values")
+    order = np.argsort(scores, kind="stable")[::-1]
+    selected = np.zeros_like(detector_candidate_mask)
+    selected[order[:count]] = True
+    return selected
+
+
 def purify_candidate_mask(
     outputs: Dict[str, np.ndarray],
     candidate_mask: np.ndarray,
@@ -7756,7 +7863,7 @@ def purify_candidate_mask(
     """Keep the highest-ranked rejected samples for clustering only."""
     candidate_mask = np.asarray(candidate_mask, dtype=bool)
     before_count = int(candidate_mask.sum())
-    if mode == "none" or before_count <= 1:
+    if mode in {"none", "head_uncertainty_weighted"} or before_count <= 1:
         return candidate_mask, {
             "mode": mode,
             "keep_ratio": 1.0,
@@ -7766,7 +7873,9 @@ def purify_candidate_mask(
         }
     ratio = float(np.clip(keep_ratio, 0.0, 1.0))
     keep_count = min(before_count, max(2, int(np.ceil(before_count * ratio))))
-    scores = candidate_purification_score(outputs, mode, open_score=open_score)
+    scores = candidate_purification_score(
+        outputs, mode, open_score=open_score, candidate_mask=candidate_mask
+    )
     indices = np.flatnonzero(candidate_mask)
     order = np.argsort(scores[indices], kind="stable")[::-1]
     purified = np.zeros_like(candidate_mask)
@@ -7778,6 +7887,28 @@ def purify_candidate_mask(
         "after_count": int(purified.sum()),
         "removed_count": before_count - int(purified.sum()),
     }
+
+
+def candidate_purification_weights(
+    outputs: Dict[str, np.ndarray],
+    candidate_mask: np.ndarray,
+    mode: str = "none",
+) -> np.ndarray:
+    """Return optional soft weights for clustering without removing samples.
+
+    The weighted mode keeps the complete rejected candidate pool and only
+    reduces the influence of samples with low uncertainty-head risk.  It is
+    intentionally separate from hard purification so candidate recall can be
+    measured without being changed by the weighting operation.
+    """
+    candidate_mask = np.asarray(candidate_mask, dtype=bool)
+    weights = np.ones(len(candidate_mask), dtype=np.float32)
+    if mode != "head_uncertainty_weighted" or not candidate_mask.any():
+        return weights
+    scores = _rank_normalize_numpy(outputs["head_uncertainty"])
+    # Keep every candidate, but give high-risk candidates more influence.
+    weights[candidate_mask] = 0.25 + 0.75 * scores[candidate_mask]
+    return weights
 
 
 def prepare_cluster_features(
@@ -7805,6 +7936,7 @@ def cluster_unknown_samples(
     method: str = "kmeans",
     n_init: int = 10,
     random_state: int = 42,
+    sample_weight: np.ndarray | None = None,
 ):
     """Cluster candidate unknown samples with a selectable label-free method."""
     values = np.asarray(features, dtype=np.float32)
@@ -7812,11 +7944,15 @@ def cluster_unknown_samples(
     if num_clusters == 1 or len(values) <= 1:
         return np.zeros(len(values), dtype=np.int64)
     if method == "kmeans":
-        return KMeans(
+        model = KMeans(
             n_clusters=num_clusters,
             n_init=max(1, int(n_init)),
             random_state=random_state,
-        ).fit_predict(values)
+        )
+        model.fit(values, sample_weight=sample_weight)
+        return model.labels_
+    if sample_weight is not None and not np.allclose(sample_weight, 1.0):
+        raise ValueError("sample_weight is currently supported only for kmeans clustering")
     if method == "agglomerative":
         return AgglomerativeClustering(n_clusters=num_clusters, linkage="ward").fit_predict(values)
     if method == "spectral":
@@ -7849,6 +7985,7 @@ def evaluate_cluster_candidates(
     n_init: int = 10,
     stability_repeats: int = 5,
     random_state: int = 42,
+    sample_weight: np.ndarray | None = None,
 ) -> tuple[int, list[dict]]:
     """Select K using only candidate-pool geometry and report diagnostics."""
     n = len(features)
@@ -7860,6 +7997,9 @@ def evaluate_cluster_candidates(
     if upper < 2:
         return 1, []
     values = np.asarray(features, dtype=np.float32)
+    weights = None if sample_weight is None else np.asarray(sample_weight, dtype=np.float32)
+    if weights is not None and len(weights) != n:
+        raise ValueError("sample_weight must align with clustering features")
     eval_values = values
     eval_indices = np.arange(n)
     if n > 2000:
@@ -7869,7 +8009,9 @@ def evaluate_cluster_candidates(
 
     rows: list[dict] = []
     for k in range(2, upper + 1):
-        labels = cluster_unknown_samples(values, k, method, n_init, random_state)
+        labels = cluster_unknown_samples(
+            values, k, method, n_init, random_state, sample_weight=weights
+        )
         eval_labels = labels[eval_indices]
         if len(np.unique(eval_labels)) < 2:
             continue
@@ -7893,7 +8035,12 @@ def evaluate_cluster_candidates(
             for repeat in range(max(2, int(stability_repeats))):
                 repeat_labels.append(
                     cluster_unknown_samples(
-                        values, k, method, n_init, random_state + repeat + 1
+                        values,
+                        k,
+                        method,
+                        n_init,
+                        random_state + repeat + 1,
+                        sample_weight=weights,
                     )[eval_indices]
                 )
             stability_values = [
@@ -7902,6 +8049,42 @@ def evaluate_cluster_candidates(
                 for j in range(i + 1, len(repeat_labels))
             ]
             row["stability_nmi"] = float(np.mean(stability_values)) if stability_values else 1.0
+        if selection == "bootstrap_stability":
+            if method != "kmeans":
+                raise ValueError(
+                    "bootstrap_stability currently requires method='kmeans' "
+                    "because bootstrap clusterers must predict the common eval set"
+                )
+            # Fit each candidate K on perturbed 80% subsets and compare the
+            # resulting assignments on the same complete evaluation set. This
+            # is a label-free perturbation-stability diagnostic; unlike the
+            # legacy stability criterion above, it does not only vary the
+            # KMeans initialization on the unchanged sample set.
+            bootstrap_rng = np.random.default_rng(random_state + 10000 + int(k))
+            bootstrap_labels = []
+            sample_size = max(int(k) * 3, int(np.ceil(0.8 * len(eval_values))))
+            sample_size = min(len(eval_values), sample_size)
+            for repeat in range(max(3, int(stability_repeats))):
+                subset = bootstrap_rng.choice(
+                    len(eval_values), size=sample_size, replace=False
+                )
+                model = KMeans(
+                    n_clusters=int(k),
+                    n_init=max(1, int(n_init)),
+                    random_state=random_state + 20000 + repeat,
+                ).fit(
+                    eval_values[subset],
+                    sample_weight=None if weights is None else weights[eval_indices][subset],
+                )
+                bootstrap_labels.append(model.predict(eval_values))
+            stability_values = [
+                normalized_mutual_info_score(bootstrap_labels[i], bootstrap_labels[j])
+                for i in range(len(bootstrap_labels))
+                for j in range(i + 1, len(bootstrap_labels))
+            ]
+            row["bootstrap_stability_nmi"] = (
+                float(np.mean(stability_values)) if stability_values else 1.0
+            )
         rows.append(row)
 
     if not rows:
@@ -7914,6 +8097,11 @@ def evaluate_cluster_candidates(
         combined = silhouette
     elif selection == "stability":
         stability = np.asarray([row["stability_nmi"] for row in rows], dtype=float)
+        combined = 0.5 * internal + 0.5 * stability
+    elif selection == "bootstrap_stability":
+        stability = np.asarray(
+            [row["bootstrap_stability_nmi"] for row in rows], dtype=float
+        )
         combined = 0.5 * internal + 0.5 * stability
     elif selection == "composite":
         combined = internal
@@ -7966,6 +8154,7 @@ def run_discovery(
     cluster_n_init: int = 10,
     cluster_stability_repeats: int = 5,
     max_auto_clusters: int = 50,
+    cluster_candidate_mode: str = "detector",
     candidate_purify: str = "none",
     candidate_keep_ratio: float = 1.0,
     enable_clustering: bool = True,
@@ -8075,6 +8264,7 @@ def run_discovery(
                     "after_count": 0,
                     "removed_count": 0,
                 },
+                "cluster_candidate_mode": cluster_candidate_mode,
                 "clustering_skipped": True,
             }
         )
@@ -8130,15 +8320,21 @@ def run_discovery(
                 "after_count": int((~pred_known).sum()),
                 "removed_count": 0,
             },
+            "cluster_candidate_mode": cluster_candidate_mode,
         }
         return result, score, pred_known, detail
-    novel_mask = ~pred_known
+    novel_mask = select_cluster_candidate_mask(
+        outputs, ~pred_known, mode=cluster_candidate_mode
+    )
     cluster_mask, purification = purify_candidate_mask(
         outputs,
         novel_mask,
         mode=candidate_purify,
         keep_ratio=candidate_keep_ratio,
         open_score=score,
+    )
+    cluster_weights = candidate_purification_weights(
+        outputs, cluster_mask, mode=candidate_purify
     )
     selected_cluster_k = None
     selected_cluster_predictions = None
@@ -8219,12 +8415,14 @@ def run_discovery(
                 selection=cluster_selection,
                 n_init=cluster_n_init,
                 stability_repeats=cluster_stability_repeats,
+                sample_weight=cluster_weights[cluster_mask],
             )
         novel_pred = cluster_unknown_samples(
             novel_features,
             num_clusters=selected_cluster_k,
             method=cluster_method,
             n_init=cluster_n_init,
+            sample_weight=cluster_weights[cluster_mask],
         )
         # Reuse this fit when serializing per-sample cluster assignments below.
         selected_cluster_predictions = novel_pred
@@ -8325,6 +8523,7 @@ def run_discovery(
         "candidate_purify": candidate_purify,
         "candidate_keep_ratio": float(candidate_keep_ratio),
         "candidate_purification": purification,
+        "cluster_candidate_mode": cluster_candidate_mode,
     }
     if cluster_mask.sum() > 1 and num_novel > 0:
         pred_cluster = np.full(len(score), -1, dtype=np.int64)
@@ -8336,6 +8535,7 @@ def run_discovery(
                 num_clusters=selected_cluster_k,
                 method=cluster_method,
                 n_init=cluster_n_init,
+                sample_weight=cluster_weights[cluster_mask],
             )
         pred_cluster[cluster_mask] = selected_cluster_predictions
         detail["pred_cluster"] = pred_cluster

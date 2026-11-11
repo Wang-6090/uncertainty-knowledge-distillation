@@ -1528,6 +1528,18 @@ def discovery_consistency_loss(
     ).mean()
 
 
+def discovery_scalar_consistency_loss(
+    first_score: torch.Tensor,
+    second_score: torch.Tensor,
+) -> torch.Tensor:
+    """Align a scalar risk proxy across two augmentations of one sample."""
+    if first_score.numel() == 0:
+        return first_score.new_tensor(0.0)
+    first_score = first_score.reshape(-1)
+    second_score = second_score.reshape(-1)
+    return F.smooth_l1_loss(first_score, second_score)
+
+
 def discovery_contrastive_loss(
     first_projection: torch.Tensor,
     second_projection: torch.Tensor,

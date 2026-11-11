@@ -127,7 +127,7 @@ def build_protocols(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", default="./data")
-    parser.add_argument("--output-dir", default="./splits_cifar100_protocols")
+    parser.add_argument("--output-dir", default="./splits/protocols")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 

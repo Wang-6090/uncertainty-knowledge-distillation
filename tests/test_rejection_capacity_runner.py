@@ -12,7 +12,7 @@ class RejectionCapacityRunnerTest(unittest.TestCase):
     def test_default_split_path_tracks_requested_seed(self):
         self.assertEqual(
             default_split_path(2099).as_posix(),
-            "splits_cifar100_semantic_hard_seed2099/"
+            "splits/semantic_hard/seed2099/"
             "cifar100_60_40_semantic_hard.json",
         )
 
