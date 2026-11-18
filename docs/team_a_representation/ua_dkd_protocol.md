@@ -94,11 +94,23 @@ Auto-K, and promotion decisions. They are used only for final metrics.
 ## Implementation status
 
 The `uncertainty_decoupled` opt-in loss helper and CLI mode are implemented.
-The existing default remains `standard`. The seed-2132 pilot completed with
-the three planned arms and passed the exploratory screening rule, so the next
-action is confirmation on two fresh semantic-hard seeds; this is not a final
-promotion decision. The paired runner supports `--objective-profile ua_dkd`,
-strict no-overwrite checks, a `--dry-run` preflight, configuration audits,
-per-epoch component extraction, gradient checks, and optimizer-update checks.
-The pilot's full metrics and audit interpretation are recorded in
-`EXPERIMENT_LOG.md`.
+The existing default remains `standard`. The seed-2132 pilot passed the
+exploratory screening rule, but confirmation on fresh semantic-hard seeds
+2133 and 2134 did not reproduce a stable end-to-end gain. Across the three
+seeds, uncertainty-gated DKD did not consistently improve ranking, candidate
+purity, known accuracy, or clustering metrics, and its uncertainty weights
+remained close to uniform. UA-DKD is therefore recorded as an exploratory
+direction and is not promoted to the default method. No further weight or
+coefficient search is planned on these seeds.
+
+The paired runner supports `--objective-profile ua_dkd`, strict no-overwrite
+checks, a `--dry-run` preflight, configuration audits, per-epoch component
+extraction, gradient checks, and optimizer-update checks. The pilot and
+confirmation metrics, protocol checks, and the reason for stopping the
+current UA-DKD branch are recorded in `EXPERIMENT_LOG.md`.
+
+The next research stage should first diagnose why the current student and
+teacher representations produce candidate-pool contamination and unstable
+known accuracy, then test a new mechanism with a fresh pre-registered
+comparison. Any new experiment must keep unknown labels out of training,
+checkpoint selection, calibration, Auto-K, and promotion decisions.
