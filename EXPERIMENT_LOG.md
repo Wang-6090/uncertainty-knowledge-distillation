@@ -8630,3 +8630,43 @@ DKD 的机制分解给出一个有用的归因线索：`decoupled` 相对 `stand
 机制审计进一步显示，U 的不确定性权重仍接近均匀：seed 2133 的权重标准差约 `0.0068`、ESS fraction 约 `0.99995`，seed 2134 分别约 `0.0073`、`0.99994`。每轮记录的 KD 梯度和学生分类头更新均为非零，说明蒸馏损失进入总目标并更新学生；这项机制证据用于确认实现有效，不等于性能晋级证据。完整结果见 `analysis/team_a_ua_dkd_confirm_s2133.json`、`analysis/team_a_ua_dkd_confirm_s2134.json` 和 `analysis/team_a_ua_dkd_confirm_summary.json`；协议输入为 `splits/semantic_hard/seed2133/`、`seed2134/`。
 
 下一阶段暂停 UA-DKD 的继续训练和参数搜索，先围绕当前暴露的问题分析 student/teacher 表征、候选池污染、known accuracy 异常下降及 Auto-K 偏差，设计新的独立小规模实验。新方向必须先写清单一机制假设、匹配对照、未知标签隔离方式和晋级条件，再运行实验；不把本轮失败结论解释成所有蒸馏方法无效。
+
+### 2026-11-18：UA-DKD 冻结结果失败模式诊断（下一阶段第一步）
+
+确认阶段结束后，先对 seed `2132`、`2133`、`2134` 的九个冻结 discovery 结果做只读归因，目的是判断下一步应该改蒸馏目标、拒识表征还是候选池规则。诊断读取已有 `discovery_detail.json` 和 `feature_rejector_inputs.npz`，不重训、不改阈值、不用测试标签反向选择方法；未知标签只用于运行完成后的错误、覆盖和分数排序描述。
+
+| Seed | 方法 | 已知误拒 | 候选数 / purity | 未知类覆盖中位数 | 覆盖低于 20% 的未知类数 | Auto-K |
+|---:|---|---:|---:|---:|---:|---:|
+| 2132 | standard | 5.12% | 1,251 / 75.46% | 20.50% | 18 | 32 |
+| 2132 | decoupled | 5.43% | 1,373 / 76.26% | 23.50% | 17 | 33 |
+| 2132 | uncertainty-decoupled | 4.42% | 1,227 / 78.40% | 22.00% | 17 | 35 |
+| 2133 | standard | 4.40% | 1,313 / 79.89% | 21.50% | 17 | 32 |
+| 2133 | decoupled | 6.27% | 1,595 / 76.43% | 27.00% | 13 | 32 |
+| 2133 | uncertainty-decoupled | 5.40% | 1,458 / 77.78% | 25.00% | 13 | 33 |
+| 2134 | standard | 4.60% | 1,268 / 78.23% | 24.50% | 14 | 32 |
+| 2134 | decoupled | 6.15% | 1,555 / 76.27% | 28.50% | 10 | 33 |
+| 2134 | uncertainty-decoupled | 5.08% | 1,357 / 77.52% | 25.00% | 11 | 37 |
+
+U 没有稳定降低已知误拒或提高候选纯度；它在两个确认 seed 上比 decoupled 少一些候选污染，但仍低于对应的 standard purity。未知类覆盖的中位数和低覆盖类别数有局部改善，却没有传递成稳定的 NMI/ARI。三个 seed 的 Auto-K 都低估真实新类数 40，U 的 K 分别为 35、33、37，说明候选池数量或几何结构仍不足以让自动聚类恢复完整新类数。
+
+组件审计显示，九个结果的最终 `score` 与 `feature_rejector_score` 一致，当前 discovery 主分数实际由独立 rejection feature 的 rejector 决定；`head_uncertainty` 对未知样本的 AUROC 约为 `0.771–0.809`，但没有进入主分数。由此得到的下一步机制假设是：UA-DKD 只改变分类 logits 的蒸馏，未直接约束下游 rejection representation，因而即使分类侧不确定性有效，也不能稳定改善候选池和聚类。这个判断不是把 head uncertainty 当作已验证算法，而是说明改进方向应先对齐蒸馏信号与拒识表征。
+
+本轮诊断脚本为 [`scripts/audit_ua_dkd_failure_modes.py`](scripts/audit_ua_dkd_failure_modes.py)，机器结果保存在本地 `analysis/team_a_ua_dkd_failure_modes.json`。下一阶段拟先设计一个单因素的 rejection-representation 对照：固定 standard logits-KD、teacher、split、训练预算、拒识器、阈值和 Auto-K，只改变是否将 teacher 分类表征的批内关系传递给 student rejection representation；先做一个 fresh semantic-hard pilot，并预先规定 known accuracy、固定覆盖率 unknown reject、候选 purity 和 Auto-K NMI/ARI 的联合晋级条件。由于已有 seed 2105 曾显示 uncertainty-weighted rejection-feature KD 的固定覆盖率下降，这个新实验必须明确改变的是“表征对齐位置/目标”，不能重复原来的 feature-KD weighting 扫描。
+
+### 2026-11-19：关系型拒识表征蒸馏实现阶段（尚无性能结论）
+
+根据上述诊断，新增了一个明确的 opt-in 训练项 `alpha_rejection_relational_kd`，默认值为 `0`。它使用已有的归一化批内关系损失，但把 teacher 的分类 backbone features 与 student 的独立 rejection features 对齐；它不要求两者逐点复制坐标，也不依赖 teacher rejection head。该项只在已知训练 batch 上计算，teacher 特征 detached，未知标签、mixed pool 和测试标签均不进入损失。
+
+实现前检查了现有 pointwise rejection-feature KD 记录，确认新项不是重复开启旧的 `alpha_rejection_feat_kd` 或重新扫描 MC 权重。代码同时加入独立 rejection 分支的 loss meter 和梯度审计字段，若未启用 rejection branch 会显式报错。默认配置和既有训练路径不变。
+
+实现验证已通过：关系损失有限、student rejection branch 梯度非零、teacher 无梯度；命令行默认值为 0，传入 `--alpha-rejection-relational-kd 0.25` 能正确进入训练配置；聚焦测试 `3 passed`，相关 Python 编译检查和 `git diff --check` 通过。下一步先按 [`docs/team_a_representation/rejection_relational_kd_protocol.md`](docs/team_a_representation/rejection_relational_kd_protocol.md) 做 fresh split smoke，确认完整 runner 的配置唯一差异和训练历史落盘，再决定是否启动正式 pilot。本阶段没有性能结论。
+
+### 2026-11-19：关系型拒识表征蒸馏 smoke4 完成（实现验证，不作为性能证据）
+
+按协议在全新的 semantic-hard CIFAR-100 60/40 seed `2140` 上完成了 control/treatment 配对 smoke。两臂共用同一 teacher、split、学生初始化、数据顺序、训练预算、已有损失、known-validation checkpoint selection、matched mixed discovery pool、拒识器、known-only 95% coverage calibration 和 Auto-K 流程；唯一训练差异为 `alpha_rejection_relational_kd=0` 与固定 pilot 值 `1.0`。训练和 discovery 使用完整 train/validation/matched pool，仅将最终 test 限制为 256 个样本以缩短 smoke 时间，因此本轮不能用于正式性能比较。
+
+实现审计通过。control 的 `rejection_relational_kd` 为 `0.0`、rejection 分支对应梯度范数为 `0.0`；treatment 的关系损失为 `0.012881`、对应梯度范数为 `0.149851`，teacher 特征保持 detached。两臂 known validation accuracy 均为 `0.6400`。runner 报告的配置差异只有蒸馏系数及其派生的 checkpoint/work directory；结果中的 `pool_or_test_labels_used_for_training_or_selection` 为 `false`，rejector 和 calibration 字段也确认测试标签未参与训练或选择。
+
+smoke 的原始检测结果为：control AUROC/AUPR/OSCR `0.700119/0.602255/0.418554`，treatment `0.710845/0.620623/0.437998`；unknown reject 分别为 `0.158879/0.149533`。由于 test 只有 256 个样本，treatment 候选数只有 `23` 且 Auto-K 从 `3` 变为 `15`，聚类指标方差会被极少量候选和自动选 K 放大，不能把这些数值解释成算法收益。该 smoke 只证明新损失能正确进入总损失并更新 rejection 表征，未触发正式 pilot 的性能晋级判断。
+
+结果记录在 `analysis/rejection_relational_kd_s2140_smoke4.json`，运行目录为 `runs/rejection_relational_kd_s2140_smoke4_*`。下一步才考虑使用同一 seed 的完整 test 规模启动 formal pilot；在此之前不扫描系数，也不修改默认配置 `alpha_rejection_relational_kd=0`。

@@ -1116,6 +1116,15 @@ def build_parser():
         help="Cosine feature-KD weight for the optional rejection branch.",
     )
     p.add_argument(
+        "--alpha-rejection-relational-kd",
+        type=float,
+        default=0.0,
+        help=(
+            "Batch-wise relational KD weight from teacher classification features "
+            "to the student rejection representation; disabled by default."
+        ),
+    )
+    p.add_argument(
         "--rejection-feature-kd-weighting",
         choices=["inherit", "uniform", "teacher_uncertainty"],
         default="inherit",
@@ -4621,6 +4630,7 @@ def fit_student(args):
             rejection_variance_floor=args.rejection_variance_floor,
             alpha_rejection_kd=args.alpha_rejection_kd,
             alpha_rejection_feat_kd=args.alpha_rejection_feat_kd,
+            alpha_rejection_relational_kd=args.alpha_rejection_relational_kd,
             rejection_feature_kd_weighting=args.rejection_feature_kd_weighting,
             alpha_discovery_rejection_pu_feature_margin=(
                 args.alpha_discovery_rejection_pu_feature_margin

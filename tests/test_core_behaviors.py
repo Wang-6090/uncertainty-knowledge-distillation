@@ -722,6 +722,7 @@ class CommandLineTest(unittest.TestCase):
     def test_relational_distillation_is_disabled_by_default(self):
         args = parse_args(["train_student"])
         self.assertEqual(args.alpha_relational_kd, 0.0)
+        self.assertEqual(args.alpha_rejection_relational_kd, 0.0)
 
     def test_score_audit_rejector_modes_match_feature_builder(self):
         source = inspect.getsource(build_rejector_features)
@@ -3681,6 +3682,62 @@ class DiscoveryTrainingDispatchTest(unittest.TestCase):
         self.assertGreater(stats["relational_kd"], 0.0)
         self.assertGreater(
             stats["gradient_audit_grad_norm_relational_kd_term"], 0.0
+        )
+
+    def test_rejection_relational_distillation_updates_rejection_branch(self):
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = torch.nn.Linear(3, 5)
+                self.classifier = torch.nn.Linear(5, 2)
+                self.projector = torch.nn.Linear(5, 4)
+                self.uncertainty_head = torch.nn.Linear(5, 1)
+                self.rejection_encoder = torch.nn.Linear(3, 5)
+                self.rejection_classifier = torch.nn.Linear(5, 2)
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                inputs = images.mean(dim=(2, 3))
+                features = self.encoder(inputs)
+                rejection_features = self.rejection_encoder(inputs)
+                return {
+                    "logits": self.classifier(features),
+                    "features": features,
+                    "proj": F.normalize(self.projector(features), dim=-1),
+                    "uncertainty": torch.sigmoid(
+                        self.uncertainty_head(features)
+                    ).squeeze(-1),
+                    "rejection_features": rejection_features,
+                    "rejection_logits": self.rejection_classifier(rejection_features),
+                }
+
+        torch.manual_seed(31)
+        student = TinyModel()
+        teacher = TinyModel()
+        optimizer = torch.optim.SGD(student.parameters(), lr=0.01)
+        images = torch.rand(4, 3, 8, 8)
+        labels = torch.tensor([0, 1, 0, 1])
+        loader = [
+            (images, labels, labels, torch.ones(4, dtype=torch.bool), torch.arange(4))
+        ]
+
+        stats = train_one_epoch_student(
+            student,
+            teacher,
+            loader,
+            optimizer,
+            torch.device("cpu"),
+            alpha_unc=0.0,
+            alpha_kd=0.0,
+            alpha_rejection_relational_kd=1.0,
+            alpha_supcon=0.0,
+            audit_loss_gradients=True,
+        )
+
+        self.assertTrue(math.isfinite(stats["rejection_relational_kd"]))
+        self.assertGreater(stats["rejection_relational_kd"], 0.0)
+        self.assertGreater(
+            stats["gradient_audit_grad_norm_rejection_relational_kd_term"], 0.0
         )
 
     def test_uncertainty_separation_alone_consumes_discovery_batches(self):
