@@ -8572,3 +8572,5 @@ A 的匹配评测原始指标如下；括号内为 3 seed 均值 ± 样本标准
 本阶段不是性能实验，没有训练新 checkpoint，也没有宣称方法有效。下一阶段先实现不可覆盖的三臂 fresh-split runner：B=shared-MC-mean standard KL、D=unweighted DKD、U=uncertainty-gated DKD；预定 pilot seed 2132（启动前再次检查 split/run 目录）。runner 必须逐 epoch 保存 target/non-target KD loss、uncertainty 权重均值/标准差/ESS、KD 梯度和 optimizer 更新证据，并验证配置唯一差异。pilot 只作筛查；只有预注册条件通过，才在两个额外全新 semantic-hard split 上确认。当前标准默认和既有实验结论不变。
 
 **阶段二预检完成：**三臂 runner 已接入 `scripts/run_uncertainty_kd_core_pair.py --objective-profile ua_dkd`。它定义 `standard`、`decoupled`、`uncertainty_decoupled` 三个训练臂，要求各臂只在 `kd_mode` 上不同，并拒绝不完整或不匹配的旧目录；`--dry-run` 不训练、不写结果汇总。训练历史现在额外保存 target KD、non-target KD、实际加权 non-target KD、KD 梯度范数和学生分类头参数更新范数。seed 2132 的 dry-run 预检通过：本地 CIFAR-100 可用、GPU 为 RTX 4060 Laptop、semantic-hard 60/40 split 已生成，三臂 `alpha_kd=1`、known-validation checkpoint selection 和梯度审计均已确认。正式 pilot 尚未开始，当前没有性能结论。
+
+随后启动了 seed 2132 正式 pilot，但因需要关闭电脑在 teacher 训练约 45%（约第 191/422 个 batch）处手动中止。检查未发现可完成复用的 teacher/student checkpoint、训练历史或 discovery report，因此本次不产生任何性能结果，也不把中间状态纳入比较。下次继续前应重新执行同一命令；runner 会先检查现有目录，避免把不完整产物当作已完成实验。
