@@ -147,12 +147,18 @@ def main() -> None:
     parser.add_argument("--source-discover-config", type=Path, required=True)
     parser.add_argument("--tag", default="uncertainty_kd_core")
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate split/config/output paths and arm definitions without training or evaluation",
+    )
+    parser.add_argument(
         "--objective-profile",
-        choices=["current_auxiliary", "ce_only"],
+        choices=["current_auxiliary", "ce_only", "ua_dkd"],
         default="current_auxiliary",
         help=(
             "current_auxiliary compares the existing auxiliary-loss pipeline; "
-            "ce_only compares CE-only, CE+standard-KD, and CE+uncertainty-KD"
+            "ce_only compares CE-only, CE+standard-KD, and CE+uncertainty-KD; "
+            "ua_dkd compares standard KL, unweighted DKD, and uncertainty-gated DKD"
         ),
     )
     parser.add_argument(
@@ -176,6 +182,8 @@ def main() -> None:
 
     if options.kd_uncertainty_source != "head" and options.kd_mc_samples < 2:
         raise ValueError("--kd-mc-samples must be at least 2 for MC uncertainty")
+    if options.objective_profile == "ua_dkd" and options.include_no_kd:
+        raise ValueError("ua_dkd already defines a three-arm comparison; no-KD is not supported")
 
     teacher_source = resolve(options.source_teacher_config)
     student_source = resolve(options.source_student_config)
@@ -190,7 +198,7 @@ def main() -> None:
         raise ValueError("use known-only checkpoint selection for this experiment")
     if float(base_student.get("alpha_kd", 0.0)) <= 0.0:
         raise ValueError("logit KD must be active")
-    if options.objective_profile == "current_auxiliary":
+    if options.objective_profile in {"current_auxiliary", "ua_dkd"}:
         if base_student.get("discovery_pool_mode") != "mixed":
             raise ValueError("student reference config must use a mixed discovery pool")
         if float(base_student.get("alpha_rejection_kd", 0.0)) != 0.0:
@@ -206,6 +214,8 @@ def main() -> None:
     base_student["kd_mode"] = "standard"
     base_student["kd_uncertainty_source"] = options.kd_uncertainty_source
     base_student["kd_mc_samples"] = int(options.kd_mc_samples)
+    if options.objective_profile == "ua_dkd":
+        base_student["audit_loss_gradients"] = True
     base_student["open_val_ratio"] = 0.0
     base_discover = read_json(discover_source)
     if base_discover.get("threshold_policy") not in {"known_coverage", None}:
@@ -215,6 +225,11 @@ def main() -> None:
     data_root = (ROOT / str(base_student.get("data_root", ".\\data"))).resolve()
     for seed in options.seeds:
         split_dir = ROOT / f"splits/semantic_hard/seed{seed}"
+        prospective_split = split_dir / "cifar100_60_40_semantic_hard.json"
+        if options.dry_run and prospective_split.exists():
+            raise FileExistsError(
+                f"dry-run requires a fresh split path: {prospective_split}"
+            )
         split_path = make_split(seed, split_dir, data_root)
         split_metadata = read_json(split_path)
         if len(split_metadata.get("known_classes", [])) != 60 or len(split_metadata.get("novel_classes", [])) != 40:
@@ -224,7 +239,18 @@ def main() -> None:
         teacher_ckpt = teacher_dir / "teacher.pt"
         student_config_path = ROOT / "analysis" / f"{options.tag}_s{seed}_student_config.json"
         result_path = ROOT / "analysis" / f"{options.tag}_s{seed}.json"
-        if options.objective_profile == "ce_only":
+        if options.objective_profile == "ua_dkd":
+            arm_specs = [
+                ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
+                ("decoupled", "decoupled", "mean_normalized", float(base_student["alpha_kd"])),
+                (
+                    "uncertainty_decoupled",
+                    "uncertainty_decoupled",
+                    "mean_normalized",
+                    float(base_student["alpha_kd"]),
+                ),
+            ]
+        elif options.objective_profile == "ce_only":
             if options.include_no_kd:
                 raise ValueError("--include-no-kd is only valid for current_auxiliary")
             arm_specs = [
@@ -240,6 +266,43 @@ def main() -> None:
         arm_names = [spec[0] for spec in arm_specs]
         run_dirs = [ROOT / "runs" / f"{options.tag}_s{seed}_{arm}" for arm in arm_names]
         discover_dirs = [ROOT / "runs" / f"{options.tag}_s{seed}_{arm}_discover" for arm in arm_names]
+        if options.dry_run:
+            protected_paths = [
+                teacher_dir,
+                student_config_path,
+                result_path,
+                ROOT / "analysis" / f"{options.tag}_summary.json",
+                *run_dirs,
+                *discover_dirs,
+            ]
+            existing = [path for path in protected_paths if path.exists()]
+            if existing:
+                raise FileExistsError(
+                    "dry-run requires fresh output targets; existing paths: "
+                    + ", ".join(str(path) for path in existing)
+                )
+            print(
+                json.dumps(
+                    {
+                        "seed": int(seed),
+                        "split": str(split_path),
+                        "teacher": str(teacher_ckpt),
+                        "arms": [
+                            {"name": arm, "kd_mode": mode, "alpha_kd": alpha}
+                            for arm, mode, _weight_mode, alpha in arm_specs
+                        ],
+                        "training_budget": base_student.get("epochs"),
+                        "known_only_checkpoint_selection": (
+                            base_student.get("checkpoint_selection") == "known_acc"
+                        ),
+                        "gradient_audit": bool(base_student.get("audit_loss_gradients")),
+                    },
+                    indent=2,
+                ),
+                flush=True,
+            )
+            all_results[str(seed)] = "dry_run"
+            continue
         # Resume only from verifiable artifacts. Incomplete/unrecognized paths
         # are never overwritten.
         if result_path.exists():
@@ -264,7 +327,7 @@ def main() -> None:
                 recorded_config = completed_arms[arm].get("train_config", {})
                 if saved_config != recorded_config:
                     raise ValueError(f"completed result training config disagrees with its run artifact: {arm}, {result_path}")
-                expected_mode = "uncertainty" if arm == "uncertainty" else "standard"
+                expected_mode = next(spec[1] for spec in arm_specs if spec[0] == arm)
                 expected_alpha = 0.0 if arm in {"no_kd", "ce_only"} else float(base_student["alpha_kd"])
                 if (
                     saved_config.get("kd_mode") != expected_mode
@@ -330,6 +393,10 @@ def main() -> None:
             train_args.uncertainty_weight_mode = weight_mode
             existing_run = run_dir / "student.pt"
             if existing_run.is_file():
+                if not (run_dir / "train_history.json").is_file():
+                    raise FileNotFoundError(
+                        f"refusing to reuse checkpoint without training history: {run_dir}"
+                    )
                 saved_train_config = read_json(run_dir / "train_student_config.json")
                 if (
                     saved_train_config.get("kd_mode") != kd_mode
@@ -385,19 +452,53 @@ def main() -> None:
                 "best_epoch": training.get("best_epoch"),
                 "training_epochs": len(history),
                 "kd_loss_by_epoch": [stats.get("kd") for stats in train_stats],
+                "kd_target_by_epoch": [stats.get("kd_target") for stats in train_stats],
+                "kd_non_target_by_epoch": [stats.get("kd_non_target") for stats in train_stats],
+                "kd_non_target_weighted_by_epoch": [stats.get("kd_non_target_weighted") for stats in train_stats],
+                "kd_gradient_norm_by_epoch": [
+                    stats.get("gradient_audit_grad_norm_kd")
+                    for stats in train_stats
+                ],
+                "student_classifier_update_norm_by_epoch": [
+                    stats.get("student_classifier_update_norm")
+                    for stats in train_stats
+                ],
                 "feature_kd_loss_by_epoch": [stats.get("feat_kd") for stats in train_stats],
                 "kd_weight_applied_by_epoch": [stats.get("kd_uncertainty_weight_applied") for stats in train_stats],
                 "kd_weight_std_by_epoch": [stats.get("kd_weight_std") for stats in train_stats],
                 "kd_weight_ess_fraction_by_epoch": [stats.get("kd_weight_ess_fraction") for stats in train_stats],
+                "kd_gradient_norm_by_epoch": [
+                    stats.get("gradient_audit_grad_norm_kd")
+                    for stats in train_stats
+                ],
+                "student_classifier_update_norm_by_epoch": [
+                    stats.get("student_classifier_update_norm")
+                    for stats in train_stats
+                ],
             }
 
-        diff = config_differences(arms["standard"]["train_config"], arms["uncertainty"]["train_config"])
-        algorithm_diffs = {
-            key: values for key, values in diff.items()
-            if key not in {"kd_mode", "work_dir", "student_ckpt", "best_epoch", "best_val_known_acc", "best_checkpoint_selection_score", "best_open_checkpoint_stats", "transform_profile_requested"}
+        diff = {}
+        ignored_differences = {
+            "kd_mode", "work_dir", "student_ckpt", "best_epoch",
+            "best_val_known_acc", "best_checkpoint_selection_score",
+            "best_open_checkpoint_stats", "transform_profile_requested",
         }
-        if algorithm_diffs:
-            raise RuntimeError(f"unexpected paired training config differences for seed {seed}: {algorithm_diffs}")
+        for arm in arm_names:
+            if arm == "standard":
+                continue
+            arm_diff = config_differences(
+                arms["standard"]["train_config"], arms[arm]["train_config"]
+            )
+            algorithm_diffs = {
+                key: values for key, values in arm_diff.items()
+                if key not in ignored_differences
+            }
+            if algorithm_diffs:
+                raise RuntimeError(
+                    f"unexpected training config differences for standard vs {arm}, "
+                    f"seed {seed}: {algorithm_diffs}"
+                )
+            diff[arm] = arm_diff
         control_arm = "ce_only" if options.objective_profile == "ce_only" else "no_kd"
         if options.include_no_kd or options.objective_profile == "ce_only":
             no_kd_diffs = config_differences(arms["standard"]["train_config"], arms[control_arm]["train_config"])
@@ -427,12 +528,33 @@ def main() -> None:
         standard_arm = "standard" if "standard" in arms else "no_kd"
         if any(arms[standard_arm]["kd_weight_applied_by_epoch"]):
             raise RuntimeError(f"standard-KD arm unexpectedly applied uncertainty weights for seed {seed}")
-        if not all(arms["uncertainty"]["kd_weight_applied_by_epoch"]):
+        uncertainty_arm = (
+            "uncertainty_decoupled"
+            if options.objective_profile == "ua_dkd"
+            else "uncertainty"
+        )
+        if not all(arms[uncertainty_arm]["kd_weight_applied_by_epoch"]):
             raise RuntimeError(f"uncertainty-KD arm did not apply weights in every epoch for seed {seed}")
-        if any(value is None or value <= 1e-8 for value in arms["uncertainty"]["kd_weight_std_by_epoch"]):
+        if any(value is None or value <= 1e-8 for value in arms[uncertainty_arm]["kd_weight_std_by_epoch"]):
             raise RuntimeError(f"uncertainty-KD weights have no measurable spread for seed {seed}")
-        if any(value is None or value <= 0.0 for value in arms["uncertainty"]["kd_loss_by_epoch"]):
+        if any(value is None or value <= 0.0 for value in arms[uncertainty_arm]["kd_loss_by_epoch"]):
             raise RuntimeError(f"uncertainty-KD loss path was not active for seed {seed}")
+        if options.objective_profile == "ua_dkd":
+            for arm in ("decoupled", "uncertainty_decoupled"):
+                for key in (
+                    "kd_target_by_epoch",
+                    "kd_non_target_by_epoch",
+                    "kd_non_target_weighted_by_epoch",
+                    "kd_gradient_norm_by_epoch",
+                    "student_classifier_update_norm_by_epoch",
+                ):
+                    values = arms[arm][key]
+                    if len(values) != arms[arm]["training_epochs"] or any(v is None for v in values):
+                        raise RuntimeError(f"missing {key} mechanism audit for {arm}, seed {seed}")
+                if any(value <= 0.0 for value in arms[arm]["kd_gradient_norm_by_epoch"]):
+                    raise RuntimeError(f"{arm} KD has zero classifier gradient in seed {seed}")
+                if any(value <= 0.0 for value in arms[arm]["student_classifier_update_norm_by_epoch"]):
+                    raise RuntimeError(f"{arm} student classifier did not update in seed {seed}")
         if "standard" in arms and any(value is None or value <= 0.0 for value in arms["standard"]["kd_loss_by_epoch"]):
             raise RuntimeError(f"standard-KD loss path was not active for seed {seed}")
         for arm in arm_names:
@@ -473,6 +595,16 @@ def main() -> None:
         }
         write_json(result_path, result)
         all_results[str(seed)] = str(result_path)
+
+    if options.dry_run:
+        print(
+            json.dumps(
+                {"dry_run": True, "validated_seeds": sorted(all_results)},
+                indent=2,
+            ),
+            flush=True,
+        )
+        return
 
     summary_path = ROOT / "analysis" / f"{options.tag}_summary.json"
     previous_results = read_json(summary_path).get("seeds", {}) if summary_path.exists() else {}

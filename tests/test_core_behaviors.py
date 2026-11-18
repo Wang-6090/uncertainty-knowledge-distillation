@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 import inspect
+import copy
 from unittest.mock import patch
 from pathlib import Path
 
@@ -2374,6 +2375,80 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(
             parse_args(["train_student", "--kd-mode", "uncertainty"]).kd_mode,
             "uncertainty",
+        )
+        self.assertEqual(
+            parse_args(["train_student", "--kd-mode", "decoupled"]).kd_mode,
+            "decoupled",
+        )
+        self.assertEqual(
+            parse_args(
+                ["train_student", "--kd-mode", "uncertainty_decoupled"]
+            ).kd_mode,
+            "uncertainty_decoupled",
+        )
+
+    def test_decoupled_kd_modes_log_components_gradients_and_parameter_updates(self):
+        class TinyKDModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = torch.nn.Linear(3, 5)
+                self.classifier = torch.nn.Linear(5, 3)
+                self.projector = torch.nn.Linear(5, 4)
+                self.uncertainty_head = torch.nn.Linear(5, 1)
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                features = self.encoder(images.mean(dim=(2, 3)))
+                return {
+                    "logits": self.classifier(features),
+                    "features": features,
+                    "proj": F.normalize(self.projector(features), dim=-1),
+                    "uncertainty": torch.sigmoid(
+                        self.uncertainty_head(features)
+                    ).squeeze(-1),
+                }
+
+        torch.manual_seed(821)
+        initial_student = TinyKDModel()
+        teacher = TinyKDModel()
+        images = torch.rand(6, 3, 8, 8)
+        labels = torch.tensor([0, 1, 2, 0, 1, 2])
+        loader = [
+            (images, labels, labels, torch.ones(6, dtype=torch.bool), torch.arange(6))
+        ]
+        results = {}
+        for mode in ("decoupled", "uncertainty_decoupled"):
+            student = copy.deepcopy(initial_student)
+            optimizer = torch.optim.SGD(student.parameters(), lr=0.05)
+            stats = train_one_epoch_student(
+                student,
+                teacher,
+                loader,
+                optimizer,
+                torch.device("cpu"),
+                kd_mode=mode,
+                kd_uncertainty_source="head",
+                uncertainty_weight_mode="mean_normalized",
+                alpha_kd=1.0,
+                alpha_unc=0.0,
+                alpha_feat_kd=0.0,
+                alpha_supcon=0.0,
+                alpha_proto=0.0,
+                audit_loss_gradients=True,
+            )
+            results[mode] = stats
+            self.assertGreater(stats["kd_target"], 0.0)
+            self.assertGreater(stats["kd_non_target"], 0.0)
+            self.assertGreater(stats["kd_non_target_weighted"], 0.0)
+            self.assertGreater(stats["gradient_audit_grad_norm_kd"], 0.0)
+            self.assertGreater(stats["student_classifier_update_norm"], 0.0)
+
+        self.assertFalse(results["decoupled"]["kd_uncertainty_weight_applied"])
+        self.assertTrue(results["uncertainty_decoupled"]["kd_uncertainty_weight_applied"])
+        self.assertAlmostEqual(
+            results["decoupled"]["kd_target"],
+            results["uncertainty_decoupled"]["kd_target"],
+            places=7,
         )
 
     def test_bundle_builder_forwards_calibration_overlap_control(self):

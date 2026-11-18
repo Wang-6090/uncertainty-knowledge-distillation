@@ -176,10 +176,11 @@ def uncertainty_decoupled_distillation_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
     labels: torch.Tensor,
-    teacher_uncertainty: torch.Tensor,
+    teacher_uncertainty: torch.Tensor | None = None,
     temperature: float = 2.0,
     uncertainty_weight_mode: str = "mean_normalized",
-) -> torch.Tensor:
+    return_components: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     return uncertainty_decoupled_kl_loss(
         student_logits,
         teacher_logits,
@@ -187,6 +188,7 @@ def uncertainty_decoupled_distillation_loss(
         teacher_uncertainty,
         temperature=temperature,
         uncertainty_weight_mode=uncertainty_weight_mode,
+        return_components=return_components,
     )
 
 

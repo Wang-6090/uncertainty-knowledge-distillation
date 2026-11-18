@@ -59,10 +59,11 @@ def uncertainty_decoupled_kl_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
     labels: torch.Tensor,
-    teacher_uncertainty: torch.Tensor,
+    teacher_uncertainty: torch.Tensor | None = None,
     temperature: float = 2.0,
     uncertainty_weight_mode: str = "mean_normalized",
-) -> torch.Tensor:
+    return_components: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Decouple target-class and non-target KD; gate only non-target transfer.
 
     The target-vs-rest term remains unweighted. Detached teacher uncertainty
@@ -74,7 +75,7 @@ def uncertainty_decoupled_kl_loss(
     batch_size, class_count = student_logits.shape
     if labels.shape != (batch_size,):
         raise ValueError("labels must have shape [batch_size]")
-    if teacher_uncertainty.shape != (batch_size,):
+    if teacher_uncertainty is not None and teacher_uncertainty.shape != (batch_size,):
         raise ValueError("teacher_uncertainty must have shape [batch_size]")
     if batch_size == 0:
         return _zero_loss(student_logits)
@@ -119,8 +120,17 @@ def uncertainty_decoupled_kl_loss(
         F.softmax(teacher_non_target, dim=1),
         reduction="none",
     ).sum(dim=1)
-    weights = uncertainty_weights(teacher_uncertainty, mode=uncertainty_weight_mode)
-    return ((target_kl + weights * non_target_kl).mean()) * (temperature**2)
+    weights = (
+        uncertainty_weights(teacher_uncertainty, mode=uncertainty_weight_mode)
+        if teacher_uncertainty is not None
+        else torch.ones_like(non_target_kl)
+    )
+    target_term = target_kl.mean() * (temperature**2)
+    non_target_term = non_target_kl.mean() * (temperature**2)
+    weighted_non_target_term = (weights * non_target_kl).mean() * (temperature**2)
+    if return_components:
+        return target_term, non_target_term, weighted_non_target_term
+    return target_term + weighted_non_target_term
 
 
 def kl_distillation_loss(

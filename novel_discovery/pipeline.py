@@ -1906,6 +1906,10 @@ def train_one_epoch_student(
     teacher.eval()
     ce_meter = AverageMeter()
     kd_meter = AverageMeter()
+    kd_target_meter = AverageMeter()
+    kd_non_target_meter = AverageMeter()
+    kd_non_target_weighted_meter = AverageMeter()
+    student_classifier_update_meter = AverageMeter()
     kd_weight_mean_meter = AverageMeter()
     kd_weight_std_meter = AverageMeter()
     kd_weight_ess_meter = AverageMeter()
@@ -2170,15 +2174,28 @@ def train_one_epoch_student(
                     "rejection_feature_kd_weighting must be inherit, "
                     "uniform, or teacher_uncertainty"
                 )
-        if kd_mode == "uncertainty_decoupled":
-            loss_kd = uncertainty_decoupled_distillation_loss(
+        loss_kd_target = s_out["logits"].new_tensor(0.0)
+        loss_kd_non_target = s_out["logits"].new_tensor(0.0)
+        loss_kd_non_target_weighted = s_out["logits"].new_tensor(0.0)
+        if kd_mode in {"decoupled", "uncertainty_decoupled"}:
+            (
+                loss_kd_target,
+                loss_kd_non_target,
+                loss_kd_non_target_weighted,
+            ) = uncertainty_decoupled_distillation_loss(
                 s_out["logits"],
                 teacher_kd_logits,
                 labels,
-                teacher_kd_uncertainty_value,
+                (
+                    teacher_kd_uncertainty_value
+                    if kd_mode == "uncertainty_decoupled"
+                    else None
+                ),
                 temperature=temperature,
                 uncertainty_weight_mode=uncertainty_weight_mode,
+                return_components=True,
             )
+            loss_kd = loss_kd_target + loss_kd_non_target_weighted
         else:
             loss_kd = distillation_loss(
                 s_out["logits"],
@@ -4640,9 +4657,22 @@ def train_one_epoch_student(
             gradient_audit_batches += 1
             for name, value in gradient_diagnostics.items():
                 gradient_audit_sums[name] = gradient_audit_sums.get(name, 0.0) + value
+        classifier_before_step = (
+            [parameter.detach().clone() for parameter in classifier_parameters]
+            if audit_loss_gradients
+            else None
+        )
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if classifier_before_step is not None:
+            update_sq = sum(
+                (parameter.detach() - before).float().square().sum()
+                for parameter, before in zip(classifier_parameters, classifier_before_step)
+            )
+            student_classifier_update_meter.update(
+                float(update_sq.sqrt().item()), images.size(0)
+            )
         if (
             joint_pseudo_target_model is not None
             and joint_pseudo_target_novel_head is not None
@@ -4721,6 +4751,11 @@ def train_one_epoch_student(
             update_ema_model(discovery_selection_model, student, decay=discovery_ema_decay)
         ce_meter.update(loss_ce.item(), images.size(0))
         kd_meter.update(loss_kd.item(), images.size(0))
+        kd_target_meter.update(loss_kd_target.item(), images.size(0))
+        kd_non_target_meter.update(loss_kd_non_target.item(), images.size(0))
+        kd_non_target_weighted_meter.update(
+            loss_kd_non_target_weighted.item(), images.size(0)
+        )
         kd_weight_mean_meter.update(diagnostic_kd_weights.mean().item(), images.size(0))
         kd_weight_std_meter.update(
             diagnostic_kd_weights.std(unbiased=False).item(), images.size(0)
@@ -4916,6 +4951,9 @@ def train_one_epoch_student(
     stats = {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
+        "kd_target": kd_target_meter.avg,
+        "kd_non_target": kd_non_target_meter.avg,
+        "kd_non_target_weighted": kd_non_target_weighted_meter.avg,
         "kd_uncertainty_weight_applied": bool(
             kd_mode in {"uncertainty", "uncertainty_decoupled"}
         ),
@@ -5099,6 +5137,7 @@ def train_one_epoch_student(
     }
     if audit_loss_gradients:
         stats["gradient_audit_batches"] = gradient_audit_batches
+        stats["student_classifier_update_norm"] = student_classifier_update_meter.avg
         for name, total in gradient_audit_sums.items():
             stats[f"gradient_audit_{name}"] = total / max(gradient_audit_batches, 1)
     return stats

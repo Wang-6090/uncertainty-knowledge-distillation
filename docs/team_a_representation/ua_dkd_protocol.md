@@ -95,5 +95,7 @@ Auto-K, and promotion decisions. They are used only for final metrics.
 
 The `uncertainty_decoupled` opt-in loss helper and CLI mode are implemented.
 The existing default remains `standard`; no training run has yet used the new
-mode. Focused unit tests pass. A paired runner with strict no-overwrite and
-configuration audits is required before Stage 2.
+mode. The paired runner now supports `--objective-profile ua_dkd`, strict
+no-overwrite checks, a `--dry-run` preflight, configuration audits, per-epoch
+component extraction, gradient checks, and optimizer-update checks. The
+seed-2132 preflight passed; the formal pilot is the next action.
