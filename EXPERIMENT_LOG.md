@@ -8670,3 +8670,9 @@ U 没有稳定降低已知误拒或提高候选纯度；它在两个确认 seed 
 smoke 的原始检测结果为：control AUROC/AUPR/OSCR `0.700119/0.602255/0.418554`，treatment `0.710845/0.620623/0.437998`；unknown reject 分别为 `0.158879/0.149533`。由于 test 只有 256 个样本，treatment 候选数只有 `23` 且 Auto-K 从 `3` 变为 `15`，聚类指标方差会被极少量候选和自动选 K 放大，不能把这些数值解释成算法收益。该 smoke 只证明新损失能正确进入总损失并更新 rejection 表征，未触发正式 pilot 的性能晋级判断。
 
 结果记录在 `analysis/rejection_relational_kd_s2140_smoke4.json`，运行目录为 `runs/rejection_relational_kd_s2140_smoke4_*`。下一步才考虑使用同一 seed 的完整 test 规模启动 formal pilot；在此之前不扫描系数，也不修改默认配置 `alpha_rejection_relational_kd=0`。
+
+### 2026-11-19：正式 pilot 因关机中止（无性能结论）
+
+在 smoke4 通过并完成代码推送后，启动了 seed `2140` 的 full-test formal pilot，输出标签为 `rejection_relational_kd_s2140_formal`。运行前确认 teacher、control、treatment 和汇总结果目录均不存在，避免覆盖已有 smoke 或旧实验。正式运行使用完整 test 规模和默认训练预算；共享 teacher 已完成并落盘，但 control student 训练约在中途因准备关电脑而手动中止，未完成配对 discovery，也没有可用的 formal 汇总结果。
+
+本次中间 checkpoint、历史和目录不纳入结果比较；下次继续前先按 runner 的完整性检查处理现有目录，确认是否只能从头重跑。该次中止不改变默认配置、不产生性能结论，也不触发阶段晋级判断。
