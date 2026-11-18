@@ -8574,3 +8574,21 @@ A 的匹配评测原始指标如下；括号内为 3 seed 均值 ± 样本标准
 **阶段二预检完成：**三臂 runner 已接入 `scripts/run_uncertainty_kd_core_pair.py --objective-profile ua_dkd`。它定义 `standard`、`decoupled`、`uncertainty_decoupled` 三个训练臂，要求各臂只在 `kd_mode` 上不同，并拒绝不完整或不匹配的旧目录；`--dry-run` 不训练、不写结果汇总。训练历史现在额外保存 target KD、non-target KD、实际加权 non-target KD、KD 梯度范数和学生分类头参数更新范数。seed 2132 的 dry-run 预检通过：本地 CIFAR-100 可用、GPU 为 RTX 4060 Laptop、semantic-hard 60/40 split 已生成，三臂 `alpha_kd=1`、known-validation checkpoint selection 和梯度审计均已确认。正式 pilot 尚未开始，当前没有性能结论。
 
 随后启动了 seed 2132 正式 pilot，但因需要关闭电脑在 teacher 训练约 45%（约第 191/422 个 batch）处手动中止。检查未发现可完成复用的 teacher/student checkpoint、训练历史或 discovery report，因此本次不产生任何性能结果，也不把中间状态纳入比较。下次继续前应重新执行同一命令；runner 会先检查现有目录，避免把不完整产物当作已完成实验。
+
+### 2026-11-18：UA-DKD seed 2132 pilot 完成及阶段筛查
+
+本轮从头重新执行此前中止的正式 pilot，使用同一个 semantic-hard CIFAR-100 60/40 seed `2132`。三臂共用同一 teacher、同一 MC-mean logits、同一学生初始化和训练/评测协议：`standard` 为普通 KL，`decoupled` 为无权重 DKD，`uncertainty_decoupled`（U）只对 DKD 的 conditional non-target 项使用教师 `mc_epistemic` 不确定性权重，MC 次数为 4。feature KD、rejection-branch KD 和其他辅助系数保持关闭；checkpoint 只按 known validation accuracy 选择；阈值校准只用 known validation；自动 K 只用候选池几何；未知标签只用于最终指标。结果写入 `analysis/team_a_ua_dkd_s2132_s2132.json`，未覆盖已有运行目录。
+
+运行前和运行中均检查了三臂的配置、目录、检查点与落盘历史。三臂均成功完成 4 轮训练和 discovery；训练历史包含 target/non-target KD 分项、加权 non-target KD、KD 梯度范数和学生分类头参数更新范数。U 的 `kd_uncertainty_weight_applied` 每轮均为 true，KD 梯度和学生分类头更新均为非零，说明蒸馏项确实进入总损失并产生了学生更新。教师权重均值约为 `1.0`，标准差约 `0.0112`，ESS fraction 约 `0.99984`；因此本轮不确定性重加权的幅度很小，不能把结果解释为强烈的样本筛选效应。
+
+检测指标与聚类指标分开报告如下；括号内为相对 `standard` 的变化：
+
+| 方法 | AUROC | AUPR | FPR95 | OSCR | known acc | known accept | unknown reject | 候选纯度 | Auto-K | Cluster ACC / NMI / ARI |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| standard | 0.785963 | 0.675934 | 0.624667 | 0.583288 | 0.692500 | 0.948833 | 0.236000 | 0.754596 | 32 | 0.243006 / 0.471349 / 0.143704 |
+| decoupled | 0.784961 (-0.001002) | 0.684005 (+0.008071) | 0.637500 (+0.012833) | 0.576920 (-0.006368) | 0.689500 (-0.003000) | 0.945667 (-0.003167) | 0.261750 (+0.025750) | 0.762564 (+0.007967) | 33 | 0.272396 / 0.501989 / 0.164903 |
+| U: uncertainty-decoupled | 0.791363 (+0.005401) | 0.690929 (+0.014994) | 0.625667 (+0.001000) | 0.584779 (+0.001490) | 0.691167 (-0.001333) | 0.955833 (+0.007000) | 0.240500 (+0.004500) | 0.784026 (+0.029430) | 35 | 0.260799 / 0.495793 / 0.151343 |
+
+DKD 的机制分解给出一个有用的归因线索：`decoupled` 相对 `standard` 的 AUROC 略降，但 AUPR、unknown reject、候选纯度和三项聚类指标提高；U 在此基础上进一步改善 AUROC、AUPR、OSCR、候选纯度、Cluster ACC/NMI/ARI，同时 known accuracy 仅下降 `0.133` 个百分点，known accept 上升 `0.700` 个百分点。U 的 FPR95 相对 standard 上升 `0.100` 个百分点，属于本轮需要保留的轻微代价。单个 seed 不能证明稳定泛化，也不能把 DKD 结构收益与不确定性权重收益完全分开；由于 ESS 接近 1，当前证据更支持“解耦蒸馏是主要候选机制，不确定性门控作用尚弱”的工作假设。
+
+按预注册 pilot 筛查规则，U 同时改善了至少一个排序指标（AUROC/OSCR）和至少一个下游指标（候选纯度、Auto-K NMI/ARI），known accuracy 和 known acceptance 均未超过 1 个百分点的下降阈值，未出现需要淘汰该方向的主要指标恶化。因此本 pilot 记为“通过筛查，允许进入阶段三”，下一步在两个全新的 semantic-hard seed 上复现三臂协议；不在 seed 2132 上继续扫权重或调参，也不修改默认 `standard`。阶段三仍需逐 seed 报告原始指标、均值/标准差及完整机制审计；若确认阶段失败，则保留本 pilot 作为探索性结果，不晋升 UA-DKD 为默认方法。

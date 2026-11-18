@@ -94,8 +94,11 @@ Auto-K, and promotion decisions. They are used only for final metrics.
 ## Implementation status
 
 The `uncertainty_decoupled` opt-in loss helper and CLI mode are implemented.
-The existing default remains `standard`; no training run has yet used the new
-mode. The paired runner now supports `--objective-profile ua_dkd`, strict
-no-overwrite checks, a `--dry-run` preflight, configuration audits, per-epoch
-component extraction, gradient checks, and optimizer-update checks. The
-seed-2132 preflight passed; the formal pilot is the next action.
+The existing default remains `standard`. The seed-2132 pilot completed with
+the three planned arms and passed the exploratory screening rule, so the next
+action is confirmation on two fresh semantic-hard seeds; this is not a final
+promotion decision. The paired runner supports `--objective-profile ua_dkd`,
+strict no-overwrite checks, a `--dry-run` preflight, configuration audits,
+per-epoch component extraction, gradient checks, and optimizer-update checks.
+The pilot's full metrics and audit interpretation are recorded in
+`EXPERIMENT_LOG.md`.
