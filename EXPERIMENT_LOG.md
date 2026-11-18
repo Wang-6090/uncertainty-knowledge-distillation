@@ -8490,3 +8490,35 @@ s2131 原始 AUROC 为 `0.795939`，边界不确定性修正后为 `0.803073`，
 AUROC、AUPR、FPR95 和 OSCR 均不变，符合该实验只改变决策阈值、不改变分数排序的预期。工作点上，未知拒识率由 `27.33%` 升至 `36.58%`（`+9.25` 个百分点），但已知接受率由 `95.45%` 降至 `90.92%`（`−4.53` 个百分点）。候选池从 `1,366` 增至 `2,008` 个样本（`+642`），其中误拒已知样本从 `273` 增至 `545`，候选纯度由 `80.01%` 降至 `72.86%`。未知样本上的聚类 ACC/NMI/ARI 分别由 `53.89%/0.6316/0.4265` 降至 `50.31%/0.6174/0.4015`。
 
 判断：类别条件阈值只是提高拒识力度，代价是已知类别误拒和候选池污染增加；它没有改善排序能力或端到端聚类质量。结合此前多组类别条件阈值审计中已知接受率损失和校准有限样本不稳定的结果，不继续该阈值分支的参数扫描，不改默认策略。该 pilot 仅覆盖一个类别组合，作为工作点权衡诊断，不视为算法增益或独立复现。结果见 [`analysis/class_conditional_threshold_pilot_s2129.json`](analysis/class_conditional_threshold_pilot_s2129.json)；运行及配置审计见 [`scripts/run_class_conditional_threshold_pilot_s2129.py`](scripts/run_class_conditional_threshold_pilot_s2129.py)。
+### 2026-11-18：Team A seed 3407 补齐与 A/B/C 兼容性、蒸馏机制审计
+
+本轮目标是补齐共同 CIFAR-100 random 60/40 协议中缺失的 A（CE-only），并确认它能否与已有 B（CE+standard logits-KD）、C（CE+uncertainty-weighted logits-KD）比较。运行前核对了分工文档、42/123 的 A/B 配置、3407 的 B/C 配置、教师/学生检查点及评测参数。`runs/audit_kd_*_s3407` 是 512/128/512 样本、2 轮的 smoke 运行，未用于正式比较；正式 B/C 在 `runs/revised_ms_s3407_*`，已使用完整数据训练 15 轮，故没有重复训练 B/C。
+
+仅在全新目录 `runs/revised_ms_s3407_A_ce` 按正式 runner 的 A 配方训练一次：seed 3407、ResNet-34 教师/预训练 ResNet-18 学生、完整 CIFAR-100 60/40、15 epochs、batch size 64、学习率 `0.001`、weight decay `0.0001`，`alpha_kd=0`，其余记录的训练损失系数为 0；checkpoint 仅按 known validation accuracy 选择，最佳轮次 14，known-val accuracy `0.6357`。`alpha_joint_*` 虽在新配置中为非零值，但 `joint_discovery=false`，逐轮相关损失为 0，未进入目标。训练历史每轮都记录 `kd_uncertainty_weight_applied=false`；因此 KD meter 中的 KL 数值只是监控量，不代表 KD 参与优化。数据划分固定为 60 known/40 novel；未知类训练标签未用于 A 的训练或 checkpoint 选择。
+
+评测前检查发现当前 CLI 的聚类特征默认值已与 3407 B/C 保存值不同。第一轮 A 评测使用了默认 `feature_pca`，只保留在 `runs/revised_ms_s3407_A_ce_detect_auto` 和 `runs/revised_ms_s3407_A_ce_detect_oracle` 作为非匹配诊断，不用于比较。随后在全新评测目录用 B/C 相同的 `projection_pca`、KMeans、32 维 PCA、silhouette Auto-K、MC=8、`normalized_entropy_mahalanobis`、global known-validation threshold 重新评估 A 的三个冻结 checkpoint；另报 oracle-K 作为聚类上限参照。测试标签只用于最终指标计算，未用于训练、阈值校准或 Auto-K 选择。
+
+A 的匹配评测原始指标如下；括号内为 3 seed 均值 ± 样本标准差。三种子类别划分并非独立数据集，统计仅作描述性汇总。
+
+| Seed | AUROC | AUPR | FPR95 | OSCR | known accuracy | known accept | unknown reject | 候选数 / 纯度 | Auto-K | Auto ACC / NMI / ARI |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 42 | 0.573339 | 0.440661 | 0.912500 | 0.404618 | 0.622333 | 0.951167 | 0.051000 | 497 / 0.4105 | 48 | 0.3260 / 0.6222 / 0.1967 |
+| 123 | 0.547681 | 0.426425 | 0.920667 | 0.374708 | 0.607333 | 0.948167 | 0.054500 | 529 / 0.4121 | 48 | 0.2703 / 0.5793 / 0.1073 |
+| 3407 | 0.587688 | 0.461592 | 0.908667 | 0.403791 | 0.612667 | 0.946833 | 0.079000 | 635 / 0.4976 | 43 | 0.2079 / 0.5092 / 0.0599 |
+| 均值 ± SD | 0.569569 ± 0.020268 | 0.442893 ± 0.017689 | 0.913944 ± 0.006129 | 0.394372 ± 0.017035 | 0.614111 ± 0.007604 | 0.948722 ± 0.002219 | 0.061500 ± 0.015256 | 553.7 ± 72.2 / 0.4401 ± 0.0499 | 46.33 ± 2.89 | 0.2681 ± 0.0591 / 0.5702 ± 0.0571 / 0.1213 ± 0.0694 |
+
+3407 同 seed 的 A/B/C 匹配检测与 Auto-K 结果：
+
+| 方法 | AUROC | AUPR | FPR95 | OSCR | known accuracy | known accept | unknown reject | 候选数 / 纯度 | Auto-K | Auto ACC / NMI / ARI |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A：CE-only | 0.587688 | 0.461592 | 0.908667 | 0.403791 | 0.612667 | 0.946833 | 0.079000 | 635 / 0.4976 | 43 | 0.2079 / 0.5092 / 0.0599 |
+| B：standard-KD | 0.552374 | 0.425206 | 0.900333 | 0.296197 | 0.430333 | 0.948000 | 0.050000 | 512 / 0.3906 | 44 | 0.2715 / 0.5585 / 0.0918 |
+| C：uncertainty-KD | 0.535086 | 0.412703 | 0.902333 | 0.281314 | 0.410500 | 0.952833 | 0.044000 | 459 / 0.3834 | 39 | 0.2266 / 0.5617 / 0.0772 |
+
+该 seed 上 A 的分类准确率、AUROC、OSCR、未知拒识率和候选纯度优于 B/C，但 A 的 Auto-K 聚类 ACC 低于 B，NMI/ARI 也没有一致排序；单个 seed 不足以认定 CE-only 整体优越。B/C 的正式三 seed 汇总已经存在，但旧 42/123 detection reports 缺 AUPR、OSCR、候选池明细等字段；其 Auto-K/K 指标也受旧版评测配置影响。因此不把 A 的新聚类值与旧 B/C 聚类值伪装成完全统一的三方法三种子完整主表。旧 A 的自动 K 约为 2，而按 B/C 保存的 `projection_pca` 配置重评后为 43–48，已确认旧 A 聚类结果不可与当前口径混用。
+
+机制审计方面，3407 B/C 配置唯一声明的训练处理差异是 `kd_mode`（standard vs uncertainty），其余已保存核心设置相同：同一 CIFAR-100 60/40 划分、同一 seed-matched ResNet-34 teacher、预训练 ResNet-18 student、完整数据、15 epochs、batch size/优化器/温度相同、`alpha_kd=1`、`alpha_unc=0`，feature KD、SupCon、prototype 系数为 0。known-validation checkpoint selection 分别选到 B epoch 15（0.4433）与 C epoch 14（0.4197）；检测配置除 student checkpoint 和输出目录外一致。KD loss 在当前训练代码中是逐样本 KL，经系数 `alpha_kd` 加入总损失；uncertainty 模式用 detached 教师不确定性生成 `exp(-u)` 权重，再参与逐样本 KL 均值。
+
+历史 B/C config 没有保存 `kd_uncertainty_source`，结合旧代码默认、既有历史证据审计及项目记录，来源为教师 learned uncertainty head；学生 uncertainty head 的辅助监督因 `alpha_unc=0` 关闭。该来源判断有配置默认值和历史文档支持，但运行目录未保存当时源码 commit/hash。更关键的是，3407 B/C 的 `train_history.json` 只有原始 KD loss 与其他损失，没有 `kd_weight_mean/std/ESS`、KD 专项梯度或参数更新审计；所以无法从该次历史运行直接报告其权重分布或逐项梯度。当前新 A 的同教师训练批次上，未应用的诊断权重均值约 `0.825`、标准差约 `0.114`、ESS fraction 约 `0.981`，显示这个教师信号在该训练数据视图上接近均匀；这是本轮对教师输出的诊断，不冒充历史 C 的逐 epoch 权重记录。loss 的静态调用路径证明当前实现会把加权 KD 纳入总目标，但没有历史梯度日志便不能宣称已对这次 B/C checkpoint 做过独立的 KD-only 参数更新验证。教师蒸馏权重、学生不确定性 head、拒识分数和分类熵仍需分别解释。
+
+当前判断：A 已按可核验的 CE-only 配方补齐并完成三种子统一检测评测；同 seed 3407 中 uncertainty-KD 没有胜过 standard-KD，且两者都没有胜过 A 的多项检测指标，但聚类指标存在权衡，不能据此得出整体方法排序。已有 uncertainty-KD 三种子证据仍不支持其成为默认方法。暂不扫权重，也不重复旧 B/C 训练；下一步若要把机制审计补到强证据，应在新预注册划分上启用显式训练诊断，记录 source、每轮权重均值/标准差/ESS、KD 梯度及 optimizer step 前后学生参数变化，并同步保存统一评测参数和所有报告字段。
