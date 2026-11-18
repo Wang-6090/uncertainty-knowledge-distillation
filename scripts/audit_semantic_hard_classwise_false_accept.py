@@ -37,7 +37,7 @@ def audit_classwise_false_accept(
     expected_novel: dict[int, set[int]] = {}
 
     for seed in seeds:
-        split_path = split_root / f"splits_cifar100_semantic_hard_seed{seed}" / "cifar100_60_40_semantic_hard.json"
+        split_path = split_root / f"splits/semantic_hard/seed{seed}" / "cifar100_60_40_semantic_hard.json"
         split = json.loads(split_path.read_text(encoding="utf-8"))
         novel_classes = {int(value) for value in split["novel_classes"]}
         expected_novel[seed] = novel_classes

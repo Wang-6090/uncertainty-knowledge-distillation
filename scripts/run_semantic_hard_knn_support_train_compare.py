@@ -51,7 +51,7 @@ def main() -> None:
     if not all(path.is_file() for path in sources):
         raise FileNotFoundError("Source configs and a split-compatible teacher checkpoint are required")
 
-    split_path = ROOT / "splits_cifar100_protocols" / "cifar100_60_40_semantic_hard.json"
+    split_path = ROOT / "splits/protocols" / "cifar100_60_40_semantic_hard.json"
     arms = {"baseline": 0.0, "knn_support_boundary": float(args.alpha_knn)}
     output_dirs = {
         name: (

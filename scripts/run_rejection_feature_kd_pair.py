@@ -95,7 +95,7 @@ def main() -> None:
             raise FileNotFoundError(path)
 
     seed = int(options.seed)
-    split_path = ROOT / f"splits_cifar100_semantic_hard_seed{seed}" / "cifar100_60_40_semantic_hard.json"
+    split_path = ROOT / f"splits/semantic_hard/seed{seed}" / "cifar100_60_40_semantic_hard.json"
     base_student = read_json(sources[1])
     if base_student.get("independent_rejection_encoder") is not True:
         raise ValueError("source student must use the validated independent rejection branch")
@@ -122,7 +122,11 @@ def main() -> None:
     )
     run_dirs = {arm: ROOT / "runs" / f"{options.tag}_{arm}" for arm in arms}
     discover_dirs = {arm: Path(f"{run_dirs[arm]}_discover") for arm in arms}
-    artifacts = [teacher_dir, student_config_path, result_path, *run_dirs.values(), *discover_dirs.values()]
+    # The teacher directory and shared student config are intentional setup
+    # artifacts.  Only arm-specific outputs and the pair result should block a
+    # fresh continuation, otherwise a prepared-but-not-yet-run pair cannot be
+    # resumed after the teacher stage has completed.
+    artifacts = [result_path, *run_dirs.values(), *discover_dirs.values()]
     completed_outputs = [
         teacher_ckpt,
         student_config_path,

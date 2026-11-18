@@ -120,7 +120,7 @@ def main() -> None:
         raise ValueError("source config must be the margin-only control")
 
     seed = int(options.seed)
-    split_path = ROOT / f"splits_cifar100_semantic_hard_seed{seed}" / "cifar100_60_40_semantic_hard.json"
+    split_path = ROOT / f"splits/semantic_hard/seed{seed}" / "cifar100_60_40_semantic_hard.json"
     ensure_split(seed, split_path, resolve(Path(str(source_student.get("data_root", ".\\data")))))
     split = read_json(split_path)
     if len(split.get("known_classes", [])) != 60 or len(split.get("novel_classes", [])) != 40:

@@ -5,7 +5,7 @@ Set-Location $Root
 # Predeclared seed-123 replication of the hard-vs-soft nnPU feature-margin test.
 # Only algorithmic treatment: hard_nnpu vs soft_nnpu risk form.
 $Teacher = ".\runs\semantic_isolated_full_s123_cifar_profile_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 if (-not (Test-Path $Teacher)) { throw "Missing teacher checkpoint: $Teacher" }
 if (-not (Test-Path $Split)) { throw "Missing semantic-isolated split: $Split" }
 

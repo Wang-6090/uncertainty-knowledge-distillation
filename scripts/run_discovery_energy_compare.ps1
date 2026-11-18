@@ -4,7 +4,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_60_40.json"
+$SplitPath = ".\splits/cifar100_60_40.json"
 $TeacherRun = ".\runs\revised_teacher_resnet34"
 $TeacherCkpt = Join-Path $TeacherRun "teacher.pt"
 

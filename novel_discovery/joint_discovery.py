@@ -604,6 +604,7 @@ def joint_discovery_loss(
             iterations=global_assignment_iterations,
             current_weights=sample_weights,
             memory_weight=global_memory_weight,
+            class_marginal=class_marginal,
         )
     if first_target_logits is not None:
         first_assignments = balanced_assignments(

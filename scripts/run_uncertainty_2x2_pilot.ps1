@@ -10,7 +10,7 @@ Set-Location $Root
 
 # Component screening only: keep every arm paired and use one shared teacher.
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$SplitPath = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 $Prefix = "${Tag}_s${Seed}"
 $TeacherRun = ".\runs\${Prefix}_teacher"
 $TeacherCkpt = Join-Path $TeacherRun "teacher.pt"

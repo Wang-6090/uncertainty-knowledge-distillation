@@ -153,7 +153,7 @@ def main() -> None:
     options = parser.parse_args()
 
     split_arg = options.split_path or Path(
-        f"splits_cifar100_semantic_hard_seed{options.seed}/"
+        f"splits/semantic_hard/seed{options.seed}/"
         "cifar100_60_40_semantic_hard.json"
     )
     split_path = make_split(options.seed, resolve(split_arg), resolve(options.data_root))

@@ -69,7 +69,7 @@ def main() -> None:
 
     split_path = make_split(
         seed,
-        ROOT / f"splits_cifar100_semantic_hard_seed{seed}/cifar100_60_40_semantic_hard.json",
+        ROOT / f"splits/semantic_hard/seed{seed}/cifar100_60_40_semantic_hard.json",
         resolve(options.data_root),
     )
     split = read_json(split_path)

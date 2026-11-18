@@ -6,7 +6,7 @@ Set-Location $Root
 # assignment arm from run_joint_prior_aware_pilot_s44.ps1. Only the residual
 # switch differs; residual temperature=1 and floor=0 are held fixed.
 $Teacher = ".\runs\semantic_isolated_full_s44_disjointcal_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 if (-not (Test-Path $Teacher)) { throw "Missing seed-44 teacher checkpoint: $Teacher" }
 
 $RunDir = ".\runs\joint_residual_s44_repro"

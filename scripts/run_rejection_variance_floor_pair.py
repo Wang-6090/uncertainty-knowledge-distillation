@@ -80,7 +80,7 @@ def main() -> None:
         "--split-path",
         type=Path,
         default=Path(
-            "splits_cifar100_semantic_hard_seed2093/"
+            "splits/semantic_hard/seed2093/"
             "cifar100_60_40_semantic_hard.json"
         ),
     )

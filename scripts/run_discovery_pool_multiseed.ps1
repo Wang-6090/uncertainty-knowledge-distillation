@@ -16,7 +16,7 @@ function Invoke-Python {
 $Seeds = @(42, 123)
 $Epochs = 15
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_60_40.json"
+$SplitPath = ".\splits/cifar100_60_40.json"
 
 foreach ($seed in $Seeds) {
     $teacherRun = ".\runs\revised_ms_s$($seed)_teacher"

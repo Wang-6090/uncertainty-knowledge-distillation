@@ -4,7 +4,7 @@
     "detector_detail": "runs\\distance_consensus_full_s123_baseline_discover\\discovery_detail.json",
     "protocol": {
       "dataset": "cifar100",
-      "split_path": ".\\splits_cifar100_protocols\\cifar100_60_40_semantic_isolated.json",
+      "split_path": ".\\splits/protocols\\cifar100_60_40_semantic_isolated.json",
       "seed": 123,
       "known_train_count": 21600,
       "test_count": 10000,
@@ -2085,7 +2085,7 @@
     "detector_detail": "runs\\unweighted_nnpu_10epoch_s123_discover\\discovery_detail.json",
     "protocol": {
       "dataset": "cifar100",
-      "split_path": ".\\splits_cifar100_protocols\\cifar100_60_40_semantic_isolated.json",
+      "split_path": ".\\splits/protocols\\cifar100_60_40_semantic_isolated.json",
       "seed": 123,
       "known_train_count": 21600,
       "test_count": 10000,

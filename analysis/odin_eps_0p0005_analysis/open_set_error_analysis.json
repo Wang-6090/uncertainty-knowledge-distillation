@@ -6,7 +6,7 @@
       "command": "discover",
       "dataset": "cifar100",
       "data_root": ".\\data",
-      "split_path": ".\\splits_cifar100_60_40.json",
+      "split_path": ".\\splits/cifar100_60_40.json",
       "num_known": 60,
       "seed": 42,
       "image_size": 64,

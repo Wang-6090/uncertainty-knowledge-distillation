@@ -14,7 +14,7 @@ Proxy Anchor or ArcFace.
 
 ## Fixed protocol
 
-- CIFAR-100 random 60/40 split: `splits_cifar100_60_40.json`.
+- CIFAR-100 random 60/40 split: `splits/cifar100_60_40.json`.
 - Seed `42`, pretrained ResNet-34 teacher and ResNet-18 student.
 - Same freshly trained teacher: `runs/hard_proxy_teacher_s42/teacher.pt`.
 - Full known training partition, mixed discovery pool, known pool ratio `0.2`.

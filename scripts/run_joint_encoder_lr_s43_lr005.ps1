@@ -7,7 +7,7 @@ Set-Location $Root
 # joint-discovery equal-mass setting, matched mixed pool, 3-epoch budget,
 # losses, and detector/calibration protocol fixed.
 $Teacher = ".\runs\semantic_isolated_full_s43_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 if (-not (Test-Path $Teacher)) { throw "Missing seed-43 teacher checkpoint: $Teacher" }
 
 $RunDir = ".\runs\joint_encoder_lr_s43_lr005"

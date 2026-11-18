@@ -125,14 +125,36 @@ def _analyze_checkpoint(args, bundle, train_loader, test_loader, known_classes, 
     detail = json.loads(detail_path.read_text(encoding="utf-8"))
     report = json.loads(report_path.read_text(encoding="utf-8"))
 
+    # Reconstruct the checkpoint's exact topology. The discovery run has its
+    # own config, but the checkpoint was created by the adjacent training run.
+    train_config_path = Path(ckpt_path).parent / "config.json"
+    train_config = {}
+    if train_config_path.exists():
+        train_config = json.loads(train_config_path.read_text(encoding="utf-8"))
+
     model = build_model(
         args.num_known,
-        backbone=args.backbone,
-        proj_dim=args.proj_dim,
-        dropout=args.dropout,
-        rejection_feature_dim=args.rejection_feature_dim,
+        backbone=str(train_config.get("student_backbone", train_config.get("backbone", args.backbone))),
+        proj_dim=int(train_config.get("proj_dim", args.proj_dim)),
+        dropout=float(train_config.get("dropout", args.dropout)),
+        rejection_feature_dim=int(train_config.get("rejection_feature_dim", args.rejection_feature_dim)),
+        independent_rejection_encoder=bool(
+            train_config.get("independent_rejection_encoder", args.independent_rejection_encoder)
+        ),
+        independent_rejection_encoder_init=str(
+            train_config.get(
+                "independent_rejection_encoder_init",
+                args.independent_rejection_encoder_init,
+            )
+        ),
+        independent_rejection_input_norm=str(
+            train_config.get(
+                "independent_rejection_input_norm",
+                args.independent_rejection_input_norm,
+            )
+        ),
         pretrained=False,
-        cifar_stem=args.cifar_stem,
+        cifar_stem=bool(train_config.get("cifar_stem", args.cifar_stem)),
     ).to(device)
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model"])
@@ -312,6 +334,13 @@ def parse_args(argv=None):
         default=0,
         help="Must match the checkpoint's rejection branch dimension.",
     )
+    parser.add_argument("--independent-rejection-encoder", action="store_true")
+    parser.add_argument(
+        "--independent-rejection-encoder-init",
+        choices=["scratch_cnn", "shared_backbone"],
+        default="shared_backbone",
+    )
+    parser.add_argument("--independent-rejection-input-norm", default="none")
     parser.add_argument("--cifar-stem", action="store_true")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--mixed-known-pool-ratio", type=float, default=0.2)

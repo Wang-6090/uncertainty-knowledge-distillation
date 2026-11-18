@@ -7,7 +7,7 @@ Set-Location $Root
 # Both arms use encoder_lr_scale=0.1 and a disjoint open-validation subset.
 
 $Teacher = ".\runs\semantic_isolated_full_s44_disjointcal_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 $Cifar10Marker = ".\data\cifar-10-batches-py\data_batch_1"
 if (-not (Test-Path $Teacher)) { throw "Missing teacher checkpoint: $Teacher" }
 if (-not (Test-Path $Cifar10Marker)) { throw "CIFAR-10 OE data unavailable: $Cifar10Marker" }

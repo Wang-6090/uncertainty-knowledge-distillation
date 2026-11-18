@@ -4,7 +4,7 @@
     "detector_detail": "runs\\strict_instrumented_s44_e4_feature_rejector\\discovery_detail.json",
     "protocol": {
       "dataset": "cifar100",
-      "split_path": ".\\splits_cifar100_protocols\\cifar100_60_40_semantic_isolated.json",
+      "split_path": ".\\splits/protocols\\cifar100_60_40_semantic_isolated.json",
       "seed": 44,
       "known_train_count": 21600,
       "test_count": 10000,
@@ -3193,7 +3193,7 @@
     "detector_detail": "runs\\strict_instrumented_s44_e4_feature_rejector\\discovery_detail.json",
     "protocol": {
       "dataset": "cifar100",
-      "split_path": ".\\splits_cifar100_protocols\\cifar100_60_40_semantic_isolated.json",
+      "split_path": ".\\splits/protocols\\cifar100_60_40_semantic_isolated.json",
       "seed": 44,
       "known_train_count": 21600,
       "test_count": 10000,

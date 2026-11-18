@@ -28,7 +28,7 @@ def main() -> None:
     parser.add_argument("--alpha", type=float, default=0.1)
     args = parser.parse_args()
     seed = args.seed
-    split = ROOT / "splits_cifar100_protocols/cifar100_60_40_semantic_isolated.json"
+    split = ROOT / "splits/protocols/cifar100_60_40_semantic_isolated.json"
     teacher = ROOT / f"runs/semantic_isolated_full_s{seed}_disjointcal_teacher/teacher.pt"
     baseline_student = ROOT / f"runs/rej_uniform_lr01_openval_s{seed}_margin_only_student/student.pt"
     if not teacher.is_file():

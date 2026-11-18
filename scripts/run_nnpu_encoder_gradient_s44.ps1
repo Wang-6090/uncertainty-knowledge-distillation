@@ -16,7 +16,7 @@ Set-Location $Root
 
 $Common = @(
     "--dataset", "cifar100", "--data-root", ".\data", "--num-known", "60",
-    "--seed", "44", "--split-path", ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json",
+    "--seed", "44", "--split-path", ".\splits/protocols\cifar100_60_40_semantic_isolated.json",
     "--known-split-mode", "random", "--image-size", "64", "--batch-size", "64",
     "--num-workers", "0", "--device", "auto", "--calibration-ratio", "0.25",
     "--backbone", "resnet18", "--student-backbone", "resnet18",
@@ -34,7 +34,7 @@ $Common = @(
 $Teacher = ".\runs\semantic_isolated_full_s44_disjointcal_teacher\teacher.pt"
 $Discover = @(
     "--dataset", "cifar100", "--data-root", ".\data", "--num-known", "60",
-    "--seed", "44", "--split-path", ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json",
+    "--seed", "44", "--split-path", ".\splits/protocols\cifar100_60_40_semantic_isolated.json",
     "--known-split-mode", "random", "--image-size", "64", "--batch-size", "64",
     "--num-workers", "0", "--device", "auto", "--calibration-ratio", "0.25",
     "--backbone", "resnet18", "--student-backbone", "resnet18",

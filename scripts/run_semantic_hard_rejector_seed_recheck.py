@@ -72,7 +72,7 @@ def main() -> None:
         if path.exists():
             raise FileExistsError(f"Refusing to overwrite existing output: {path}")
 
-    split_path = ROOT / "splits_cifar100_protocols" / "cifar100_60_40_semantic_hard.json"
+    split_path = ROOT / "splits/protocols" / "cifar100_60_40_semantic_hard.json"
     teacher_args = load_config(sources[0], "train_teacher", args.seed, args.teacher_epochs)
     teacher_args.split_path = str(split_path)
     teacher_args.work_dir = str(teacher_dir)

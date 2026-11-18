@@ -69,7 +69,7 @@ assuming the original pool prior remains valid.
   - `analysis/semantic_hard_candidate_pool_audit_s2041_deterministic_20261020.json`
   - `analysis/semantic_hard_candidate_pool_audit_s2040_deterministic_20261020.json`
 - Frozen models: `runs/rejection_ce_balance_s2041_ce1p0_independent_hard_split/student.pt` and the corresponding seed-2040 checkpoint.
-- Splits: `splits_cifar100_semantic_hard_seed2041/` and `splits_cifar100_semantic_hard_seed2040/`.
+- Splits: `splits/semantic_hard/seed2041/` and `splits/semantic_hard/seed2040/`.
 - Audit implementation: `scripts/audit_discovery_candidate_pool.py`.
 - Validation: `231 passed, 2 warnings` in `tests/test_core_behaviors.py`.
 

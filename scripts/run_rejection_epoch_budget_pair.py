@@ -102,7 +102,7 @@ def main() -> None:
         raise ValueError("source student must be the registered four-epoch recipe")
 
     seed = int(options.seed)
-    split_path = ROOT / f"splits_cifar100_semantic_hard_seed{seed}" / "cifar100_60_40_semantic_hard.json"
+    split_path = ROOT / f"splits/semantic_hard/seed{seed}" / "cifar100_60_40_semantic_hard.json"
     data_root = resolve(Path(str(source_student.get("data_root", ".\\data"))))
     make_split(seed, split_path, data_root)
     split = read_json(split_path)

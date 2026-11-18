@@ -1,7 +1,7 @@
 {
   "protocol": "semantic_hard",
   "detail_path": "runs\\split_protocol_matched_teacher_s123_e4_20261018_semantic_hard_discover\\discovery_detail.json",
-  "split_path": "splits_cifar100_protocols\\cifar100_60_40_semantic_hard.json",
+  "split_path": "splits/protocols\\cifar100_60_40_semantic_hard.json",
   "test_labels_used_for_training_selection_or_calibration": false,
   "purpose": "descriptive post-hoc test-set error analysis only",
   "unknown_count": 4000,

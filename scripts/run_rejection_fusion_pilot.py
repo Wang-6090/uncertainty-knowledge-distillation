@@ -31,7 +31,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     seed = args.seed
-    split = ROOT / "splits_cifar100_protocols/cifar100_60_40_semantic_isolated.json"
+    split = ROOT / "splits/protocols/cifar100_60_40_semantic_isolated.json"
     student = Path(args.student_ckpt) if args.student_ckpt else ROOT / (
         f"runs/rej_uniform_lr01_openval_s{seed}_margin_only_student/student.pt"
     )

@@ -45,7 +45,7 @@ def run(seed: int, epoch_arm: str, cluster_name: str) -> dict[str, Any]:
     stem = ROOT / "runs" / f"rejection_epoch_budget_s{seed}_{epoch_arm}"
     checkpoint = stem / "student.pt"
     source_path = ROOT / "runs" / f"rejection_epoch_budget_s{seed}_{epoch_arm}_discover" / "discover_config.json"
-    split = ROOT / f"splits_cifar100_semantic_hard_seed{seed}" / "cifar100_60_40_semantic_hard.json"
+    split = ROOT / f"splits/semantic_hard/seed{seed}" / "cifar100_60_40_semantic_hard.json"
     for path in (checkpoint, source_path, split):
         if not path.is_file():
             raise FileNotFoundError(path)

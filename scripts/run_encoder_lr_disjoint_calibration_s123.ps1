@@ -6,7 +6,7 @@ Set-Location $Root
 # older seed-123 runs, both arms share identical mixed-pool/nnPU settings and
 # use a disjoint known-validation calibration subset.
 $Teacher = ".\runs\semantic_isolated_full_s123_cifar_profile_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 if (-not (Test-Path $Teacher)) { throw "Missing seed-123 teacher checkpoint: $Teacher" }
 
 $Common = @(

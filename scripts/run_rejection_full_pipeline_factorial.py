@@ -76,7 +76,7 @@ def main() -> None:
             raise FileNotFoundError(path)
 
     data_root = resolve(options.data_root)
-    split_path = ROOT / f"splits_cifar100_semantic_hard_seed{seed}/cifar100_60_40_semantic_hard.json"
+    split_path = ROOT / f"splits/semantic_hard/seed{seed}/cifar100_60_40_semantic_hard.json"
     split_path = make_split(seed, split_path, data_root)
     split = read_json(split_path)
     if len(split.get("known_classes", [])) != 60 or len(split.get("novel_classes", [])) != 40:

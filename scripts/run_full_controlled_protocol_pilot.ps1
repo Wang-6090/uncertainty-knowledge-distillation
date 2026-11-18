@@ -6,8 +6,8 @@ Set-Location $Root
 $Seed = 42
 $Epochs = 5
 $Protocols = @(
-    @{ Name = "random"; Split = ".\splits_cifar100_protocols\cifar100_60_40_random.json" },
-    @{ Name = "hard"; Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_hard.json" }
+    @{ Name = "random"; Split = ".\splits/protocols\cifar100_60_40_random.json" },
+    @{ Name = "hard"; Split = ".\splits/protocols\cifar100_60_40_semantic_hard.json" }
 )
 
 function Invoke-CheckedPython {

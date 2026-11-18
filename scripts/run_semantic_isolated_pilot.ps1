@@ -16,7 +16,7 @@ Set-Location $Root
 # A short, matched pilot for independent semantic class-split validation.
 # Test labels are used only by train.py for final metrics.
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$SplitPath = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 $Prefix = if ($FullData) { "semantic_isolated_full" } else { "semantic_isolated_pilot" }
 if (-not [string]::IsNullOrWhiteSpace($RunTag)) {
     $Prefix = "${Prefix}_${RunTag}"

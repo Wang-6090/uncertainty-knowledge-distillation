@@ -14,7 +14,7 @@ function Invoke-Python {
 }
 
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_60_40.json"
+$SplitPath = ".\splits/cifar100_60_40.json"
 $TeacherCkpt = ".\runs\revised_ms_s42_teacher\teacher.pt"
 $CommonTrain = @(
     "train.py", "train_student",

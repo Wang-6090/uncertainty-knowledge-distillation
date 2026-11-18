@@ -4,7 +4,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_60_40.json"
+$SplitPath = ".\splits/cifar100_60_40.json"
 $BaseRun = ".\runs\cifar_strong_pseudo_alpha_0_1"
 $DiscoverRun = ".\runs\cifar_strong_pseudo_alpha_0_1_fixed_entropy_proto"
 $TeacherCkpt = Join-Path $BaseRun "teacher.pt"

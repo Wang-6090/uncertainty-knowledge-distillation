@@ -47,7 +47,7 @@ def main() -> None:
     for path in SOURCE.values():
         if not path.is_file():
             raise FileNotFoundError(path)
-    split_path = ROOT / f"splits_cifar100_semantic_hard_seed{SEED}/cifar100_60_40_semantic_hard.json"
+    split_path = ROOT / f"splits/semantic_hard/seed{SEED}/cifar100_60_40_semantic_hard.json"
     if split_path.exists():
         split = read_json(split_path)
         if split.get("metadata", {}).get("seed") != SEED or split.get("protocol") != "semantic_hard":

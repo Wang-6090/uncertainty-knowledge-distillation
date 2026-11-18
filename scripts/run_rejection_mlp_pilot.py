@@ -19,7 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=123)
     args = parser.parse_args()
-    split = ROOT / "splits_cifar100_protocols/cifar100_60_40_semantic_isolated.json"
+    split = ROOT / "splits/protocols/cifar100_60_40_semantic_isolated.json"
     student = ROOT / f"runs/rej_uniform_lr01_openval_s{args.seed}_margin_only_student/student.pt"
     if not student.is_file():
         raise FileNotFoundError(student)

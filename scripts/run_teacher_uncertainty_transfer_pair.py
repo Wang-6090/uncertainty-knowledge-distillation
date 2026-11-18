@@ -62,7 +62,7 @@ def main() -> None:
             raise FileNotFoundError(path)
 
     seed = int(options.seed)
-    split_path = ROOT / f"splits_cifar100_semantic_hard_seed{seed}" / "cifar100_60_40_semantic_hard.json"
+    split_path = ROOT / f"splits/semantic_hard/seed{seed}" / "cifar100_60_40_semantic_hard.json"
     base_student = read_json(sources[1])
     data_root = (ROOT / str(base_student.get("data_root", ".\\data"))).resolve()
     make_split(seed, split_path, data_root)

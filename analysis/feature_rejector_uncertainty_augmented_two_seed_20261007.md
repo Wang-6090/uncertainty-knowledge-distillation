@@ -71,7 +71,7 @@ Keep the following as the current controlled comparison:
 ```powershell
 python train.py discover `
   --dataset cifar100 --data-root .\data `
-  --split-path .\splits_cifar100_protocols\cifar100_60_40_semantic_hard.json `
+  --split-path .\splits/protocols\cifar100_60_40_semantic_hard.json `
   --num-known 60 --seed 43 --num-novel 40 `
   --discovery-pool-mode mixed --mixed-known-pool-ratio 0.2 `
   --mc-samples 8 --target-known-coverage 0.95 `

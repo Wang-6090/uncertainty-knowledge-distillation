@@ -45,6 +45,28 @@ def write_json(path: Path, value: Any) -> None:
         handle.write("\n")
 
 
+def artifact_path_matches(recorded: Any, expected: Path) -> bool:
+    """Accept a historical absolute path when its repository-relative tail matches.
+
+    Results created before the workspace was moved can retain the old machine
+    prefix.  The artifact identity is the path below the repository root, so a
+    prefix change from (for example) ``C:\\...\\dachuang`` to ``D:\\dachuang``
+    should not invalidate an otherwise complete result.
+    """
+    if not isinstance(recorded, str):
+        return False
+    expected_abs = expected.resolve()
+    recorded_norm = recorded.replace("\\", "/").rstrip("/").casefold()
+    expected_norm = str(expected_abs).replace("\\", "/").rstrip("/").casefold()
+    if recorded_norm == expected_norm:
+        return True
+    try:
+        expected_rel = expected_abs.relative_to(ROOT.resolve()).as_posix().casefold()
+    except ValueError:
+        return False
+    return recorded_norm.endswith("/" + expected_rel) or recorded_norm == expected_rel
+
+
 def load_args(path: Path, command: str, work_dir: Path, seed: int):
     values = read_json(path)
     args = parse_args([command])
@@ -192,7 +214,7 @@ def main() -> None:
     all_results: dict[str, Any] = {}
     data_root = (ROOT / str(base_student.get("data_root", ".\\data"))).resolve()
     for seed in options.seeds:
-        split_dir = ROOT / f"splits_cifar100_semantic_hard_seed{seed}"
+        split_dir = ROOT / f"splits/semantic_hard/seed{seed}"
         split_path = make_split(seed, split_dir, data_root)
         split_metadata = read_json(split_path)
         if len(split_metadata.get("known_classes", [])) != 60 or len(split_metadata.get("novel_classes", [])) != 40:
@@ -234,9 +256,9 @@ def main() -> None:
                     raise FileNotFoundError(f"completed result is missing its saved training config: {run_dir}")
                 if not (discover_dir / "discovery_report.json").is_file():
                     raise FileNotFoundError(f"completed result is missing its discovery report: {discover_dir}")
-                if completed_arms[arm].get("train_dir") != str(run_dir):
+                if not artifact_path_matches(completed_arms[arm].get("train_dir"), run_dir):
                     raise ValueError(f"completed result points to a different {arm} run: {result_path}")
-                if completed_arms[arm].get("discover_dir") != str(discover_dir):
+                if not artifact_path_matches(completed_arms[arm].get("discover_dir"), discover_dir):
                     raise ValueError(f"completed result points to a different {arm} discovery run: {result_path}")
                 saved_config = read_json(run_dir / "train_student_config.json")
                 recorded_config = completed_arms[arm].get("train_config", {})

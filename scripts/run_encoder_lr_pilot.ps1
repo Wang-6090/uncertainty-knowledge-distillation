@@ -28,7 +28,7 @@ $Common = @(
     "--data-root", ".\data",
     "--num-known", "60",
     "--seed", "42",
-    "--split-path", ".\splits_cifar100_protocols\cifar100_60_40_random.json",
+    "--split-path", ".\splits/protocols\cifar100_60_40_random.json",
     "--known-split-mode", "random",
     "--image-size", "64",
     "--batch-size", "64",

@@ -4,7 +4,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_60_40.json"
+$SplitPath = ".\splits/cifar100_60_40.json"
 $BaseRun = ".\runs\cifar_pretrained_train"
 $FullRun = ".\runs\cifar_pretrained_full"
 $EntropyRun = ".\runs\cifar_pretrained_entropy_proto"

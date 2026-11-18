@@ -25,7 +25,7 @@ from novel_discovery.pipeline import (
 from train import clone_dataset_with_eval_transform, load_checkpoint
 
 
-SPLIT = ROOT / "splits_cifar100_protocols" / "cifar100_60_40_semantic_isolated.json"
+SPLIT = ROOT / "splits/protocols" / "cifar100_60_40_semantic_isolated.json"
 
 
 def evaluate(model, loader, device, bank, normalization, prototypes):

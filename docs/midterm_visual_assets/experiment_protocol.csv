@@ -1,0 +1,6 @@
+﻿实验条件,当前设置
+数据集与类别划分,CIFAR-100 60/40 与 semantic-hard 划分
+训练数据使用,训练阶段仅使用已知类别标签
+阈值校准,仅使用已知验证集，未知标签不参与校准
+对照方法,scratch CNN、standard-KD、shared-backbone、uncertainty-KD
+重复实验,三组不同类别划分

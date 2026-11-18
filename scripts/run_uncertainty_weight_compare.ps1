@@ -19,7 +19,7 @@ function Invoke-Python {
 # Compare the original uncertainty weighting with batch-mean-normalized
 # weighting. All other settings and the teacher checkpoint are shared.
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_60_40.json"
+$SplitPath = ".\splits/cifar100_60_40.json"
 $TeacherRun = ".\runs\uncertainty_weight_teacher"
 $TeacherCkpt = Join-Path $TeacherRun "teacher.pt"
 $Epochs = 15

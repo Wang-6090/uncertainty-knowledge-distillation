@@ -10,7 +10,7 @@ already frozen validation-calibrated threshold. Official test labels are used
 only to group errors by raw class after inference.
 
 The run artifacts' `split.pt` files were checked against
-`splits_cifar100_protocols/cifar100_60_40_semantic_isolated.json`; their class
+`splits/protocols/cifar100_60_40_semantic_isolated.json`; their class
 lists match. A separate hidden split JSON in the workspace has different class
 lists and no class-name mapping, so it was not used. The LR arms within each
 seed share the same student training protocol, including the matched mixed

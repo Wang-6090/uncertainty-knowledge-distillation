@@ -9,7 +9,7 @@ Set-Location $Root
 $Seed = 123
 $Epochs = 5
 $Tag = "protocol_oe_pair_s${Seed}"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_random.json"
+$Split = ".\splits/protocols\cifar100_60_40_random.json"
 $TeacherDir = ".\runs\${Tag}_teacher"
 $Teacher = Join-Path $TeacherDir "teacher.pt"
 

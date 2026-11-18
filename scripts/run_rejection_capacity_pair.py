@@ -29,7 +29,7 @@ def resolve(path: Path) -> Path:
 
 def default_split_path(seed: int) -> Path:
     return Path(
-        f"splits_cifar100_semantic_hard_seed{int(seed)}/"
+        f"splits/semantic_hard/seed{int(seed)}/"
         "cifar100_60_40_semantic_hard.json"
     )
 

@@ -10,7 +10,7 @@ $TeacherDir = ".\runs\semantic_isolated_full_s123_disjointcal_teacher"
 $Teacher = Join-Path $TeacherDir "teacher.pt"
 $TeacherArgs = @(
     "--dataset", "cifar100", "--data-root", ".\data", "--num-known", "60",
-    "--seed", "123", "--split-path", ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json",
+    "--seed", "123", "--split-path", ".\splits/protocols\cifar100_60_40_semantic_isolated.json",
     "--known-split-mode", "random", "--transform-profile", "cifar",
     "--image-size", "64", "--batch-size", "64", "--num-workers", "0",
     "--device", "auto", "--calibration-ratio", "0.25", "--backbone", "resnet34",
@@ -23,7 +23,7 @@ if (-not (Test-Path $Teacher)) {
 
 $Common = @(
     "--dataset", "cifar100", "--data-root", ".\data", "--num-known", "60",
-    "--seed", "123", "--split-path", ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json",
+    "--seed", "123", "--split-path", ".\splits/protocols\cifar100_60_40_semantic_isolated.json",
     "--known-split-mode", "random", "--transform-profile", "cifar",
     "--image-size", "64", "--batch-size", "64", "--num-workers", "0", "--device", "auto",
     "--calibration-ratio", "0.25", "--backbone", "resnet18", "--student-backbone", "resnet18",
@@ -37,7 +37,7 @@ $Common = @(
 )
 $Discover = @(
     "--dataset", "cifar100", "--data-root", ".\data", "--num-known", "60",
-    "--seed", "123", "--split-path", ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json",
+    "--seed", "123", "--split-path", ".\splits/protocols\cifar100_60_40_semantic_isolated.json",
     "--known-split-mode", "random", "--transform-profile", "cifar",
     "--image-size", "64", "--batch-size", "64", "--num-workers", "0", "--device", "auto",
     "--calibration-ratio", "0.25", "--backbone", "resnet18", "--student-backbone", "resnet18",

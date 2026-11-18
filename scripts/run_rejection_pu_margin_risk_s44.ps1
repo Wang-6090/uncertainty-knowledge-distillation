@@ -7,7 +7,7 @@ Set-Location $Root
 # The tested loss is active with the same coefficient in both arms.
 
 $Teacher = ".\runs\semantic_isolated_full_s44_disjointcal_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 if (-not (Test-Path $Teacher)) { throw "Missing teacher checkpoint: $Teacher" }
 
 $TrainCommon = @(

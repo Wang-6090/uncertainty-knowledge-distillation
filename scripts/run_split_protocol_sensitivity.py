@@ -20,7 +20,7 @@ from train import discover, fit_student, fit_teacher, parse_args  # noqa: E402
 
 
 PROTOCOLS = ("semantic_isolated", "semantic_hard")
-SPLIT_DIR = ROOT / "splits_cifar100_protocols"
+SPLIT_DIR = ROOT / "splits/protocols"
 METRIC_KEYS = (
     "auroc",
     "aupr",

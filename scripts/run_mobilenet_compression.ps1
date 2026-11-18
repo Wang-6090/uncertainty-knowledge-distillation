@@ -5,7 +5,7 @@ $env:TORCH_HOME = Join-Path $Root ".torch_cache"
 New-Item -ItemType Directory -Force -Path $env:TORCH_HOME | Out-Null
 
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_60_40.json"
+$SplitPath = ".\splits/cifar100_60_40.json"
 $TeacherRun = ".\runs\revised_teacher_resnet34"
 $TeacherCkpt = Join-Path $TeacherRun "teacher.pt"
 $Run = ".\runs\revised_mobilenet_uncertainty_kd"

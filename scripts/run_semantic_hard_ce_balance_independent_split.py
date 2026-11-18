@@ -32,7 +32,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2040)
     parser.add_argument(
         "--split-path",
-        default="splits_cifar100_semantic_hard_seed2040/cifar100_60_40_semantic_hard.json",
+        default="splits/semantic_hard/seed2040/cifar100_60_40_semantic_hard.json",
     )
     parser.add_argument(
         "--source-teacher",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict
+from typing import Dict, Sequence
 
 import numpy as np
 import torch
@@ -30,6 +30,7 @@ from .losses import (
     feature_variance_floor_loss,
     discovery_consistency_loss,
     discovery_scalar_consistency_loss,
+    discovery_pairwise_rank_consistency_loss,
     discovery_unknown_loss,
     discovery_view_loss,
     distillation_loss,
@@ -37,6 +38,7 @@ from .losses import (
     pu_unknown_energy_margin_loss,
     angular_margin_loss,
     feature_distillation_loss,
+    relational_distance_distillation_loss,
     hard_proxy_margin_loss,
     pseudo_unknown_loss,
     proxy_contrastive_loss,
@@ -1413,6 +1415,7 @@ def train_one_epoch_teacher(
     alpha_rejection_known_ce: float = 0.0,
     alpha_rejection_supcon: float = 0.0,
     alpha_rejection_center: float = 0.0,
+    alpha_structure_supcon: float = 0.0,
     alpha_proto: float = 0.0,
     alpha_center: float = 0.0,
     alpha_radius: float = 0.0,
@@ -1452,6 +1455,7 @@ def train_one_epoch_teacher(
     rejection_ce_meter = AverageMeter()
     rejection_supcon_meter = AverageMeter()
     rejection_center_meter = AverageMeter()
+    structure_supcon_meter = AverageMeter()
     proto_meter = AverageMeter()
     center_meter = AverageMeter()
     radius_meter = AverageMeter()
@@ -1483,6 +1487,16 @@ def train_one_epoch_teacher(
         if alpha_rejection_center > 0.0 and out.get("rejection_logits") is not None:
             loss_rejection_center = supervised_center_loss(
                 out["rejection_features"], labels
+            )
+        loss_structure_supcon = out["logits"].new_tensor(0.0)
+        if alpha_structure_supcon > 0.0:
+            teacher_structure = out.get("structure_features")
+            if teacher_structure is None:
+                raise ValueError(
+                    "alpha_structure_supcon requires structure_feature_dim > 0"
+                )
+            loss_structure_supcon = supervised_contrastive_loss(
+                teacher_structure, labels
             )
         loss_unc = uncertainty_alignment_loss(
             out["uncertainty"], out["logits"], labels, target_mode=uncertainty_target_mode
@@ -1543,6 +1557,7 @@ def train_one_epoch_teacher(
             + alpha_rejection_known_ce * loss_rejection_ce
             + alpha_rejection_supcon * loss_rejection_supcon
             + alpha_rejection_center * loss_rejection_center
+            + alpha_structure_supcon * loss_structure_supcon
             + alpha_proto * loss_proto
             + alpha_center * loss_center
             + alpha_radius * loss_radius
@@ -1564,6 +1579,7 @@ def train_one_epoch_teacher(
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
         rejection_supcon_meter.update(loss_rejection_supcon.item(), images.size(0))
         rejection_center_meter.update(loss_rejection_center.item(), images.size(0))
+        structure_supcon_meter.update(loss_structure_supcon.item(), images.size(0))
         proto_meter.update(loss_proto.item(), images.size(0))
         center_meter.update(loss_center.item(), images.size(0))
         radius_meter.update(loss_radius.item(), images.size(0))
@@ -1582,6 +1598,7 @@ def train_one_epoch_teacher(
         "rejection_ce": rejection_ce_meter.avg,
         "rejection_supcon": rejection_supcon_meter.avg,
         "rejection_center": rejection_center_meter.avg,
+        "structure_supcon": structure_supcon_meter.avg,
         "proto": proto_meter.avg,
         "center": center_meter.avg,
         "radius": radius_meter.avg,
@@ -1662,8 +1679,10 @@ def train_one_epoch_student(
     alpha_discovery_rejection_boundary: float = 0.0,
     alpha_kd: float = 1.0,
     alpha_feat_kd: float = 0.0,
+    alpha_relational_kd: float = 0.0,
     alpha_supcon: float = 0.1,
     alpha_raw_supcon: float = 0.0,
+    alpha_structure_supcon: float = 0.0,
     alpha_proto: float = 0.0,
     alpha_center: float = 0.0,
     alpha_radius: float = 0.0,
@@ -1708,6 +1727,9 @@ def train_one_epoch_student(
     alpha_discovery_feature_consistency: float = 0.0,
     alpha_discovery_rejection_consistency: float = 0.0,
     alpha_discovery_rejection_score_consistency: float = 0.0,
+    alpha_discovery_rejection_rank_consistency: float = 0.0,
+    discovery_rejection_rank_gap: float = 0.05,
+    discovery_rejection_rank_max_pairs: int = 2048,
     alpha_discovery_projection_consistency: float = 0.0,
     alpha_discovery_feature_margin: float = 0.0,
     discovery_feature_margin: float = 0.2,
@@ -1887,6 +1909,7 @@ def train_one_epoch_student(
     kd_weight_std_meter = AverageMeter()
     kd_weight_ess_meter = AverageMeter()
     feat_kd_meter = AverageMeter()
+    relational_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
     rejection_ce_meter = AverageMeter()
     rejection_supcon_meter = AverageMeter()
@@ -1898,6 +1921,7 @@ def train_one_epoch_student(
     rejection_feat_kd_meter = AverageMeter()
     sc_meter = AverageMeter()
     raw_sc_meter = AverageMeter()
+    structure_supcon_meter = AverageMeter()
     proto_meter = AverageMeter()
     center_meter = AverageMeter()
     radius_meter = AverageMeter()
@@ -1919,6 +1943,7 @@ def train_one_epoch_student(
     discovery_feature_consistency_meter = AverageMeter()
     discovery_rejection_consistency_meter = AverageMeter()
     discovery_rejection_score_consistency_meter = AverageMeter()
+    discovery_rejection_rank_consistency_meter = AverageMeter()
     discovery_projection_consistency_meter = AverageMeter()
     discovery_uncertainty_feature_margin_meter = AverageMeter()
     discovery_uncertainty_feature_margin_weight_meter = AverageMeter()
@@ -1996,6 +2021,11 @@ def train_one_epoch_student(
     classifier_parameters = (
         list(student.classifier.parameters()) if audit_loss_gradients else []
     )
+    structure_parameters = []
+    if audit_loss_gradients:
+        structure_module = getattr(student, "structure_projector", None)
+        if structure_module is not None:
+            structure_parameters.extend(structure_module.parameters())
     rejection_parameters = []
     if audit_loss_gradients:
         for module_name in (
@@ -2160,8 +2190,23 @@ def train_one_epoch_student(
             uncertainty_weight_min=uncertainty_weight_min,
             uncertainty_weight_max=uncertainty_weight_max,
         )
+        loss_relational_kd = s_out["logits"].new_tensor(0.0)
+        if alpha_relational_kd > 0.0:
+            loss_relational_kd = relational_distance_distillation_loss(
+                s_out["features"], t_out["features"]
+            )
         loss_supcon = supervised_contrastive_loss(s_out["proj"], labels)
         loss_raw_supcon = supervised_contrastive_loss(s_out["features"], labels)
+        loss_structure_supcon = s_out["logits"].new_tensor(0.0)
+        if alpha_structure_supcon > 0.0:
+            student_structure = s_out.get("structure_features")
+            if student_structure is None:
+                raise ValueError(
+                    "alpha_structure_supcon requires structure_feature_dim > 0"
+                )
+            loss_structure_supcon = supervised_contrastive_loss(
+                student_structure, labels
+            )
         loss_proto = prototype_alignment_loss(s_out["features"], labels, student.classifier.weight)
         loss_center = supervised_center_loss(s_out["features"], labels)
         loss_radius = supervised_radius_loss(s_out["features"], labels, radius=radius)
@@ -2309,6 +2354,7 @@ def train_one_epoch_student(
         loss_discovery_feature_consistency = s_out["logits"].new_tensor(0.0)
         loss_discovery_rejection_consistency = s_out["logits"].new_tensor(0.0)
         loss_discovery_rejection_score_consistency = s_out["logits"].new_tensor(0.0)
+        loss_discovery_rejection_rank_consistency = s_out["logits"].new_tensor(0.0)
         loss_discovery_projection_consistency = s_out["logits"].new_tensor(0.0)
         loss_discovery_uncertainty_feature_margin = s_out["logits"].new_tensor(0.0)
         loss_discovery_objectosphere = s_out["logits"].new_tensor(0.0)
@@ -2451,6 +2497,7 @@ def train_one_epoch_student(
             or alpha_discovery_feature_consistency > 0.0
             or alpha_discovery_rejection_consistency > 0.0
             or alpha_discovery_rejection_score_consistency > 0.0
+            or alpha_discovery_rejection_rank_consistency > 0.0
             or alpha_discovery_projection_consistency > 0.0
             or alpha_discovery_feature_margin > 0.0
             or alpha_discovery_rejection_feature_margin > 0.0
@@ -3119,6 +3166,7 @@ def train_one_epoch_student(
                     or alpha_discovery_rejection_knn_boundary > 0.0
                     or alpha_discovery_rejection_boundary > 0.0
                     or alpha_discovery_rejection_consistency > 0.0
+                    or alpha_discovery_rejection_rank_consistency > 0.0
                     or alpha_discovery_objectosphere > 0.0
                 )
             ):
@@ -3389,6 +3437,16 @@ def train_one_epoch_student(
                     ]
                     loss_discovery_rejection_consistency = discovery_consistency_loss(
                         first_rejection_values, second_rejection_values
+                    )
+                if alpha_discovery_rejection_rank_consistency > 0.0:
+                    loss_discovery_rejection_rank_consistency = (
+                        discovery_pairwise_rank_consistency_loss(
+                            first_out["uncertainty"],
+                            second_out["uncertainty"],
+                            sample_mask=paired_feature_mask,
+                            min_gap=discovery_rejection_rank_gap,
+                            max_pairs=discovery_rejection_rank_max_pairs,
+                        )
                     )
                 if (
                     discovery_feature_candidate_space
@@ -4359,10 +4417,12 @@ def train_one_epoch_student(
             + alpha_rejection_variance_floor * loss_rejection_variance_floor
             + alpha_kd * loss_kd
             + alpha_feat_kd * loss_feat_kd
+            + alpha_relational_kd * loss_relational_kd
             + alpha_rejection_kd * loss_rejection_kd
             + alpha_rejection_feat_kd * loss_rejection_feat_kd
             + alpha_supcon * loss_supcon
             + alpha_raw_supcon * loss_raw_supcon
+            + alpha_structure_supcon * loss_structure_supcon
             + alpha_proto * loss_proto
             + alpha_center * loss_center
             + alpha_radius * loss_radius
@@ -4381,6 +4441,8 @@ def train_one_epoch_student(
             + alpha_discovery_feature_consistency * loss_discovery_feature_consistency
             + alpha_discovery_rejection_consistency
             * loss_discovery_rejection_consistency
+            + alpha_discovery_rejection_rank_consistency
+            * loss_discovery_rejection_rank_consistency
             + alpha_discovery_projection_consistency * loss_discovery_projection_consistency
             + alpha_discovery_feature_margin * loss_discovery_feature_margin
             + alpha_discovery_rejection_feature_margin
@@ -4426,6 +4488,10 @@ def train_one_epoch_student(
                 {
                     "ce": loss_ce,
                     "kd": loss_kd,
+                    # Record the coefficient-scaled relation term so the
+                    # audit reflects the gradient that actually contributes
+                    # to the optimizer objective, not only its raw loss.
+                    "relational_kd_term": alpha_relational_kd * loss_relational_kd,
                     "supcon": loss_supcon,
                     "unc": loss_unc,
                     "discovery_uncertainty_pu": loss_discovery_uncertainty_pu,
@@ -4480,6 +4546,10 @@ def train_one_epoch_student(
                     "discovery_score_consistency_term": (
                         alpha_discovery_rejection_score_consistency
                         * loss_discovery_rejection_score_consistency
+                    ),
+                    "discovery_rank_consistency_term": (
+                        alpha_discovery_rejection_rank_consistency
+                        * loss_discovery_rejection_rank_consistency
                     ),
                     "discovery_margin_term": (
                         alpha_discovery_rejection_feature_margin
@@ -4544,7 +4614,17 @@ def train_one_epoch_student(
                     ("discovery_boundary_term", "outlier_uniform_term"),
                 ),
             )
+            structure_gradient_diagnostics = compute_parameter_gradient_diagnostics(
+                {
+                    "structure_supcon_term": (
+                        alpha_structure_supcon * loss_structure_supcon
+                    )
+                },
+                structure_parameters,
+                prefix="structure",
+            )
             gradient_diagnostics.update(rejection_gradient_diagnostics)
+            gradient_diagnostics.update(structure_gradient_diagnostics)
             gradient_diagnostics.update(classifier_gradient_diagnostics)
             gradient_audit_batches += 1
             for name, value in gradient_diagnostics.items():
@@ -4636,6 +4716,7 @@ def train_one_epoch_student(
         )
         kd_weight_ess_meter.update(kd_weight_ess_fraction.item(), images.size(0))
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
+        relational_kd_meter.update(loss_relational_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
         rejection_supcon_meter.update(loss_rejection_supcon.item(), images.size(0))
@@ -4653,6 +4734,9 @@ def train_one_epoch_student(
         rejection_feat_kd_meter.update(loss_rejection_feat_kd.item(), images.size(0))
         sc_meter.update(loss_supcon.item(), images.size(0))
         raw_sc_meter.update(loss_raw_supcon.item(), images.size(0))
+        structure_supcon_meter.update(
+            loss_structure_supcon.item(), images.size(0)
+        )
         proto_meter.update(loss_proto.item(), images.size(0))
         center_meter.update(loss_center.item(), images.size(0))
         radius_meter.update(loss_radius.item(), images.size(0))
@@ -4683,6 +4767,9 @@ def train_one_epoch_student(
         )
         discovery_rejection_score_consistency_meter.update(
             loss_discovery_rejection_score_consistency.item(), images.size(0)
+        )
+        discovery_rejection_rank_consistency_meter.update(
+            loss_discovery_rejection_rank_consistency.item(), images.size(0)
         )
         discovery_projection_consistency_meter.update(
             loss_discovery_projection_consistency.item(), images.size(0)
@@ -4823,6 +4910,7 @@ def train_one_epoch_student(
         "kd_weight_std": kd_weight_std_meter.avg,
         "kd_weight_ess_fraction": kd_weight_ess_meter.avg,
         "feat_kd": feat_kd_meter.avg,
+        "relational_kd": relational_kd_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,
         "rejection_supcon": rejection_supcon_meter.avg,
@@ -4834,6 +4922,7 @@ def train_one_epoch_student(
         "rejection_feat_kd": rejection_feat_kd_meter.avg,
         "supcon": sc_meter.avg,
         "raw_supcon": raw_sc_meter.avg,
+        "structure_supcon": structure_supcon_meter.avg,
         "proto": proto_meter.avg,
         "center": center_meter.avg,
         "radius": radius_meter.avg,
@@ -4856,6 +4945,9 @@ def train_one_epoch_student(
         "discovery_rejection_consistency": discovery_rejection_consistency_meter.avg,
         "discovery_rejection_score_consistency": (
             discovery_rejection_score_consistency_meter.avg
+        ),
+        "discovery_rejection_rank_consistency": (
+            discovery_rejection_rank_consistency_meter.avg
         ),
         "discovery_projection_consistency": discovery_projection_consistency_meter.avg,
         "discovery_uncertainty_feature_margin": discovery_uncertainty_feature_margin_meter.avg,
@@ -5286,14 +5378,16 @@ def extract_outputs(
     all_rejection_features = []
     all_rejection_logits = []
     all_projections = []
+    all_structure_features = []
     all_odin_msp = []
     all_odin_logits = []
     all_react_energy = []
     all_labels = []
     all_raw = []
     all_known = []
+    all_source_indices = []
     for batch in tqdm(loader, desc="extract", leave=False):
-        images, labels, raw_labels, is_known, _ = batch
+        images, labels, raw_labels, is_known, source_index = batch
         images = images.to(device)
         with torch.no_grad():
             mc = model.mc_predict(images, mc_samples=mc_samples)
@@ -5306,6 +5400,10 @@ def extract_outputs(
         all_aleatoric.append(mc["aleatoric"].cpu())
         all_head_uncertainty.append(mc["head_uncertainty"].cpu())
         all_features.append(out["features"].cpu())
+        structure_features = out.get("structure_features")
+        if structure_features is None:
+            structure_features = out["features"]
+        all_structure_features.append(structure_features.cpu())
         normalized_features = F.normalize(out["features"].detach(), dim=-1)
         normalized_prototypes = F.normalize(model.classifier.weight.detach(), dim=-1)
         all_prototype_similarity.append(
@@ -5338,6 +5436,7 @@ def extract_outputs(
         all_labels.append(labels)
         all_raw.append(raw_labels)
         all_known.append(is_known)
+        all_source_indices.append(source_index)
     outputs = {
         "logits": torch.cat(all_logits).numpy(),
         "probs": torch.cat(all_probs).numpy(),
@@ -5348,12 +5447,14 @@ def extract_outputs(
         "head_uncertainty": torch.cat(all_head_uncertainty).numpy(),
         "feature_norm": torch.cat(all_feature_norm).numpy(),
         "features": torch.cat(all_features).numpy(),
+        "structure_features": torch.cat(all_structure_features).numpy(),
         "prototype_similarity": torch.cat(all_prototype_similarity).numpy(),
         "rejection_features": torch.cat(all_rejection_features).numpy(),
         "projections": torch.cat(all_projections).numpy(),
         "labels": torch.cat(all_labels).numpy(),
         "raw_labels": torch.cat(all_raw).numpy(),
         "is_known": torch.cat(all_known).numpy(),
+        "source_index": torch.cat(all_source_indices).numpy(),
     }
     if all_odin_msp:
         outputs["odin_msp"] = torch.cat(all_odin_msp).numpy()
@@ -5513,6 +5614,53 @@ def build_rejector_features(
     return np.concatenate([base_features, summary], axis=1)
 
 
+def rejection_feature_input_keys(feature_mode: str = "embedding") -> tuple[str, ...]:
+    """Return the model-output arrays required to rebuild rejector features.
+
+    The returned keys deliberately exclude derived support scores.  A support
+    model is persisted separately and ``attach_known_support_score`` rebuilds
+    those scores from the frozen feature representation and boundary.
+    """
+    mode = str(feature_mode)
+    supported = {
+        "embedding",
+        "rejection_embedding",
+        "augmented",
+        "support_augmented",
+        "predicted_support_augmented",
+        "uncertainty_augmented",
+        "support_uncertainty_augmented",
+        "rejection_uncertainty_augmented",
+        "rejection_support_uncertainty_augmented",
+        "rejection_support_augmented",
+        "rejection_balanced_support_augmented",
+        "rejection_logit_augmented",
+        "rejection_support_logit_augmented",
+        "prototype_augmented",
+        "prototype_support_augmented",
+    }
+    if mode not in supported:
+        raise ValueError(f"Unsupported rejector feature mode: {mode}")
+
+    keys = ["features"]
+    if mode == "rejection_embedding" or mode.startswith("rejection_"):
+        keys.append("rejection_features")
+    if mode != "embedding" and mode != "rejection_embedding":
+        keys.extend(["logits", "probs", "entropy", "head_uncertainty"])
+    if mode in {
+        "uncertainty_augmented",
+        "support_uncertainty_augmented",
+        "rejection_uncertainty_augmented",
+        "rejection_support_uncertainty_augmented",
+    }:
+        keys.extend(["epistemic", "expected_entropy", "aleatoric"])
+    if mode in {"rejection_logit_augmented", "rejection_support_logit_augmented"}:
+        keys.append("rejection_logits")
+    if mode in {"prototype_augmented", "prototype_support_augmented"}:
+        keys.append("prototype_similarity")
+    return tuple(dict.fromkeys(keys))
+
+
 def fit_feature_rejector(
     known_outputs: Dict[str, np.ndarray],
     unknown_outputs: Dict[str, np.ndarray],
@@ -5590,6 +5738,124 @@ def fit_feature_rejector(
         )
     rejector.fit(features, labels)
     return rejector
+
+
+class ClassHoldoutRejectorEnsemble:
+    """Aggregate rejectors trained on known-class holdout surrogate tasks.
+
+    Each fold treats one labeled known class as a temporary surrogate unknown
+    and all remaining known classes as known.  No discovery-pool samples are
+    used for fitting.  The fixed mean over fold scores makes the training
+    protocol deterministic and avoids selecting a fold with test information.
+    """
+
+    def __init__(self, rejectors, holdout_classes, feature_mode="embedding"):
+        self.rejectors_ = tuple(rejectors)
+        self.holdout_classes_ = np.asarray(holdout_classes, dtype=np.int64)
+        self.classes_ = self.holdout_classes_.copy()
+        self.feature_mode_ = str(feature_mode)
+        self.aggregation_ = "mean"
+
+    def decision_function(self, values):
+        values = np.asarray(values, dtype=np.float32)
+        if values.ndim != 2:
+            raise ValueError("rejector features must be a 2-D array")
+        if not self.rejectors_:
+            raise ValueError("class-holdout ensemble has no fitted rejectors")
+        fold_scores = []
+        for rejector in self.rejectors_:
+            if hasattr(rejector, "decision_function"):
+                score = rejector.decision_function(values)
+            else:
+                probability = rejector.predict_proba(values)[:, 1]
+                probability = np.clip(probability, 1e-6, 1.0 - 1e-6)
+                score = np.log(probability) - np.log1p(-probability)
+            fold_scores.append(np.asarray(score, dtype=np.float64).reshape(-1))
+        return np.mean(np.stack(fold_scores, axis=0), axis=0)
+
+    def predict_proba(self, values):
+        score = self.decision_function(values)
+        probability = 1.0 / (1.0 + np.exp(-np.clip(score, -40.0, 40.0)))
+        return np.stack([1.0 - probability, probability], axis=1)
+
+    def score_outputs(self, outputs, feature_mode=None):
+        requested_mode = self.feature_mode_ if feature_mode is None else str(feature_mode)
+        if requested_mode != self.feature_mode_:
+            raise ValueError(
+                "class-holdout rejector was fitted with "
+                f"feature_mode={self.feature_mode_!r}, got {requested_mode!r}"
+            )
+        features = build_rejector_features(outputs, feature_mode=self.feature_mode_)
+        return self.decision_function(features)
+
+
+def fit_class_holdout_rejector_ensemble(
+    known_outputs: Dict[str, np.ndarray],
+    max_samples: int | None = None,
+    seed: int = 42,
+    feature_mode: str = "embedding",
+    model_type: str = "logistic",
+    max_classes: int = 0,
+):
+    """Fit a known-only ensemble using leave-one-class-out surrogate unknowns.
+
+    This creates a supervised proxy for the missing hard-unknown boundary:
+    one known class is held out as the positive (unknown) side in each fold,
+    while the remaining known classes form the known side.  Discovery and test
+    samples are intentionally absent from this function's inputs.
+    """
+    if feature_mode != "embedding":
+        raise ValueError(
+            "class-holdout rejector currently supports feature_mode='embedding' only"
+        )
+    if model_type != "logistic":
+        raise ValueError(
+            "class-holdout rejector currently supports model_type='logistic' only"
+        )
+    if "features" not in known_outputs or "labels" not in known_outputs:
+        raise ValueError("class-holdout fitting requires known features and labels")
+    features = np.asarray(known_outputs["features"], dtype=np.float32)
+    labels = np.asarray(known_outputs["labels"], dtype=np.int64).reshape(-1)
+    if features.ndim != 2 or len(features) == 0:
+        raise ValueError("known outputs must contain a non-empty 2-D feature array")
+    if labels.shape != (len(features),) or np.any(labels < 0):
+        raise ValueError("class-holdout fitting requires one valid known label per feature")
+    classes = np.unique(labels)
+    if len(classes) < 2:
+        raise ValueError("class-holdout rejector requires at least two known classes")
+    if max_classes < 0:
+        raise ValueError("max_classes must be non-negative")
+    if max_classes:
+        if max_classes < 2:
+            raise ValueError("max_classes must be at least two when specified")
+        classes = classes[: int(max_classes)]
+
+    fold_rejectors = []
+    for fold_index, holdout_class in enumerate(classes):
+        unknown_mask = labels == holdout_class
+        known_mask = ~unknown_mask
+        fold_known = {
+            "features": features[known_mask],
+            "labels": labels[known_mask],
+        }
+        fold_unknown = {"features": features[unknown_mask]}
+        if len(fold_known["features"]) == 0 or len(fold_unknown["features"]) == 0:
+            raise ValueError(f"empty class-holdout fold for class {int(holdout_class)}")
+        fold_rejectors.append(
+            fit_feature_rejector(
+                fold_known,
+                fold_unknown,
+                max_samples=max_samples,
+                seed=int(seed) + fold_index,
+                feature_mode=feature_mode,
+                model_type=model_type,
+            )
+        )
+    return ClassHoldoutRejectorEnsemble(
+        fold_rejectors,
+        classes,
+        feature_mode=feature_mode,
+    )
 
 
 def fit_virtual_outlier_rejector(
@@ -6117,6 +6383,10 @@ def attach_feature_rejector_score(
     outputs: Dict[str, np.ndarray], rejector, feature_mode: str = "embedding"
 ) -> None:
     """Attach a higher-is-more-unknown decision score to extracted outputs."""
+    if hasattr(rejector, "score_outputs"):
+        score = rejector.score_outputs(outputs, feature_mode=feature_mode)
+        outputs["feature_rejector_score"] = np.asarray(score).astype(np.float64)
+        return
     features = build_rejector_features(outputs, feature_mode=feature_mode)
     if hasattr(rejector, "decision_function"):
         score = rejector.decision_function(features)
@@ -6786,6 +7056,62 @@ def compute_reciprocal_score(features: np.ndarray, reciprocal_points: np.ndarray
     return (feat @ points.T).max(axis=1)
 
 
+def compute_hierarchical_entropy(
+    logits: np.ndarray,
+    known_class_coarse_ids: Sequence[int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Measure uncertainty inside the predicted CIFAR-100 coarse category.
+
+    ``logits`` contains only the known fine-class columns.  The coarse class
+    is selected by aggregating its fine-class logits with log-sum-exp, then a
+    second softmax is applied only to the known fine classes inside that
+    coarse class.  This isolates ambiguity among semantically related known
+    classes instead of mixing it with uncertainty across unrelated classes.
+
+    Returns the raw local entropy and the predicted coarse-class ids.
+    """
+    logits = np.asarray(logits, dtype=float)
+    if logits.ndim != 2:
+        raise ValueError("logits must be a 2-D array")
+    coarse_ids = np.asarray(list(known_class_coarse_ids), dtype=int)
+    if coarse_ids.ndim != 1 or len(coarse_ids) != logits.shape[1]:
+        raise ValueError(
+            "known_class_coarse_ids must contain one coarse id for every logit column"
+        )
+    if len(coarse_ids) == 0:
+        raise ValueError("known_class_coarse_ids must not be empty")
+    groups = {}
+    for class_index, coarse_id in enumerate(coarse_ids.tolist()):
+        groups.setdefault(int(coarse_id), []).append(class_index)
+    if any(len(indices) == 0 for indices in groups.values()):
+        raise ValueError("each coarse class must contain at least one known fine class")
+
+    coarse_keys = sorted(groups)
+    coarse_logits = np.stack(
+        [np.logaddexp.reduce(logits[:, groups[coarse_id]], axis=1) for coarse_id in coarse_keys],
+        axis=1,
+    )
+    predicted_coarse_index = np.argmax(coarse_logits, axis=1)
+    predicted_coarse = np.asarray(
+        [coarse_keys[int(index)] for index in predicted_coarse_index], dtype=int
+    )
+
+    entropy = np.empty(logits.shape[0], dtype=float)
+    for coarse_index, coarse_id in enumerate(coarse_keys):
+        sample_mask = predicted_coarse_index == coarse_index
+        if not np.any(sample_mask):
+            continue
+        local_logits = logits[np.ix_(sample_mask, groups[coarse_id])]
+        local_logits = local_logits - np.max(local_logits, axis=1, keepdims=True)
+        local_probs = np.exp(local_logits)
+        local_probs /= np.sum(local_probs, axis=1, keepdims=True)
+        local_entropy = -np.sum(
+            local_probs * np.log(np.clip(local_probs, 1e-12, None)), axis=1
+        )
+        entropy[sample_mask] = local_entropy
+    return entropy, predicted_coarse
+
+
 def compute_open_score(
     outputs: Dict[str, np.ndarray],
     prototypes: np.ndarray | None = None,
@@ -6796,6 +7122,7 @@ def compute_open_score(
     fusion_base_score: str = "normalized_entropy_min_class_knn",
     fusion_rejector_weight: float = 0.5,
     uncertainty_score_weight: float = 0.5,
+    known_class_coarse_ids: Sequence[int] | None = None,
 ):
     entropy = outputs["entropy"]
     epistemic = outputs["epistemic"]
@@ -7223,6 +7550,25 @@ def compute_open_score(
             - (np.asarray(outputs["feature_norm"], dtype=float) - normalization["feature_norm"]["mean"])
             / normalization["feature_norm"]["std"]
         )
+    elif score_mode in {"hierarchical_entropy", "normalized_hierarchical_entropy"}:
+        if known_class_coarse_ids is None:
+            raise ValueError(
+                f"{score_mode} requires known_class_coarse_ids from the split taxonomy"
+            )
+        hierarchical_entropy, _ = compute_hierarchical_entropy(
+            outputs["logits"], known_class_coarse_ids
+        )
+        if score_mode == "hierarchical_entropy":
+            score = hierarchical_entropy
+        else:
+            if normalization is None or "hierarchical_entropy" not in normalization:
+                raise ValueError(
+                    "normalized_hierarchical_entropy requires known-validation normalization"
+                )
+            stats = normalization["hierarchical_entropy"]
+            score = (hierarchical_entropy - float(stats["mean"])) / max(
+                float(stats["std"]), 1e-6
+            )
     elif score_mode == "head_uncertainty":
         score = np.asarray(outputs["head_uncertainty"], dtype=float)
     elif score_mode == "feature_rejector":
@@ -7368,6 +7714,7 @@ def fit_score_normalization(
     prototypes: np.ndarray | None,
     gaussian_stats: Dict[str, np.ndarray] | None = None,
     include_mahalanobis: bool = True,
+    known_class_coarse_ids: Sequence[int] | None = None,
 ) -> Dict[str, Dict[str, float]]:
     """Fit score statistics using known validation samples only."""
     entropy = np.asarray(outputs_known["entropy"], dtype=float)
@@ -7378,6 +7725,11 @@ def fit_score_normalization(
         return {"mean": float(np.mean(values)), "std": max(std, 1e-6)}
 
     result = {"entropy": stats(entropy)}
+    if known_class_coarse_ids is not None:
+        hierarchical_entropy, _ = compute_hierarchical_entropy(
+            outputs_known["logits"], known_class_coarse_ids
+        )
+        result["hierarchical_entropy"] = stats(hierarchical_entropy)
     if "feature_norm" in outputs_known:
         result["feature_norm"] = stats(outputs_known["feature_norm"])
     result["epistemic"] = stats(outputs_known.get("epistemic", np.zeros_like(entropy)))
@@ -7725,6 +8077,49 @@ def calibrate_class_thresholds(
     return thresholds
 
 
+def calibrate_shrunk_class_thresholds(
+    scores_known: np.ndarray,
+    predicted_classes: np.ndarray,
+    num_classes: int,
+    percentile: float = 95.0,
+    min_samples: int = 5,
+    shrinkage_kappa: float = 20.0,
+) -> np.ndarray:
+    """Calibrate class thresholds with empirical-Bayes-style shrinkage.
+
+    Each class-specific validation quantile is shrunk toward the global
+    known-validation quantile according to ``n_c / (n_c + kappa)``.  Classes
+    with fewer than ``min_samples`` predictions use the global threshold.  The
+    procedure uses known validation data only and therefore does not require
+    unknown labels during calibration.
+    """
+    scores_known = np.asarray(scores_known, dtype=float)
+    predicted_classes = np.asarray(predicted_classes, dtype=int)
+    if scores_known.ndim != 1 or predicted_classes.shape != scores_known.shape:
+        raise ValueError("scores_known and predicted_classes must be matching 1-D arrays")
+    if int(num_classes) <= 0:
+        raise ValueError("num_classes must be positive")
+    if float(shrinkage_kappa) < 0.0:
+        raise ValueError("shrinkage_kappa must be non-negative")
+    if np.any((predicted_classes < 0) | (predicted_classes >= int(num_classes))):
+        raise ValueError("predicted_classes must be within [0, num_classes)")
+
+    global_threshold = calibrate_threshold(scores_known, percentile)
+    thresholds = np.full(int(num_classes), global_threshold, dtype=float)
+    required_samples = max(int(min_samples), 1)
+    kappa = float(shrinkage_kappa)
+    for class_id in range(int(num_classes)):
+        values = scores_known[predicted_classes == class_id]
+        if len(values) < required_samples:
+            continue
+        class_threshold = np.percentile(values, percentile)
+        weight = len(values) / (len(values) + kappa) if kappa > 0.0 else 1.0
+        thresholds[class_id] = (
+            weight * class_threshold + (1.0 - weight) * global_threshold
+        )
+    return thresholds
+
+
 def _rank_normalize_numpy(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=float)
     if len(values) <= 1:
@@ -7760,6 +8155,13 @@ def candidate_purification_score(
     if mode == "open_score":
         if open_score is None:
             raise ValueError("open_score purification requires an open-set score")
+        return _rank_normalize_numpy(open_score)
+    if mode == "risk_diversity":
+        if open_score is None:
+            raise ValueError("risk_diversity purification requires an open-set score")
+        # The score is used to seed and guide the diversity-aware selection.
+        # The actual farthest-point selection is performed in
+        # ``purify_candidate_mask`` where the feature vectors are available.
         return _rank_normalize_numpy(open_score)
     if mode == "entropy":
         return _rank_normalize_numpy(outputs["entropy"])
@@ -7860,7 +8262,7 @@ def purify_candidate_mask(
     keep_ratio: float = 1.0,
     open_score: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict]:
-    """Keep the highest-ranked rejected samples for clustering only."""
+    """Select a label-free subset of rejected samples for clustering only."""
     candidate_mask = np.asarray(candidate_mask, dtype=bool)
     before_count = int(candidate_mask.sum())
     if mode in {"none", "head_uncertainty_weighted"} or before_count <= 1:
@@ -7877,9 +8279,43 @@ def purify_candidate_mask(
         outputs, mode, open_score=open_score, candidate_mask=candidate_mask
     )
     indices = np.flatnonzero(candidate_mask)
-    order = np.argsort(scores[indices], kind="stable")[::-1]
+    if mode == "risk_diversity":
+        features = np.asarray(outputs.get("features"), dtype=np.float32)
+        if features.ndim != 2 or len(features) != len(candidate_mask):
+            raise ValueError(
+                "risk_diversity purification requires one 2-D feature vector per sample"
+            )
+        candidate_features = features[indices]
+        if not np.isfinite(candidate_features).all():
+            raise ValueError("risk_diversity purification received non-finite features")
+        norms = np.linalg.norm(candidate_features, axis=1, keepdims=True)
+        normalized_features = candidate_features / np.maximum(norms, 1e-12)
+        risk = np.asarray(scores[indices], dtype=float)
+
+        # Seed with the highest-risk candidate, then balance risk and distance
+        # from the already selected set.  This is a deterministic k-center-like
+        # selection rule: it reduces redundant candidates while retaining the
+        # detector's risk signal.  No labels or cluster assignments are used.
+        selected_local = np.zeros(len(indices), dtype=bool)
+        first = int(np.argmax(risk))
+        selected_local[first] = True
+        while int(selected_local.sum()) < keep_count:
+            selected = np.flatnonzero(selected_local)
+            similarities = normalized_features @ normalized_features[selected].T
+            min_distance = 1.0 - np.max(similarities, axis=1)
+            min_distance[selected_local] = -np.inf
+            finite_distance = np.where(np.isfinite(min_distance), min_distance, 0.0)
+            distance_component = np.clip(finite_distance / 2.0, 0.0, 1.0)
+            utility = 0.5 * risk + 0.5 * distance_component
+            utility[selected_local] = -np.inf
+            next_local = int(np.argmax(utility))
+            selected_local[next_local] = True
+        selected_indices = indices[selected_local]
+    else:
+        order = np.argsort(scores[indices], kind="stable")[::-1]
+        selected_indices = indices[order[:keep_count]]
     purified = np.zeros_like(candidate_mask)
-    purified[indices[order[:keep_count]]] = True
+    purified[selected_indices] = True
     return purified, {
         "mode": mode,
         "keep_ratio": float(keep_count / max(before_count, 1)),
@@ -8144,6 +8580,7 @@ def run_discovery(
     fusion_base_score: str = "normalized_entropy_min_class_knn",
     fusion_rejector_weight: float = 0.5,
     uncertainty_score_weight: float = 0.5,
+    known_class_coarse_ids: Sequence[int] | None = None,
     cluster_k: int | str = "oracle",
     cluster_method: str = "kmeans",
     cluster_feature: str = "projection",
@@ -8158,11 +8595,14 @@ def run_discovery(
     candidate_purify: str = "none",
     candidate_keep_ratio: float = 1.0,
     enable_clustering: bool = True,
+    score_override: np.ndarray | None = None,
+    raw_score_override: np.ndarray | None = None,
+    boundary_mask_override: np.ndarray | None = None,
 ):
     entropy = outputs["entropy"]
     epistemic = outputs["epistemic"]
     aleatoric = outputs["aleatoric"]
-    score, proto_dist = compute_open_score(
+    computed_score, proto_dist = compute_open_score(
         outputs,
         prototypes=prototypes,
         score_mode=score_mode,
@@ -8171,7 +8611,36 @@ def run_discovery(
         fusion_base_score=fusion_base_score,
         fusion_rejector_weight=fusion_rejector_weight,
         uncertainty_score_weight=uncertainty_score_weight,
+        known_class_coarse_ids=known_class_coarse_ids,
     )
+    computed_score = np.asarray(computed_score, dtype=float).reshape(-1)
+    raw_score = np.asarray(
+        computed_score if raw_score_override is None else raw_score_override,
+        dtype=float,
+    ).reshape(-1)
+    score = np.asarray(
+        computed_score if score_override is None else score_override,
+        dtype=float,
+    ).reshape(-1)
+    if len(score) != len(outputs["is_known"]):
+        raise ValueError(
+            "score_override must have one value per discovery sample: "
+            f"got {len(score)} for {len(outputs['is_known'])} samples"
+        )
+    if len(raw_score) != len(score):
+        raise ValueError(
+            "raw_score_override must have the same length as score_override: "
+            f"got {len(raw_score)} and {len(score)}"
+        )
+    if boundary_mask_override is None:
+        boundary_mask = np.zeros(len(score), dtype=bool)
+    else:
+        boundary_mask = np.asarray(boundary_mask_override, dtype=bool).reshape(-1)
+        if len(boundary_mask) != len(score):
+            raise ValueError(
+                "boundary_mask_override must have one value per discovery sample: "
+                f"got {len(boundary_mask)} for {len(score)} scores"
+            )
     proto_dist = np.zeros_like(score) if proto_dist is None else proto_dist
     mahalanobis_score_modes = {
         "mahalanobis",
@@ -8270,6 +8739,8 @@ def run_discovery(
         )
         detail = {
             "score": score,
+            "raw_score": raw_score,
+            "boundary_mask": boundary_mask,
             "score_mode": score_mode,
             "feature_norm": np.asarray(
                 outputs.get("feature_norm", np.zeros_like(score)), dtype=float
@@ -8344,6 +8815,13 @@ def run_discovery(
         raw_cluster_features = outputs.get("projections", outputs["features"])
     elif cluster_feature in {"feature", "feature_pca"}:
         raw_cluster_features = outputs["features"]
+    elif cluster_feature in {"structure", "structure_pca"}:
+        if "structure_features" not in outputs:
+            raise ValueError(
+                "structure clustering features require a model with "
+                "structure_feature_dim > 0"
+            )
+        raw_cluster_features = outputs["structure_features"]
     elif cluster_feature in {"novel", "novel_pca"}:
         if "novel_probs" not in outputs:
             raise ValueError("novel clustering features require --novel-head-ckpt")
@@ -8479,6 +8957,8 @@ def run_discovery(
     )
     detail = {
         "score": score,
+        "raw_score": raw_score,
+        "boundary_mask": boundary_mask,
         "score_mode": score_mode,
         "feature_norm": np.asarray(
             outputs.get("feature_norm", np.zeros_like(score)), dtype=float

@@ -10,7 +10,7 @@ fitting, or any code/configuration decision. No model was retrained.
 
 The four `discovery_detail.json` files each contain 10,000 test examples:
 6,000 known and 4,000 novel. The split file
-`splits_cifar100_protocols/cifar100_60_40_semantic_isolated.json` identifies
+`splits/protocols/cifar100_60_40_semantic_isolated.json` identifies
 the 40 novel CIFAR-100 classes. `true_known == 0` denotes novel examples in
 these details; using `raw_labels` alone without the split would be ambiguous.
 There are 100 test examples per novel class in each run.
@@ -75,7 +75,7 @@ select a method using test-class error rates.
 
 ## Artifacts
 
-- Split: `splits_cifar100_protocols/cifar100_60_40_semantic_isolated.json`.
+- Split: `splits/protocols/cifar100_60_40_semantic_isolated.json`.
 - Four detail files: matching `*_discover/discovery_detail.json` under
   `runs/vos_source_gradient_compare_s{44,123}_e4_20261018*`.
 - Aggregate paired results and gradient mechanism audit:

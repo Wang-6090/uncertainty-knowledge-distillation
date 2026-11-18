@@ -6,7 +6,7 @@ Set-Location $Root
 # minimum residual weight so overconfident known logits cannot almost erase
 # novel-learning gradients. Only --joint-residual-floor differs (0 vs 0.1).
 $Teacher = ".\runs\semantic_isolated_full_s43_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 if (-not (Test-Path $Teacher)) { throw "Missing seed-43 teacher checkpoint: $Teacher" }
 
 $RunDir = ".\runs\joint_residual_s43_floor01"

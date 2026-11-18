@@ -337,6 +337,39 @@ def feature_distillation_loss(
     )
 
 
+def relational_distance_distillation_loss(
+    student_features: torch.Tensor,
+    teacher_features: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Match normalized within-batch pairwise distances to a frozen teacher.
+
+    Unlike per-example projection KD, this transfers relative geometry between
+    examples. Features are L2-normalized first; each distance matrix is then
+    normalized by its own mean off-diagonal distance to remove arbitrary scale.
+    The teacher target is detached, and only the upper triangle is supervised.
+    """
+    if student_features.ndim != 2 or teacher_features.ndim != 2:
+        raise ValueError("student and teacher features must be 2-D")
+    if student_features.shape[0] != teacher_features.shape[0]:
+        raise ValueError("student and teacher batches must have matching lengths")
+    if student_features.shape[0] < 2:
+        return student_features.sum() * 0.0
+
+    student = F.normalize(student_features.float(), dim=1, eps=eps)
+    teacher = F.normalize(teacher_features.detach().float(), dim=1, eps=eps)
+    student_dist = torch.cdist(student, student, p=2)
+    teacher_dist = torch.cdist(teacher, teacher, p=2)
+    upper = torch.triu_indices(
+        student.size(0), student.size(0), offset=1, device=student.device
+    )
+    student_values = student_dist[upper[0], upper[1]]
+    teacher_values = teacher_dist[upper[0], upper[1]]
+    student_values = student_values / student_values.mean().clamp_min(eps)
+    teacher_values = teacher_values / teacher_values.mean().clamp_min(eps)
+    return F.smooth_l1_loss(student_values, teacher_values)
+
+
 def supervised_contrastive_loss(features: torch.Tensor, labels: torch.Tensor, temperature: float = 0.2) -> torch.Tensor:
     if features.size(0) <= 1:
         return features.new_tensor(0.0)
@@ -1538,6 +1571,62 @@ def discovery_scalar_consistency_loss(
     first_score = first_score.reshape(-1)
     second_score = second_score.reshape(-1)
     return F.smooth_l1_loss(first_score, second_score)
+
+
+def discovery_pairwise_rank_consistency_loss(
+    first_score: torch.Tensor,
+    second_score: torch.Tensor,
+    sample_mask: torch.Tensor | None = None,
+    min_gap: float = 0.05,
+    max_pairs: int = 2048,
+) -> torch.Tensor:
+    """Preserve within-batch risk ordering across two augmented views.
+
+    The first view supplies a detached ordering target for the second view,
+    and vice versa. Near-tied pairs are ignored because their ordering is not
+    reliable enough to supervise. This constrains relative risk ranking
+    without forcing the two views to have identical absolute scores.
+    """
+    first = first_score.reshape(-1)
+    second = second_score.reshape(-1)
+    if sample_mask is not None:
+        mask = sample_mask.reshape(-1).bool()
+        if mask.numel() != first.numel():
+            raise ValueError("sample_mask must match score batch size")
+        first = first[mask]
+        second = second[mask]
+    if first.numel() < 2:
+        return first_score.new_tensor(0.0)
+
+    pair_rows, pair_cols = torch.triu_indices(
+        first.numel(), first.numel(), offset=1, device=first.device
+    )
+    if pair_rows.numel() > int(max_pairs):
+        keep = torch.linspace(
+            0,
+            pair_rows.numel() - 1,
+            steps=int(max_pairs),
+            device=first.device,
+        ).round().long()
+        pair_rows = pair_rows[keep]
+        pair_cols = pair_cols[keep]
+
+    first_delta = first[pair_rows] - first[pair_cols]
+    second_delta = second[pair_rows] - second[pair_cols]
+    margin = float(min_gap)
+    first_active = first_delta.detach().abs() >= margin
+    second_active = second_delta.detach().abs() >= margin
+    first_target = first_delta.detach().sign()
+    second_target = second_delta.detach().sign()
+    second_loss = F.relu(margin - first_target * second_delta)
+    first_loss = F.relu(margin - second_target * first_delta)
+    active_count = first_active.sum() + second_active.sum()
+    if int(active_count.item()) == 0:
+        return first_score.new_tensor(0.0)
+    return (
+        (second_loss * first_active.float()).sum()
+        + (first_loss * second_active.float()).sum()
+    ) / active_count.float()
 
 
 def discovery_contrastive_loss(

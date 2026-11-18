@@ -6,7 +6,7 @@ Set-Location $Root
 # Compared with runs/joint_pilot_s43_equal_repro, the only algorithm factor
 # is --joint-mixed-residual; all other training and evaluation settings match.
 $Teacher = ".\runs\semantic_isolated_full_s43_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 if (-not (Test-Path $Teacher)) { throw "Missing seed-43 teacher checkpoint: $Teacher" }
 
 $RunDir = ".\runs\joint_residual_s43_matched"

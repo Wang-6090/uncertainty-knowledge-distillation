@@ -8,7 +8,7 @@ Set-Location $Root
 # known features (--rejector-strict-mixed). Novel PU pool and threshold protocol
 # remain unchanged. No model retraining and no clustering.
 
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 $Common = @(
     "--dataset", "cifar100", "--data-root", ".\data", "--num-known", "60",
     "--seed", "44", "--split-path", $Split, "--known-split-mode", "random",

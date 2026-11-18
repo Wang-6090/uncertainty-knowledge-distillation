@@ -5,9 +5,9 @@ Set-Location $Root
 
 $Seeds = @(42, 123, 3407)
 $Protocols = @(
-    @{ Name = "random"; Split = ".\splits_cifar100_protocols\cifar100_60_40_random.json" },
-    @{ Name = "hard"; Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_hard.json" },
-    @{ Name = "isolated"; Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json" }
+    @{ Name = "random"; Split = ".\splits/protocols\cifar100_60_40_random.json" },
+    @{ Name = "hard"; Split = ".\splits/protocols\cifar100_60_40_semantic_hard.json" },
+    @{ Name = "isolated"; Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json" }
 )
 
 function Invoke-CheckedPython {

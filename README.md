@@ -26,6 +26,18 @@
 
 拒识编码器的两种主要配置通过 `--independent-rejection-encoder-init` 选择：`scratch_cnn` 使用独立轻量 CNN 从随机参数开始，`shared_backbone` 使用学生分类主干的参数初始化独立拒识编码器。它们是拒识分支的配置，不是最终分类器的名称。
 
+## Team A：分类表征与不确定性知识蒸馏
+
+该实验线固定 CIFAR-100 semantic-hard 60/40 开放环境协议，在三组独立类别划分上比较标准 logits-KD 与 MC-epistemic uncertainty-KD。两种方案使用相同的教师模型、学生模型、训练目标、拒识配置、阈值策略和自动 K 聚类流程；唯一改变的是 logits-KD 是否按教师四次随机前向结果得到的不确定性进行样本级加权。
+
+结果审计确认不确定性权重实际参与了优化，但当前权重变化幅度较小，且三组划分上的端到端收益不稳定。因此，standard-KD 保持为正式对照基线，uncertainty-KD 保留为显式消融与诊断方案，暂不作为默认训练方式。实验协议、逐划分结果和训练审计见：
+
+- [实验协议](analysis/team_a_representation/protocol.md)
+- [结果总结](analysis/team_a_representation/summary.md)
+- [训练与梯度审计](analysis/team_a_representation/audit.md)
+- [逐划分结果](analysis/team_a_representation/results.csv)
+- [可复现配置](configs/reproducibility/team_a/)
+
 ## 环境安装
 
 建议使用 Python 3.10 或更高版本，并在独立虚拟环境中安装依赖：

@@ -11,7 +11,7 @@ foreach ($Seed in @(44, 123)) {
         $Work = ".\runs\nnpu_mc8_s${Seed}_${Arm}_discover"
         & python train.py discover `
             --dataset cifar100 --data-root .\data --num-known 60 --seed $Seed `
-            --split-path .\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json `
+            --split-path .\splits/protocols\cifar100_60_40_semantic_isolated.json `
             --known-split-mode random --transform-profile cifar --image-size 64 `
             --batch-size 64 --num-workers 0 --device auto --calibration-ratio 0.25 `
             --backbone resnet18 --student-backbone resnet18 --pretrained `

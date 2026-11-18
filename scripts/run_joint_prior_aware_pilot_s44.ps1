@@ -3,7 +3,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 $Teacher = ".\runs\semantic_isolated_full_s44_disjointcal_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 $Common = @(
     "--dataset", "cifar100", "--data-root", ".\data", "--num-known", "60",
     "--seed", "44", "--split-path", $Split, "--known-split-mode", "random",

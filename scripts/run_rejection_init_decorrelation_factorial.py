@@ -49,7 +49,7 @@ def main() -> None:
     args = parser.parse_args()
     resolve = lambda p: p if p.is_absolute() else (ROOT / p).resolve()
     split_path = resolve(args.split or Path(
-        f"splits_cifar100_semantic_hard_seed{args.seed}/cifar100_60_40_semantic_hard.json"
+        f"splits/semantic_hard/seed{args.seed}/cifar100_60_40_semantic_hard.json"
     ))
     split = json.loads(split_path.read_text(encoding="utf-8"))
     if split.get("protocol") != "semantic_hard" or split.get("metadata", {}).get("seed") != args.seed:

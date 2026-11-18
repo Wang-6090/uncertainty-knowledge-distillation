@@ -1,7 +1,7 @@
 {
   "protocol": {
     "dataset": "cifar100",
-    "split_path": ".\\splits_cifar100_60_40.json",
+    "split_path": ".\\splits/cifar100_60_40.json",
     "seed": 42,
     "num_known": 60,
     "image_size": 64,

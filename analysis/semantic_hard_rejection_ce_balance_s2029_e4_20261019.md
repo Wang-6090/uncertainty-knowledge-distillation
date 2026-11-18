@@ -130,7 +130,7 @@ every superclass.
 The new seed-2040 split has 60 known and 40 novel classes, 3 known/2 novel in
 each coarse superclass, and 36 known classes in common with the old hard split
 (not the same split). The split JSON is
-`splits_cifar100_semantic_hard_seed2040/cifar100_60_40_semantic_hard.json`.
+`splits/semantic_hard/seed2040/cifar100_60_40_semantic_hard.json`.
 A matching 5-epoch teacher was freshly trained from the audited teacher
 configuration. On this split, a fixed pair compared CE=1.0 versus 0.25 with
 the same seed-2040 teacher, 4 student epochs, mixed pool, all other student
@@ -171,7 +171,7 @@ final test protocol.
 
 Artifacts:
 
-- Split: `splits_cifar100_semantic_hard_seed2040/cifar100_60_40_semantic_hard.json`
+- Split: `splits/semantic_hard/seed2040/cifar100_60_40_semantic_hard.json`
 - Teacher: `runs/semantic_hard_ce_balance_s2040_teacher/`
 - CE=1.0: `runs/rejection_ce_balance_s2040_ce1p0_independent_hard_split/`
 - CE=0.25: `runs/rejection_ce_balance_s2040_ce0p25_independent_hard_split/`
@@ -220,7 +220,7 @@ remains about 75%.
 
 ### Artifacts and next direction
 
-- Split: `splits_cifar100_semantic_hard_seed2041/cifar100_60_40_semantic_hard.json`
+- Split: `splits/semantic_hard/seed2041/cifar100_60_40_semantic_hard.json`
 - Matching teacher: `runs/semantic_hard_ce_balance_s2041_teacher/`
 - CE=1.0: `runs/rejection_ce_balance_s2041_ce1p0_independent_hard_split/`
 - CE=0.25: `runs/rejection_ce_balance_s2041_ce0p25_independent_hard_split/`

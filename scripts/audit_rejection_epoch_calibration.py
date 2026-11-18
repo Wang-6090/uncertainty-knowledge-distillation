@@ -28,7 +28,7 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 def export_scores(seed: int, arm: str, repeats: int, device: str) -> dict[str, Any]:
-    split = ROOT / f"splits_cifar100_semantic_hard_seed{seed}" / "cifar100_60_40_semantic_hard.json"
+    split = ROOT / f"splits/semantic_hard/seed{seed}" / "cifar100_60_40_semantic_hard.json"
     train_dir = ROOT / "runs" / f"rejection_epoch_budget_s{seed}_{arm}"
     source_config = ROOT / "runs" / f"rejection_epoch_budget_s{seed}_{arm}_discover" / "discover_config.json"
     out_dir = ROOT / "runs" / f"rejection_epoch_calibration_oob_s{seed}_{arm}"

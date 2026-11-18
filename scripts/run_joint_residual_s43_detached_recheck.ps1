@@ -6,7 +6,7 @@ Set-Location $Root
 # matching their documented sample-weight semantics. Compared with the
 # equal-mass seed-43 baseline, only --joint-mixed-residual is enabled.
 $Teacher = ".\runs\semantic_isolated_full_s43_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 if (-not (Test-Path $Teacher)) { throw "Missing seed-43 teacher checkpoint: $Teacher" }
 
 $RunDir = ".\runs\joint_residual_s43_detached"

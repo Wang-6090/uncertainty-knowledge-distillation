@@ -115,6 +115,7 @@ class UKDNet(nn.Module):
         independent_rejection_encoder: bool = False,
         independent_rejection_encoder_init: str = "shared_backbone",
         independent_rejection_input_norm: str = "none",
+        structure_feature_dim: int = 0,
     ) -> None:
         super().__init__()
         if backbone == "mobilenet_v3_small":
@@ -126,6 +127,21 @@ class UKDNet(nn.Module):
         self.dropout_p = dropout
         feat_dim = self.encoder.out_dim
         self.classifier = nn.Linear(feat_dim, num_classes)
+        self.structure_feature_dim = int(structure_feature_dim)
+        if self.structure_feature_dim < 0:
+            raise ValueError("structure_feature_dim must be non-negative")
+        if self.structure_feature_dim > 0:
+            # This head is trained for candidate-cluster geometry.  Keeping it
+            # separate from the rejection head prevents the binary unknown
+            # objective from flattening within-unknown structure.
+            structure_hidden = max(feat_dim // 2, self.structure_feature_dim)
+            self.structure_projector = nn.Sequential(
+                nn.Linear(feat_dim, structure_hidden),
+                nn.ReLU(inplace=True),
+                nn.Linear(structure_hidden, self.structure_feature_dim),
+            )
+        else:
+            self.structure_projector = None
         self.rejection_feature_dim = int(rejection_feature_dim)
         self.independent_rejection_encoder_enabled = bool(
             independent_rejection_encoder
@@ -263,6 +279,11 @@ class UKDNet(nn.Module):
                 self.rejection_uncertainty_head(rejection_features)
             ).squeeze(-1)
         proj = F.normalize(self.projector(feat), dim=-1)
+        structure_features = (
+            F.normalize(self.structure_projector(feat), dim=-1)
+            if self.structure_projector is not None
+            else None
+        )
         return {
             "logits": logits,
             "features": feat,
@@ -271,6 +292,7 @@ class UKDNet(nn.Module):
             "rejection_features": rejection_features,
             "rejection_logits": rejection_logits,
             "proj": proj,
+            "structure_features": structure_features,
             "uncertainty": uncertainty,
         }
 
@@ -346,6 +368,7 @@ def build_model(
     independent_rejection_encoder: bool = False,
     independent_rejection_encoder_init: str = "shared_backbone",
     independent_rejection_input_norm: str = "none",
+    structure_feature_dim: int = 0,
 ) -> UKDNet:
     return UKDNet(
         num_classes=num_classes,
@@ -358,4 +381,5 @@ def build_model(
         independent_rejection_encoder=independent_rejection_encoder,
         independent_rejection_encoder_init=independent_rejection_encoder_init,
         independent_rejection_input_norm=independent_rejection_input_norm,
+        structure_feature_dim=structure_feature_dim,
     )

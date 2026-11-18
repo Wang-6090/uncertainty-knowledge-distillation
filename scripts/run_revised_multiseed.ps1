@@ -22,7 +22,7 @@ function Invoke-Python {
 $Seeds = @(42, 123)
 $Epochs = 15
 $DataRoot = ".\data"
-$SplitPath = ".\splits_cifar100_60_40.json"
+$SplitPath = ".\splits/cifar100_60_40.json"
 
 $experiments = @(
     @{ Name = "A_ce"; KD = 0.0; UKD = "standard"; Feat = 0.0; Unc = 0.0; SupCon = 0.0; Proto = 0.0 },

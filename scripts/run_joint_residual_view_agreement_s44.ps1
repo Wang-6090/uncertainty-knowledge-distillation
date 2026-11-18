@@ -7,7 +7,7 @@ Set-Location $Root
 # equal baseline, enable residual plus its view-agreement factor; treat this
 # as a targeted follow-up, not a baseline comparison of two factors.
 $Teacher = ".\runs\semantic_isolated_full_s44_disjointcal_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 if (-not (Test-Path $Teacher)) { throw "Missing seed-44 teacher checkpoint: $Teacher" }
 
 $RunDir = ".\runs\joint_residual_s44_viewagree"

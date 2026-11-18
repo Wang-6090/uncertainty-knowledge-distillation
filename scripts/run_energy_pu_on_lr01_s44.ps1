@@ -8,7 +8,7 @@ Set-Location $Root
 # mixed-pool sample as unknown. The teacher, split, pool, optimizer, detector,
 # and disjoint calibration protocol are fixed.
 $Teacher = ".\runs\semantic_isolated_full_s44_disjointcal_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 $StudentDir = ".\runs\semantic_isolated_full_s44_disjointcal_lr01_energypu_student"
 $Student = Join-Path $StudentDir "student.pt"
 

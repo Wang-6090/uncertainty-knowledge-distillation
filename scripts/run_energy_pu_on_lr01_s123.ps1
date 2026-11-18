@@ -4,7 +4,7 @@ Set-Location $Root
 
 # Matched seed-123 replication of the seed-44 one-factor PU-energy pilot.
 $Teacher = ".\runs\semantic_isolated_full_s123_cifar_profile_teacher\teacher.pt"
-$Split = ".\splits_cifar100_protocols\cifar100_60_40_semantic_isolated.json"
+$Split = ".\splits/protocols\cifar100_60_40_semantic_isolated.json"
 $StudentDir = ".\runs\semantic_isolated_full_s123_disjointcal_lr01_energypu_student"
 $Student = Join-Path $StudentDir "student.pt"
 
