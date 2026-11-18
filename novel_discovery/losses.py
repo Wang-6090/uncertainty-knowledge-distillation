@@ -9,6 +9,7 @@ from .uncertainty_kd import (
     feature_distillation_loss as _feature_distillation_loss,
     kl_distillation_loss,
     uncertainty_calibration_loss,
+    uncertainty_decoupled_kl_loss,
     uncertainty_weights as _uncertainty_weights,
 )
 
@@ -168,6 +169,24 @@ def distillation_loss(
         uncertainty_weight_mode=uncertainty_weight_mode,
         uncertainty_weight_min=uncertainty_weight_min,
         uncertainty_weight_max=uncertainty_weight_max,
+    )
+
+
+def uncertainty_decoupled_distillation_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    teacher_uncertainty: torch.Tensor,
+    temperature: float = 2.0,
+    uncertainty_weight_mode: str = "mean_normalized",
+) -> torch.Tensor:
+    return uncertainty_decoupled_kl_loss(
+        student_logits,
+        teacher_logits,
+        labels,
+        teacher_uncertainty,
+        temperature=temperature,
+        uncertainty_weight_mode=uncertainty_weight_mode,
     )
 
 

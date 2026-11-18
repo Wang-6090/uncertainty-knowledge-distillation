@@ -55,6 +55,74 @@ def per_sample_kl_distillation_loss(
     )
 
 
+def uncertainty_decoupled_kl_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    teacher_uncertainty: torch.Tensor,
+    temperature: float = 2.0,
+    uncertainty_weight_mode: str = "mean_normalized",
+) -> torch.Tensor:
+    """Decouple target-class and non-target KD; gate only non-target transfer.
+
+    The target-vs-rest term remains unweighted. Detached teacher uncertainty
+    redistributes only the conditional non-target KL, while the caller's CE
+    loss remains the label-supervised target.
+    """
+    if student_logits.shape != teacher_logits.shape or student_logits.ndim != 2:
+        raise ValueError("student and teacher logits must have matching [batch, classes] shapes")
+    batch_size, class_count = student_logits.shape
+    if labels.shape != (batch_size,):
+        raise ValueError("labels must have shape [batch_size]")
+    if teacher_uncertainty.shape != (batch_size,):
+        raise ValueError("teacher_uncertainty must have shape [batch_size]")
+    if batch_size == 0:
+        return _zero_loss(student_logits)
+    if class_count < 2:
+        raise ValueError("decoupled KD requires at least two classes")
+    if bool(((labels < 0) | (labels >= class_count)).any()):
+        raise ValueError("labels must index the logits class dimension")
+
+    temperature = max(float(temperature), 1e-6)
+    student = student_logits.float() / temperature
+    teacher = teacher_logits.detach().float() / temperature
+    row = torch.arange(batch_size, device=student.device)
+    target_mask = F.one_hot(labels, class_count).bool()
+
+    student_target = student[row, labels]
+    teacher_target = teacher[row, labels]
+    student_target_rest = torch.stack(
+        (
+            student_target,
+            torch.logsumexp(student.masked_fill(target_mask, float("-inf")), dim=1),
+        ),
+        dim=1,
+    )
+    teacher_target_rest = torch.stack(
+        (
+            teacher_target,
+            torch.logsumexp(teacher.masked_fill(target_mask, float("-inf")), dim=1),
+        ),
+        dim=1,
+    )
+    target_kl = F.kl_div(
+        F.log_softmax(student_target_rest, dim=1),
+        F.softmax(teacher_target_rest, dim=1),
+        reduction="none",
+    ).sum(dim=1)
+
+    negative = torch.finfo(student.dtype).min
+    student_non_target = student.masked_fill(target_mask, negative)
+    teacher_non_target = teacher.masked_fill(target_mask, negative)
+    non_target_kl = F.kl_div(
+        F.log_softmax(student_non_target, dim=1),
+        F.softmax(teacher_non_target, dim=1),
+        reduction="none",
+    ).sum(dim=1)
+    weights = uncertainty_weights(teacher_uncertainty, mode=uncertainty_weight_mode)
+    return ((target_kl + weights * non_target_kl).mean()) * (temperature**2)
+
+
 def kl_distillation_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,

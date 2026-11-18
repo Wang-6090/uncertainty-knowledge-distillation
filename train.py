@@ -1189,12 +1189,13 @@ def build_parser():
     )
     p.add_argument(
         "--kd-mode",
-        choices=["standard", "uncertainty"],
+        choices=["standard", "uncertainty", "uncertainty_decoupled"],
         default="standard",
         help=(
             "Logits-KD treatment. standard is the current default control; "
             "uncertainty is an explicit opt-in ablation because it is not yet "
-            "a validated core method."
+            "a validated core method; uncertainty_decoupled applies uncertainty "
+            "weights only to non-target-class relations."
         ),
     )
     p.add_argument("--alpha-supcon", type=float, default=0.1)

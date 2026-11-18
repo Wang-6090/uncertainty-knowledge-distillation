@@ -8560,3 +8560,13 @@ A 的匹配评测原始指标如下；括号内为 3 seed 均值 ± 样本标准
 | C: uncertainty-KD | 0.559430 ± 0.021911 | 0.431918 ± 0.018635 | 0.906167 ± 0.003251 | 0.358701 ± 0.067166 | 0.545611 ± 0.116956 | 0.953222 ± 0.000265 | 0.047333 ± 0.008003 | 41.67 ± 5.51 | 0.2550 ± 0.0304 | 0.5747 ± 0.0361 | 0.0886 ± 0.0135 |
 
 均值 ± 样本标准差仅为描述性统计：三个 seed 的类别集合重叠，不能按三个独立数据集解释，也不构成显著性检验。A 的 AUROC、AUPR、OSCR、known accuracy 和 unknown reject 描述性均值高于 B/C；B 的聚类 ACC 均值最高，而 A 的 NMI/ARI 均值高于 B/C。C 相对 B 的均值只有小幅 AUROC/OSCR 改善，unknown reject、cluster ACC/ARI 更低，且结果受 seed 影响。尤其 seed 3407 的 B/C known accuracy 仅 0.4303/0.4105，远低于其余种子约 0.60–0.62；该差异来自冻结模型表现而非评测口径，需保留为重要异质性，不能用三种子均值掩盖。现有结果不支持 uncertainty-KD 稳定优于 standard-KD，也不支持一个方法在所有检测/聚类指标上占优；不继续对这批冻结结果做事后调参或重复切分。
+
+### 2026-11-18：Team A 新算法方向——uncertainty-gated decoupled KD（阶段一）
+
+**为什么启动：**此前 full-KL uncertainty weighting 在 semantic-hard fresh split 中反复呈现接近 1 的 ESS、很弱的样本质量重分配以及混合的拒识/聚类结果。继续扫描 `exp(-u)` 的系数或同类变换缺乏必要性。本阶段转而检验蒸馏信息的结构：目标类监督与非目标类别间的 dark knowledge 是否应由同一种可靠性门控。
+
+**文献启发及边界：**Zhao 等人的 *Decoupled Knowledge Distillation*（CVPR 2022，DOI `10.1109/CVPR.2022.01165`）将目标类相对其余类别的 transfer 与非目标类别条件分布的 transfer 解耦。我们据此提出一个尚待实验验证的 UA-DKD 变体：已知标签 CE 和 target-vs-rest 蒸馏不加权，只用 detached teacher epistemic uncertainty 对 conditional non-target KD 做 batch-mean-normalized 权重。该引用是损失分解的研究启发，不表示原文提出或验证了不确定性门控，也不表示其对新类发现有效。协议、公式、比较设计和晋级条件见 [`docs/team_a_representation/ua_dkd_protocol.md`](docs/team_a_representation/ua_dkd_protocol.md)。
+
+**实现及预检查：**新增显式 `--kd-mode uncertainty_decoupled`，不改默认 `standard`，也不改变原 `uncertainty` 分支。新 loss 对 logits 以 float32 计算，检查 batch/类别/标签形状，对 target-vs-rest 与 conditional non-target KL 分项计算；teacher uncertainty 与 teacher logits 均 detach。训练总目标仍由 CE、`alpha_kd * loss_kd` 和原有其余项组成。focused tests 覆盖有限值、student-only 梯度、teacher/uncertainty 无梯度和非法标签。首轮测试发现 `-inf` 屏蔽 target 类会在 KL 的零概率位置形成 NaN；已改为 float32 有限最小值并通过测试。此修复说明在运行训练前做数值检查是必要的。
+
+本阶段不是性能实验，没有训练新 checkpoint，也没有宣称方法有效。下一阶段先实现不可覆盖的三臂 fresh-split runner：B=shared-MC-mean standard KL、D=unweighted DKD、U=uncertainty-gated DKD；预定 pilot seed 2132（启动前再次检查 split/run 目录）。runner 必须逐 epoch 保存 target/non-target KD loss、uncertainty 权重均值/标准差/ESS、KD 梯度和 optimizer 更新证据，并验证配置唯一差异。pilot 只作筛查；只有预注册条件通过，才在两个额外全新 semantic-hard split 上确认。当前标准默认和既有实验结论不变。

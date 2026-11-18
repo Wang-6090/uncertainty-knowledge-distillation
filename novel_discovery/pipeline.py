@@ -34,6 +34,7 @@ from .losses import (
     discovery_unknown_loss,
     discovery_view_loss,
     distillation_loss,
+    uncertainty_decoupled_distillation_loss,
     energy_margin_loss,
     pu_unknown_energy_margin_loss,
     angular_margin_loss,
@@ -2169,16 +2170,26 @@ def train_one_epoch_student(
                     "rejection_feature_kd_weighting must be inherit, "
                     "uniform, or teacher_uncertainty"
                 )
-        loss_kd = distillation_loss(
-            s_out["logits"],
-            teacher_kd_logits,
-            teacher_uncertainty=teacher_kd_uncertainty_value,
-            temperature=temperature,
-            uncertainty_weighted=(kd_mode == "uncertainty"),
-            uncertainty_weight_mode=uncertainty_weight_mode,
-            uncertainty_weight_min=uncertainty_weight_min,
-            uncertainty_weight_max=uncertainty_weight_max,
-        )
+        if kd_mode == "uncertainty_decoupled":
+            loss_kd = uncertainty_decoupled_distillation_loss(
+                s_out["logits"],
+                teacher_kd_logits,
+                labels,
+                teacher_kd_uncertainty_value,
+                temperature=temperature,
+                uncertainty_weight_mode=uncertainty_weight_mode,
+            )
+        else:
+            loss_kd = distillation_loss(
+                s_out["logits"],
+                teacher_kd_logits,
+                teacher_uncertainty=teacher_kd_uncertainty_value,
+                temperature=temperature,
+                uncertainty_weighted=(kd_mode == "uncertainty"),
+                uncertainty_weight_mode=uncertainty_weight_mode,
+                uncertainty_weight_min=uncertainty_weight_min,
+                uncertainty_weight_max=uncertainty_weight_max,
+            )
         feature_teacher_uncertainty = (
             teacher_kd_uncertainty_value if kd_mode == "uncertainty" else None
         )
@@ -4905,7 +4916,9 @@ def train_one_epoch_student(
     stats = {
         "ce": ce_meter.avg,
         "kd": kd_meter.avg,
-        "kd_uncertainty_weight_applied": bool(kd_mode == "uncertainty"),
+        "kd_uncertainty_weight_applied": bool(
+            kd_mode in {"uncertainty", "uncertainty_decoupled"}
+        ),
         "kd_weight_mean": kd_weight_mean_meter.avg,
         "kd_weight_std": kd_weight_std_meter.avg,
         "kd_weight_ess_fraction": kd_weight_ess_meter.avg,
