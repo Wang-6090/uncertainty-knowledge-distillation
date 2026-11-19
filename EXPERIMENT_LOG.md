@@ -8711,3 +8711,31 @@ smoke 的原始检测结果为：control AUROC/AUPR/OSCR `0.700119/0.602255/0.41
 机制审计仍然通过：treatment 每个 epoch 的 `rejection_relational_kd` 为 `0.012829/0.008983/0.008376/0.007924`，对应 rejection 分支梯度范数为 `0.131355/0.073777/0.063875/0.056478`；control 对应项为 `0`。配置差异审计保留了蒸馏系数、工作目录、checkpoint 路径及由验证集选择导致的 best score 差异，关系损失确实进入总损失并更新学生 rejection 表征。
 
 本结果只作为确认阶段证据，未据此调参、扫描权重或修改默认值 `alpha_rejection_relational_kd=0`。按照预注册方案，仍完成最后一个新 seed `2142` 的确认实验后再汇总三组结果；若总体仍无一致端到端改善，则冻结该方向并转向候选池污染/Auto-K 偏差的机制改进。正式结果保存在 `analysis/rejection_relational_kd_s2141_confirm.json`，运行目录为 `runs/rejection_relational_kd_s2141_confirm_*`。
+### 2026-11-19：关系型拒识表征蒸馏三 seed 确认阶段完成
+
+在 seed `2142` 上完成最后一个预注册确认实验。control 与 relational KD 共用 semantic-hard CIFAR-100 60/40 split、同一配对 teacher、训练预算、已有损失、known-validation checkpoint selection、matched mixed discovery pool、feature-rejector、known-only 95% coverage calibration 和 Auto-K 流程；唯一预设训练差异为 `alpha_rejection_relational_kd=0` 与 `1.0`。三组确认结果的训练历史完整，测试标签均未进入训练、校准或方法选择；每个 treatment epoch 的关系损失和 rejection 分支梯度均为非零。
+
+三 seed 的原始结果及 treatment-control 配对变化如下。检测与聚类指标分开列出，均值和标准差为三个 seed 间的描述性统计：
+
+| 指标 | control 均值 ± SD | relational KD 均值 ± SD | 配对变化（2140 / 2141 / 2142） |
+|---|---:|---:|---:|
+| AUROC | 0.793554 ± 0.016435 | 0.797367 ± 0.011065 | +0.016228 / -0.010555 / +0.005765 |
+| AUPR | 0.695355 ± 0.029077 | 0.699305 ± 0.025671 | +0.021160 / -0.017244 / +0.007935 |
+| OSCR | 0.574270 ± 0.015600 | 0.586690 ± 0.023607 | +0.024984 / +0.008127 / +0.004150 |
+| known accuracy | 0.684833 ± 0.024920 | 0.694167 ± 0.032854 | +0.013500 / +0.016000 / -0.001500 |
+| known accept | 0.942000 ± 0.013042 | 0.942222 ± 0.009335 | -0.014333 / +0.002167 / +0.012833 |
+| unknown reject | 0.282833 ± 0.068056 | 0.292000 ± 0.016146 | +0.070500 / -0.027250 / -0.015750 |
+| 候选 purity | 0.763956 ± 0.012619 | 0.771302 ± 0.033241 | +0.002320 / -0.010600 / +0.030318 |
+
+| 聚类指标 | control 均值 ± SD | relational KD 均值 ± SD | 配对变化均值 ± SD |
+|---|---:|---:|---:|
+| Cluster ACC | 0.266945 ± 0.006248 | 0.270012 ± 0.014883 | +0.003067 ± 0.018723 |
+| Cluster NMI | 0.488125 ± 0.012336 | 0.483079 ± 0.012593 | -0.005046 ± 0.021880 |
+| Cluster ARI | 0.154942 ± 0.004561 | 0.148540 ± 0.013021 | -0.006403 ± 0.014695 |
+| Auto-K 绝对误差 | 5.333 ± 3.786 | 6.333 ± 3.055 | +1.000 ± 1.000 |
+
+seed `2142` 的 control/relational 原始结果分别为 `AUROC/AUPR/OSCR=0.804378/0.721009/0.556376` 与 `0.810143/0.728943/0.560527`，unknown reject 为 `0.322500/0.306750`，候选 purity 为 `0.778515/0.808833`，Cluster `ACC/NMI/ARI=0.260712/0.476361/0.151134` 与 `0.284773/0.482674/0.161024`，Auto-K 为 `32/31`（真实新类数为 40）。该 seed 的局部检测和聚类结果较好，但 unknown reject 下降，且前两个 seed 的方向并不一致。
+
+综合三 seed，relational KD 的 OSCR 平均改善，但 AUROC/AUPR、unknown reject、候选 purity 和聚类指标均存在明显的跨划分波动；NMI/ARI 平均没有改善，Auto-K 误差平均增加。确认阶段不满足稳定端到端收益条件，不能晋升为默认方法，也不继续扫描 `alpha_rejection_relational_kd`。机制结论保留：关系损失确实进入总损失、产生 rejection 分支梯度并更新学生；性能结论为：将教师分类几何直接传给 rejection 表征不足以稳定改善新类发现。
+
+正式结果分别保存在 `analysis/rejection_relational_kd_s2140_formal.json`、`analysis/rejection_relational_kd_s2141_confirm.json` 和 `analysis/rejection_relational_kd_s2142_confirm.json`，运行目录为对应的 `runs/rejection_relational_kd_*`。下一阶段转向候选池污染和 Auto-K 偏差的冻结结果审计，先寻找不依赖测试标签的方法改进点，再设计新的单因素实验。
