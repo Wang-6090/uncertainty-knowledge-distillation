@@ -391,6 +391,34 @@ def relational_distance_distillation_loss(
     return F.smooth_l1_loss(student_values, teacher_values)
 
 
+def confidence_gated_relational_distance_distillation_loss(
+    student_features: torch.Tensor,
+    teacher_features: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    drop_quantile: float = 0.25,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Match relational geometry on the teacher's most confident samples.
+
+    The gate is computed from detached teacher logits only.  The returned
+    fraction is detached diagnostic data and is not part of the objective.
+    At least two samples are retained so a small batch still has a finite,
+    differentiable loss.
+    """
+    if teacher_logits.ndim != 2 or teacher_logits.size(0) != student_features.size(0):
+        raise ValueError("teacher_logits must be [N,C] and align with feature batches")
+    if not 0.0 <= float(drop_quantile) < 1.0:
+        raise ValueError("drop_quantile must be in [0, 1)")
+    confidence = teacher_logits.detach().float().softmax(dim=-1).amax(dim=-1)
+    keep = confidence >= torch.quantile(confidence, float(drop_quantile))
+    if int(keep.sum().item()) < 2:
+        keep = torch.zeros_like(keep, dtype=torch.bool)
+        keep[torch.topk(confidence, k=min(2, confidence.numel())).indices] = True
+    loss = relational_distance_distillation_loss(
+        student_features[keep], teacher_features[keep]
+    )
+    return loss, keep.float().mean().detach()
+
+
 def supervised_contrastive_loss(features: torch.Tensor, labels: torch.Tensor, temperature: float = 0.2) -> torch.Tensor:
     if features.size(0) <= 1:
         return features.new_tensor(0.0)

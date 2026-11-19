@@ -51,6 +51,7 @@ from novel_discovery.losses import (
     supervised_center_margin_loss,
     feature_cross_covariance_loss,
     relational_distance_distillation_loss,
+    confidence_gated_relational_distance_distillation_loss,
     teacher_uncertainty_distillation_loss,
 )
 from scripts.analyze_classwise_open_errors import _threshold_by_sample
@@ -3029,6 +3030,42 @@ class OutlierTransformTest(unittest.TestCase):
 
 
 class LossBehaviorTest(unittest.TestCase):
+    def test_confidence_gated_relational_kd_uses_confident_examples_and_gradients(self):
+        student = torch.randn(8, 5, requires_grad=True)
+        teacher = torch.randn(8, 7, requires_grad=True)
+        logits = torch.tensor(
+            [[8.0, 0.0], [7.0, 0.0], [6.0, 0.0], [5.0, 0.0],
+             [4.0, 0.0], [3.0, 0.0], [2.0, 0.0], [0.1, 0.0]],
+            requires_grad=True,
+        )
+        loss, gate_fraction = confidence_gated_relational_distance_distillation_loss(
+            student, teacher, logits, drop_quantile=0.25
+        )
+        self.assertTrue(torch.isfinite(loss))
+        self.assertAlmostEqual(float(gate_fraction), 0.75, places=6)
+        loss.backward()
+        self.assertGreater(float(student.grad.norm()), 0.0)
+        self.assertIsNone(teacher.grad)
+        self.assertIsNone(logits.grad)
+
+    def test_confidence_gated_relational_kd_keeps_two_for_tied_confidence(self):
+        student = torch.randn(4, 5, requires_grad=True)
+        teacher = torch.randn(4, 7)
+        logits = torch.zeros(4, 3)
+        loss, gate_fraction = confidence_gated_relational_distance_distillation_loss(
+            student, teacher, logits, drop_quantile=0.75
+        )
+        self.assertTrue(torch.isfinite(loss))
+        self.assertAlmostEqual(float(gate_fraction), 1.0, places=6)
+        loss.backward()
+        self.assertTrue(torch.isfinite(student.grad).all())
+
+    def test_confidence_gated_relational_kd_validates_quantile(self):
+        with self.assertRaisesRegex(ValueError, "drop_quantile"):
+            confidence_gated_relational_distance_distillation_loss(
+                torch.randn(4, 5), torch.randn(4, 5), torch.randn(4, 3), 1.0
+            )
+
     def test_relational_distance_distillation_matches_batch_geometry(self):
         torch.manual_seed(7)
         student = torch.randn(6, 5, requires_grad=True)

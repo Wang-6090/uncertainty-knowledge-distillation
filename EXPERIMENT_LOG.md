@@ -8739,3 +8739,19 @@ seed `2142` 的 control/relational 原始结果分别为 `AUROC/AUPR/OSCR=0.8043
 综合三 seed，relational KD 的 OSCR 平均改善，但 AUROC/AUPR、unknown reject、候选 purity 和聚类指标均存在明显的跨划分波动；NMI/ARI 平均没有改善，Auto-K 误差平均增加。确认阶段不满足稳定端到端收益条件，不能晋升为默认方法，也不继续扫描 `alpha_rejection_relational_kd`。机制结论保留：关系损失确实进入总损失、产生 rejection 分支梯度并更新学生；性能结论为：将教师分类几何直接传给 rejection 表征不足以稳定改善新类发现。
 
 正式结果分别保存在 `analysis/rejection_relational_kd_s2140_formal.json`、`analysis/rejection_relational_kd_s2141_confirm.json` 和 `analysis/rejection_relational_kd_s2142_confirm.json`，运行目录为对应的 `runs/rejection_relational_kd_*`。下一阶段转向候选池污染和 Auto-K 偏差的冻结结果审计，先寻找不依赖测试标签的方法改进点，再设计新的单因素实验。
+### 2026-11-19：关系型蒸馏后的 oracle-K 失败模式审计
+
+为区分“自动 K 选择错误”和“候选/表征本身不足”，对已冻结的三组 relational-KD 配对结果做只读分解。该审计不重训、不改阈值、不使用测试标签选择方法；测试标签只用于完成后的 oracle-K 与未知子集指标描述。
+
+relational KD 的 candidate unknown recall 在三个 seed 的两臂均为 `1.0`，因此它没有通过提高未知覆盖解决聚类问题。固定真实 `K=40` 的全体未知 oracle 聚类相对 control 的 ACC/NMI/ARI 变化为：seed `2140` `-0.012500/-0.014501/-0.016242`，seed `2141` `+0.014500/+0.006999/+0.002376`，seed `2142` `+0.006250/+0.001271/+0.003884`，均值为 `+0.002750/-0.002077/-0.003327`。candidate unknown oracle NMI/ARI 的三 seed 平均变化为 `-0.010786/-0.004033`，unknown-only NMI/ARI 平均变化为 `-0.003777/-0.006421`。
+
+这说明当前瓶颈不只是 silhouette Auto-K：即使给定真实类别数，relational KD 也没有稳定改善未知样本的几何分离。Auto-K 误差增加是结果之一，但不是唯一根因。下一阶段不再围绕 K 准则或 relational KD 系数重复扫描，而是重新设计“哪些教师关系应该传给 rejection 表征”的机制。
+
+基于三 seed 中关系 KD 对边界和语义相近样本可能过度施加几何约束的风险，下一候选假设是“置信度门控的关系蒸馏”：仅在教师对已知训练样本具有较高分类置信度时传递分类几何，降低教师边界样本把 rejection 表征拉向已知类结构的影响。该方向只使用训练批中的教师 logits/不确定性，不使用未知标签；先实现为独立 opt-in 项并做有限性、梯度和门控覆盖率单元测试，再在新的 semantic-hard split 上做一次 paired pilot。若门控 pilot 不能同时改善 rejection/聚类中的至少一个端到端指标，立即停止该变体，不继续扫描门控比例。
+### 2026-11-19：置信度门控关系蒸馏实现与 smoke 验证
+
+在三 seed relational-KD 确认阶段结束后，新增默认关闭的 `alpha_rejection_confidence_relational_kd`。该项从教师训练批 logits 计算 detached max-softmax confidence，按固定 `rejection_relational_kd_drop_quantile=0.25` 排除最低置信度的 25% 样本，只在保留样本的教师分类特征与学生 rejection 特征之间计算已有的归一化批内关系损失。若门控后少于两个样本，保留 confidence 最高的两个样本，以保证损失有限。低置信度样本仍参与原有 CE、KD、拒识 CE 和其他损失；未知标签、mixed discovery pool、测试标签、阈值和聚类均不进入门控。
+
+实现验证包括：命令行参数解析、Python 编译、门控损失有限性、学生梯度、教师无梯度、相同 confidence 时的最小样本保护和非法分位数检查。完整测试套件为 `366 passed, 1 warning`。一轮小规模真实 `fit_student` smoke 使用 seed `2142` 的已有 teacher、128 个训练样本和 1 个 epoch，仅用于接线验证；结果为门控覆盖率 `0.75`、门控关系损失 `0.009672`、对应 rejection 分支梯度范数 `0.123124`，未门控旧 relational 项为 `0`。该 smoke 没有 discovery/test 性能含义，不进入正式结果汇总。
+
+正式协议见 `docs/team_a_representation/confidence_gated_relational_kd_protocol.md`。下一步如果继续，只在新的 semantic-hard split 上按协议做一次 paired pilot；不扫描门控比例、不修改默认配置，也不把 smoke 结果解释为算法收益。

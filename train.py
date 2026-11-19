@@ -1125,6 +1125,24 @@ def build_parser():
         ),
     )
     p.add_argument(
+        "--alpha-rejection-confidence-relational-kd",
+        type=float,
+        default=0.0,
+        help=(
+            "Confidence-gated relational KD weight from teacher classification "
+            "features to the student rejection representation; disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--rejection-relational-kd-drop-quantile",
+        type=float,
+        default=0.25,
+        help=(
+            "Fraction of lowest-confidence known training examples excluded "
+            "from confidence-gated rejection relational KD."
+        ),
+    )
+    p.add_argument(
         "--rejection-feature-kd-weighting",
         choices=["inherit", "uniform", "teacher_uncertainty"],
         default="inherit",
@@ -4631,6 +4649,12 @@ def fit_student(args):
             alpha_rejection_kd=args.alpha_rejection_kd,
             alpha_rejection_feat_kd=args.alpha_rejection_feat_kd,
             alpha_rejection_relational_kd=args.alpha_rejection_relational_kd,
+            alpha_rejection_confidence_relational_kd=(
+                args.alpha_rejection_confidence_relational_kd
+            ),
+            rejection_relational_kd_drop_quantile=(
+                args.rejection_relational_kd_drop_quantile
+            ),
             rejection_feature_kd_weighting=args.rejection_feature_kd_weighting,
             alpha_discovery_rejection_pu_feature_margin=(
                 args.alpha_discovery_rejection_pu_feature_margin

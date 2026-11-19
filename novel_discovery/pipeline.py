@@ -40,6 +40,7 @@ from .losses import (
     angular_margin_loss,
     feature_distillation_loss,
     relational_distance_distillation_loss,
+    confidence_gated_relational_distance_distillation_loss,
     hard_proxy_margin_loss,
     pseudo_unknown_loss,
     proxy_contrastive_loss,
@@ -1674,6 +1675,8 @@ def train_one_epoch_student(
     alpha_rejection_kd: float = 0.0,
     alpha_rejection_feat_kd: float = 0.0,
     alpha_rejection_relational_kd: float = 0.0,
+    alpha_rejection_confidence_relational_kd: float = 0.0,
+    rejection_relational_kd_drop_quantile: float = 0.25,
     rejection_feature_kd_weighting: str = "inherit",
     alpha_discovery_rejection_pu_feature_margin: float = 0.0,
     discovery_rejection_pu_risk: str = "hard_nnpu",
@@ -1926,6 +1929,8 @@ def train_one_epoch_student(
     rejection_kd_meter = AverageMeter()
     rejection_feat_kd_meter = AverageMeter()
     rejection_relational_kd_meter = AverageMeter()
+    rejection_confidence_relational_kd_meter = AverageMeter()
+    rejection_confidence_relational_kd_gate_meter = AverageMeter()
     sc_meter = AverageMeter()
     raw_sc_meter = AverageMeter()
     structure_supcon_meter = AverageMeter()
@@ -2133,6 +2138,8 @@ def train_one_epoch_student(
         loss_rejection_kd = s_out["logits"].new_tensor(0.0)
         loss_rejection_feat_kd = s_out["logits"].new_tensor(0.0)
         loss_rejection_relational_kd = s_out["logits"].new_tensor(0.0)
+        loss_rejection_confidence_relational_kd = s_out["logits"].new_tensor(0.0)
+        rejection_confidence_relational_kd_gate = s_out["logits"].new_tensor(0.0)
         if alpha_rejection_relational_kd > 0.0:
             if s_out.get("rejection_features") is None:
                 raise ValueError(
@@ -2140,6 +2147,19 @@ def train_one_epoch_student(
                 )
             loss_rejection_relational_kd = relational_distance_distillation_loss(
                 s_out["rejection_features"], t_out["features"]
+            )
+        if alpha_rejection_confidence_relational_kd > 0.0:
+            if s_out.get("rejection_features") is None:
+                raise ValueError(
+                    "alpha_rejection_confidence_relational_kd requires a rejection branch"
+                )
+            loss_rejection_confidence_relational_kd, rejection_confidence_relational_kd_gate = (
+                confidence_gated_relational_distance_distillation_loss(
+                    s_out["rejection_features"],
+                    t_out["features"],
+                    teacher_kd_logits,
+                    drop_quantile=rejection_relational_kd_drop_quantile,
+                )
             )
         if s_out.get("rejection_logits") is not None and t_out.get("rejection_logits") is not None:
             if alpha_rejection_kd > 0.0:
@@ -4460,6 +4480,8 @@ def train_one_epoch_student(
             + alpha_rejection_kd * loss_rejection_kd
             + alpha_rejection_feat_kd * loss_rejection_feat_kd
             + alpha_rejection_relational_kd * loss_rejection_relational_kd
+            + alpha_rejection_confidence_relational_kd
+            * loss_rejection_confidence_relational_kd
             + alpha_supcon * loss_supcon
             + alpha_raw_supcon * loss_raw_supcon
             + alpha_structure_supcon * loss_structure_supcon
@@ -4581,6 +4603,10 @@ def train_one_epoch_student(
                     "feat_kd_term": alpha_rejection_feat_kd * loss_rejection_feat_kd,
                     "relational_kd_term": (
                         alpha_rejection_relational_kd * loss_rejection_relational_kd
+                    ),
+                    "confidence_relational_kd_term": (
+                        alpha_rejection_confidence_relational_kd
+                        * loss_rejection_confidence_relational_kd
                     ),
                     "discovery_consistency_term": (
                         alpha_discovery_rejection_consistency
@@ -4796,6 +4822,12 @@ def train_one_epoch_student(
         rejection_relational_kd_meter.update(
             loss_rejection_relational_kd.item(), images.size(0)
         )
+        rejection_confidence_relational_kd_meter.update(
+            loss_rejection_confidence_relational_kd.item(), images.size(0)
+        )
+        rejection_confidence_relational_kd_gate_meter.update(
+            rejection_confidence_relational_kd_gate.item(), images.size(0)
+        )
         sc_meter.update(loss_supcon.item(), images.size(0))
         raw_sc_meter.update(loss_raw_supcon.item(), images.size(0))
         structure_supcon_meter.update(
@@ -4990,6 +5022,8 @@ def train_one_epoch_student(
         "rejection_kd": rejection_kd_meter.avg,
         "rejection_feat_kd": rejection_feat_kd_meter.avg,
         "rejection_relational_kd": rejection_relational_kd_meter.avg,
+        "rejection_confidence_relational_kd": rejection_confidence_relational_kd_meter.avg,
+        "rejection_confidence_relational_kd_gate_fraction": rejection_confidence_relational_kd_gate_meter.avg,
         "supcon": sc_meter.avg,
         "raw_supcon": raw_sc_meter.avg,
         "structure_supcon": structure_supcon_meter.avg,
