@@ -8676,3 +8676,22 @@ smoke 的原始检测结果为：control AUROC/AUPR/OSCR `0.700119/0.602255/0.41
 在 smoke4 通过并完成代码推送后，启动了 seed `2140` 的 full-test formal pilot，输出标签为 `rejection_relational_kd_s2140_formal`。运行前确认 teacher、control、treatment 和汇总结果目录均不存在，避免覆盖已有 smoke 或旧实验。正式运行使用完整 test 规模和默认训练预算；共享 teacher 已完成并落盘，但 control student 训练约在中途因准备关电脑而手动中止，未完成配对 discovery，也没有可用的 formal 汇总结果。
 
 本次中间 checkpoint、历史和目录不纳入结果比较；下次继续前先按 runner 的完整性检查处理现有目录，确认是否只能从头重跑。该次中止不改变默认配置、不产生性能结论，也不触发阶段晋级判断。
+
+### 2026-11-19：关系型拒识表征蒸馏 seed 2140 formal pilot 完成
+
+在复用已验证完整的 teacher 后，重新完成了 seed `2140` 的 full-test formal pilot。control 与 treatment 共用同一 teacher、semantic-hard CIFAR-100 60/40 split、学生初始化、训练预算、已有损失、known-validation checkpoint selection、feature-rejector、known-only 95% coverage calibration 和 Auto-K 流程；唯一训练差异为 `alpha_rejection_relational_kd=0` 与 `1.0`。两臂均完成 4 个 epoch，测试标签没有进入训练、校准或方法选择。
+
+检测指标和聚类指标分开报告：
+
+| 方法 | AUROC | AUPR | FPR95 | OSCR | known acc | known accept | unknown reject | 候选 purity |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| control | 0.774642 | 0.663769 | 0.628500 | 0.581415 | 0.710000 | 0.956333 | 0.204250 | 0.757183 |
+| relational KD | 0.790870 | 0.684929 | 0.612500 | 0.606399 | 0.723500 | 0.942000 | 0.274750 | 0.759502 |
+
+相对 control，relational KD 的 AUROC/AUPR/OSCR 分别提高 `0.016228/0.021160/0.024984`，FPR95 下降 `0.016000`，unknown reject 提高 `7.050` 个百分点；known accuracy 提高 `1.350` 个百分点，但 known accept 下降 `1.433` 个百分点。候选池 purity 仅提高 `0.232` 个百分点，候选数从 `1079` 增至 `1447`，两臂候选 unknown recall 均为 `1.0`。
+
+聚类结果为 control 的 `ACC/NMI/ARI=0.266914/0.500963/0.153697`，relational KD 为 `0.255010/0.470694/0.135041`；两臂 Auto-K 均为 `33`，真实新类数为 `40`。因此本 seed 同时呈现检测收益和聚类下降，不能把它解释为已经解决新类发现问题。
+
+机制审计通过：treatment 每个 epoch 的 `rejection_relational_kd` 为 `0.012966/0.008497/0.007688/0.007332`，对应 rejection 分支梯度范数为 `0.154755/0.073382/0.060518/0.054073`；control 对应损失和梯度均为 `0`。配置差异审计只保留蒸馏系数、工作目录、checkpoint 路径和由验证集选择产生的 best epoch/score 差异。
+
+按预注册 pilot 筛查规则，本轮允许进入两个全新 semantic-hard seed 的确认实验：排序指标和候选 purity 均有改善，known accuracy 未下降，unknown reject 未恶化，候选 purity 未出现实质下降。但由于聚类三项均下降，下一阶段必须重点检验“检测收益能否稳定传递到聚类”，不在 seed 2140 上继续调权重或调参，也不修改默认配置 `alpha_rejection_relational_kd=0`。正式结果保存在 `analysis/rejection_relational_kd_s2140_formal.json`，运行目录为 `runs/rejection_relational_kd_s2140_formal_*`。
