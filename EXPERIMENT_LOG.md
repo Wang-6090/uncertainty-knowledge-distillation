@@ -8805,3 +8805,9 @@ relational KD 的 candidate unknown recall 在三个 seed 的两臂均为 `1.0`�
 候选未知召回三 seed 的两臂均为 `1.0`。机制审计中，门控覆盖率三个 seed、每个 epoch 均严格为 `0.75`；2144 treatment 的逐 epoch 关系损失为 `0.012159/0.007676/0.006946/0.006381`，rejection 梯度范数为 `0.145017/0.075825/0.062595/0.054813`；2145 对应为 `0.013048/0.008298/0.007418/0.006928` 和 `0.144742/0.077049/0.063171/0.055067`。2143 的数值见上节。两组 control 的门控关系损失和梯度均为零，证实处理变量实际接入训练目标。
 
 综合判断：三组中 OSCR、known accuracy、Cluster ACC/NMI/ARI 均为负向变化；FPR95 平均恶化 `0.006833`，候选 purity 平均下降 `0.010241`。unknown rejection 平均提高 `0.016417`，Auto-K 误差平均减少 `2.667`，但两项的逐 seed 变化不一致，且 oracle-K NMI/ARI 均值也下降。蒸馏机制确实有效执行，却没有转化为稳定的新类发现收益。按预注册失败条件，冻结 confidence-gated relational KD，不再扫描比例或系数；`alpha_rejection_confidence_relational_kd` 和旧 `alpha_rejection_relational_kd` 均保持默认关闭。原始完整 JSON 和运行产物保留在本地 `analysis/confidence_gated_relational_kd_s214{3,4,5}_*` 与对应 `runs/` 目录；三份 split 定义随本次记录纳入版本控制。
+
+### 2026-11-19：confidence-gated 三 seed 冻结输出的类别错误诊断
+
+为确定候选 purity 下降是否来自少数固定类别，对 seed `2143/2144/2145` 的冻结 `discovery_detail.json` 和已知验证阈值做逐类别回顾性统计；不重训、不改阈值、不改变方法选择。未知类标签只用于最终测试结果的分组说明。control 到 treatment 的未知类平均 false-accept 率变化分别为 `-3.275/+0.925/-2.575` 个百分点，与总体 unknown rejection 的变化相反，说明方向仍跨 split 不一致。各 split 内 40 个未知类的 false-accept 变化标准差为 `0.0918/0.0763/0.0752`，单类变化分散；常见的误拒升高类也未形成稳定的同一组。known-class accept 的最大下降在 seed `2143` 出现在 raw class `71`（`-9 pp`），seed `2144` 为 class `59`（`-11 pp`），seed `2145` 为 class `35`（`-10 pp`），不是同一类别驱动总体差异。
+
+该诊断没有支持利用测试类别构造类定向 loss 或阈值规则，也不能证明类别条件错误不存在。它只说明当前 confidence gate 对已知/未知类别的影响有明显 split 异质性，不足以据此设计一个稳健的类别特定补丁。脚本为已有的 [`scripts/analyze_classwise_open_errors.py`](scripts/analyze_classwise_open_errors.py)，本地结果为 `analysis/classwise_confidence_gated_s2143.json`、`s2144.json`、`s2145.json`。下一阶段若继续，应先只用 known train/validation 输出检验类别条件置信度或错误风险信号是否跨 split 稳定，再决定是否提出新的、独立预注册训练机制；不在这些测试类结果上做规则或参数选择。
