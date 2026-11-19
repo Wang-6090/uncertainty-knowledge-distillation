@@ -8695,3 +8695,19 @@ smoke 的原始检测结果为：control AUROC/AUPR/OSCR `0.700119/0.602255/0.41
 机制审计通过：treatment 每个 epoch 的 `rejection_relational_kd` 为 `0.012966/0.008497/0.007688/0.007332`，对应 rejection 分支梯度范数为 `0.154755/0.073382/0.060518/0.054073`；control 对应损失和梯度均为 `0`。配置差异审计只保留蒸馏系数、工作目录、checkpoint 路径和由验证集选择产生的 best epoch/score 差异。
 
 按预注册 pilot 筛查规则，本轮允许进入两个全新 semantic-hard seed 的确认实验：排序指标和候选 purity 均有改善，known accuracy 未下降，unknown reject 未恶化，候选 purity 未出现实质下降。但由于聚类三项均下降，下一阶段必须重点检验“检测收益能否稳定传递到聚类”，不在 seed 2140 上继续调权重或调参，也不修改默认配置 `alpha_rejection_relational_kd=0`。正式结果保存在 `analysis/rejection_relational_kd_s2140_formal.json`，运行目录为 `runs/rejection_relational_kd_s2140_formal_*`。
+### 2026-11-19：关系型拒识表征蒸馏 seed 2141 确认实验完成
+
+按预注册确认协议，在全新的 semantic-hard CIFAR-100 60/40 seed `2141` 上完成 control 与 relational KD 配对实验。两臂共用同一 teacher、split、训练预算、已启用损失、known-validation checkpoint selection、matched mixed discovery pool、feature-rejector、known-only 95% coverage calibration 和 Auto-K 流程；唯一预设训练差异仍为 `alpha_rejection_relational_kd=0` 与 `1.0`。训练和 discovery 均完整结束，测试标签未用于训练、校准或方法选择。
+
+检测与聚类结果分开报告：
+
+| 方法 | AUROC | AUPR | OSCR | known acc | known accept | unknown reject | 候选 purity | Cluster ACC | NMI | ARI | Auto-K |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| control | 0.801642 | 0.701288 | 0.585018 | 0.684333 | 0.930833 | 0.321750 | 0.756169 | 0.273208 | 0.487051 | 0.159997 | 39 |
+| relational KD | 0.791087 | 0.684044 | 0.593145 | 0.687000 | 0.933000 | 0.294500 | 0.745570 | 0.270253 | 0.495870 | 0.149555 | 43 |
+
+相对 control，relational KD 的 AUROC/AUPR 分别下降 `0.010555/0.017244`，OSCR 提高 `0.008127`；known accuracy 提高 `0.267` 个百分点，known accept 提高 `0.217` 个百分点，但 unknown reject 下降 `2.725` 个百分点，候选 purity 下降 `1.060` 个百分点。聚类 ACC/ARI 分别下降 `0.002955/0.010442`，NMI 提高 `0.008819`；Auto-K 从 `39` 变为 `43`，真实新类数为 `40`，绝对误差从 `1` 变为 `3`。因此本 seed 没有显示稳定的端到端收益，局部 OSCR/NMI 改善也没有传递到拒识和聚类整体表现。
+
+机制审计仍然通过：treatment 每个 epoch 的 `rejection_relational_kd` 为 `0.012829/0.008983/0.008376/0.007924`，对应 rejection 分支梯度范数为 `0.131355/0.073777/0.063875/0.056478`；control 对应项为 `0`。配置差异审计保留了蒸馏系数、工作目录、checkpoint 路径及由验证集选择导致的 best score 差异，关系损失确实进入总损失并更新学生 rejection 表征。
+
+本结果只作为确认阶段证据，未据此调参、扫描权重或修改默认值 `alpha_rejection_relational_kd=0`。按照预注册方案，仍完成最后一个新 seed `2142` 的确认实验后再汇总三组结果；若总体仍无一致端到端改善，则冻结该方向并转向候选池污染/Auto-K 偏差的机制改进。正式结果保存在 `analysis/rejection_relational_kd_s2141_confirm.json`，运行目录为 `runs/rejection_relational_kd_s2141_confirm_*`。
