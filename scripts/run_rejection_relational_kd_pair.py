@@ -48,6 +48,7 @@ def apply_overrides(args: Any, options: argparse.Namespace, work_dir: Path) -> N
     args.seed = int(options.seed)
     args.model_seed = None
     args.work_dir = str(work_dir)
+    args.rejection_relational_kd_drop_quantile = float(options.drop_quantile)
     if options.epochs is not None:
         args.epochs = int(options.epochs)
     if options.limit_train is not None:
@@ -75,6 +76,10 @@ def apply_overrides(args: Any, options: argparse.Namespace, work_dir: Path) -> N
 
 
 def preflight(options: argparse.Namespace, sources: list[Path], split_path: Path) -> dict[str, Any]:
+    if not 0.0 <= float(options.drop_quantile) < 1.0:
+        raise ValueError("--drop-quantile must be in [0, 1)")
+    if float(options.alpha) < 0.0 or float(options.confidence_alpha) < 0.0:
+        raise ValueError("relational KD coefficients must be non-negative")
     for path in sources:
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -100,7 +105,14 @@ def preflight(options: argparse.Namespace, sources: list[Path], split_path: Path
         "tag": options.tag,
         "split": str(split_path),
         "split_status": split_status,
-        "alpha_rejection_relational_kd": float(options.alpha),
+        "alpha_rejection_relational_kd": 0.0 if float(options.confidence_alpha) > 0.0 else float(options.alpha),
+        "alpha_rejection_confidence_relational_kd": float(options.confidence_alpha),
+        "rejection_relational_kd_drop_quantile": float(options.drop_quantile),
+        "active_training_factor": (
+            "alpha_rejection_confidence_relational_kd"
+            if float(options.confidence_alpha) > 0.0
+            else "alpha_rejection_relational_kd"
+        ),
         "source_configs": [str(path) for path in sources],
         "dry_run": bool(options.dry_run),
         "smoke": bool(options.smoke),
@@ -113,6 +125,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2140)
     parser.add_argument("--tag", default="rejection_relational_kd_s2140")
     parser.add_argument("--alpha", type=float, default=1.0)
+    parser.add_argument("--confidence-alpha", type=float, default=0.0)
+    parser.add_argument("--drop-quantile", type=float, default=0.25)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--epochs", type=int)
@@ -179,7 +193,12 @@ def main() -> None:
         train_args.alpha_rejection_feat_kd = 0.0
         train_args.alpha_rejection_kd = 0.0
         train_args.alpha_rejection_relational_kd = (
-            0.0 if arm == "control" else float(options.alpha)
+            0.0
+            if float(options.confidence_alpha) > 0.0
+            else (0.0 if arm == "control" else float(options.alpha))
+        )
+        train_args.alpha_rejection_confidence_relational_kd = (
+            0.0 if arm == "control" else float(options.confidence_alpha)
         )
         fit_student(train_args)
 
@@ -206,6 +225,8 @@ def main() -> None:
     relational = results["relational"]["train_config"]
     allowed = {
         "alpha_rejection_relational_kd",
+        "alpha_rejection_confidence_relational_kd",
+        "rejection_relational_kd_drop_quantile",
         "work_dir",
         "student_ckpt",
         "best_epoch",
@@ -233,20 +254,37 @@ def main() -> None:
             raise RuntimeError(f"test labels entered training/calibration for {arm}")
         if abs(float(report.get("calibration_known_accept_rate", 0.0)) - 0.95) > 0.02:
             raise RuntimeError(f"known-validation calibration failed for {arm}")
-    treatment_losses = [float(epoch.get("train", {}).get("rejection_relational_kd", 0.0)) for epoch in results["relational"]["history"]]
-    treatment_gradients = [float(epoch.get("train", {}).get("gradient_audit_grad_norm_rejection_relational_kd_term", 0.0)) for epoch in results["relational"]["history"]]
+    confidence_mode = float(options.confidence_alpha) > 0.0
+    loss_key = "rejection_confidence_relational_kd" if confidence_mode else "rejection_relational_kd"
+    gradient_key = (
+        "gradient_audit_grad_norm_rejection_confidence_relational_kd_term"
+        if confidence_mode
+        else "gradient_audit_grad_norm_rejection_relational_kd_term"
+    )
+    treatment_losses = [float(epoch.get("train", {}).get(loss_key, 0.0)) for epoch in results["relational"]["history"]]
+    treatment_gradients = [float(epoch.get("train", {}).get(gradient_key, 0.0)) for epoch in results["relational"]["history"]]
     if any(value <= 0.0 for value in treatment_losses):
         raise RuntimeError(f"relational rejection KD inactive: {treatment_losses}")
     if any(value <= 0.0 for value in treatment_gradients):
         raise RuntimeError(f"relational rejection KD gradient inactive: {treatment_gradients}")
 
     result = {
-        "question": "Does relational KD from teacher classification geometry improve the student rejection representation?",
+        "question": (
+            "Does confidence-gated relational KD from teacher classification geometry improve the student rejection representation?"
+            if confidence_mode
+            else "Does relational KD from teacher classification geometry improve the student rejection representation?"
+        ),
         "seed": int(options.seed),
         "split": str(split_path),
         "teacher_checkpoint": str(teacher_ckpt),
-        "single_changed_factor": "alpha_rejection_relational_kd: 0 vs fixed pilot coefficient",
-        "alpha_rejection_relational_kd": float(options.alpha),
+        "single_changed_factor": (
+            "alpha_rejection_confidence_relational_kd: 0 vs fixed pilot coefficient"
+            if confidence_mode
+            else "alpha_rejection_relational_kd: 0 vs fixed pilot coefficient"
+        ),
+        "alpha_rejection_relational_kd": 0.0 if confidence_mode else float(options.alpha),
+        "alpha_rejection_confidence_relational_kd": float(options.confidence_alpha),
+        "rejection_relational_kd_drop_quantile": float(options.drop_quantile),
         "pool_or_test_labels_used_for_training_or_selection": False,
         "training_config_differences": differences,
         "treatment_relation_loss_by_epoch": treatment_losses,
