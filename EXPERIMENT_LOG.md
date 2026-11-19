@@ -8755,3 +8755,17 @@ relational KD 的 candidate unknown recall 在三个 seed 的两臂均为 `1.0`�
 实现验证包括：命令行参数解析、Python 编译、门控损失有限性、学生梯度、教师无梯度、相同 confidence 时的最小样本保护和非法分位数检查。完整测试套件为 `366 passed, 1 warning`。一轮小规模真实 `fit_student` smoke 使用 seed `2142` 的已有 teacher、128 个训练样本和 1 个 epoch，仅用于接线验证；结果为门控覆盖率 `0.75`、门控关系损失 `0.009672`、对应 rejection 分支梯度范数 `0.123124`，未门控旧 relational 项为 `0`。该 smoke 没有 discovery/test 性能含义，不进入正式结果汇总。
 
 正式协议见 `docs/team_a_representation/confidence_gated_relational_kd_protocol.md`。下一步如果继续，只在新的 semantic-hard split 上按协议做一次 paired pilot；不扫描门控比例、不修改默认配置，也不把 smoke 结果解释为算法收益。
+### 2026-11-19：置信度门控关系蒸馏 seed 2143 pilot 完成
+
+在新的 semantic-hard CIFAR-100 60/40 split `2143` 上完成 confidence-gated relational KD paired pilot。control 与 treatment 共用 split-matched teacher、学生初始化、训练预算、已有损失、known-validation checkpoint selection、feature-rejector、known-only 95% calibration 和 Auto-K；唯一训练差异为 `alpha_rejection_confidence_relational_kd=0` 与 `1.0`，固定排除每个训练批中最低置信度的 25% 样本。旧的未门控 `alpha_rejection_relational_kd` 在两臂均为 `0`。
+
+| 方法 | AUROC | AUPR | FPR95 | OSCR | known acc | known accept | unknown reject | 候选 purity | Cluster ACC | NMI | ARI | Auto-K |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| control | 0.807478 | 0.710145 | 0.571833 | 0.597396 | 0.693833 | 0.956167 | 0.249750 | 0.791601 | 0.280507 | 0.504286 | 0.168664 | 34 |
+| confidence-gated | 0.807574 | 0.714467 | 0.573167 | 0.592472 | 0.690333 | 0.950833 | 0.282500 | 0.792982 | 0.270877 | 0.497496 | 0.152804 | 35 |
+
+相对 control，confidence-gated treatment 的 AUROC/AUPR 为 `+0.000096/+0.004322`，unknown reject 提高 `3.275` 个百分点，候选 purity 提高 `0.138` 个百分点，Auto-K 绝对误差从 `6` 降至 `5`；但 FPR95 上升 `0.133` 个百分点，OSCR 下降 `0.492` 个百分点，known accuracy 下降 `0.350` 个百分点，Cluster ACC/NMI/ARI 分别下降 `0.009630/0.006790/0.015860`。固定真实 K 的全体未知 oracle NMI/ARI 也从 `0.451471/0.198271` 降至 `0.446202/0.187632`，说明当前 pilot 的下游收益只体现在候选 purity 和 K 误差，尚未改善未知表征几何。
+
+机制审计通过：treatment 四个 epoch 的门控覆盖率均为 `0.75`，门控关系损失为 `0.013858/0.009116/0.008381/0.008124`，对应 rejection 分支梯度范数为 `0.163788/0.081591/0.069799/0.064665`；control 的门控损失和梯度均为 `0`。配置差异中除门控系数、工作目录、checkpoint 路径及验证集 best score 外没有其他训练差异，测试标签未用于训练、校准或选择。
+
+该 pilot 的结果混合，不能作为性能结论。按预注册筛查条件，它因 AUROC 和候选 purity/Auto-K 方向改善且 known accuracy、unknown reject、候选 purity 未超过限制，允许进入两个全新 seed 的确认实验；不扫描 25% 门控比例、不修改默认配置，确认阶段若聚类或排序收益不能稳定复现则冻结该变体。结果见 `analysis/confidence_gated_relational_kd_s2143_pilot.json`，运行目录为 `runs/confidence_gated_relational_kd_s2143_pilot_*`。
