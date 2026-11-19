@@ -68,6 +68,7 @@ from scripts.audit_discovery_candidate_pool import (
     validation_class_threshold_candidates,
 )
 from scripts.audit_validation_threshold_stability import audit as audit_validation_threshold_stability
+from scripts.run_rejection_relational_kd_pair import complete_teacher_artifacts
 from novel_discovery.data import (
     build_outlier_dataset,
     build_transforms,
@@ -723,6 +724,32 @@ class CommandLineTest(unittest.TestCase):
         args = parse_args(["train_student"])
         self.assertEqual(args.alpha_relational_kd, 0.0)
         self.assertEqual(args.alpha_rejection_relational_kd, 0.0)
+
+    def test_relational_kd_runner_accepts_only_complete_matching_teacher(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            teacher_dir = root_path / "teacher"
+            teacher_dir.mkdir()
+            split_path = root_path / "split.json"
+            split_path.write_text("{}", encoding="utf-8")
+            self.assertFalse(complete_teacher_artifacts(teacher_dir, split_path, 2140))
+
+            (teacher_dir / "teacher.pt").write_bytes(b"checkpoint")
+            (teacher_dir / "train_teacher_config.json").write_text(
+                json.dumps(
+                    {
+                        "seed": 2140,
+                        "split_path": str(split_path),
+                        "epochs": 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (teacher_dir / "train_history.json").write_text(
+                json.dumps([{}, {}]), encoding="utf-8"
+            )
+            self.assertTrue(complete_teacher_artifacts(teacher_dir, split_path, 2140))
+            self.assertFalse(complete_teacher_artifacts(teacher_dir, split_path, 2141))
 
     def test_score_audit_rejector_modes_match_feature_builder(self):
         source = inspect.getsource(build_rejector_features)

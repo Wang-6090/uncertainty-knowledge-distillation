@@ -25,6 +25,25 @@ def resolve(path: Path) -> Path:
     return path if path.is_absolute() else (ROOT / path).resolve()
 
 
+def complete_teacher_artifacts(teacher_dir: Path, split_path: Path, seed: int) -> bool:
+    """Return whether an existing teacher can be safely reused for this pair."""
+    required = (
+        teacher_dir / "teacher.pt",
+        teacher_dir / "train_teacher_config.json",
+        teacher_dir / "train_history.json",
+    )
+    if not all(path.is_file() for path in required):
+        return False
+    config = read_json(teacher_dir / "train_teacher_config.json")
+    if int(config.get("seed", -1)) != int(seed):
+        return False
+    configured_split = config.get("split_path")
+    if not configured_split or resolve(Path(str(configured_split))) != split_path.resolve():
+        return False
+    history = read_json(teacher_dir / "train_history.json")
+    return len(history) == int(config.get("epochs", -1))
+
+
 def apply_overrides(args: Any, options: argparse.Namespace, work_dir: Path) -> None:
     args.seed = int(options.seed)
     args.model_seed = None
@@ -131,11 +150,18 @@ def main() -> None:
     arm_dirs = {arm: runs_root / f"{options.tag}_{arm}" for arm in arm_names}
     discover_dirs = {arm: Path(f"{arm_dirs[arm]}_discover") for arm in arm_names}
     result_path = ROOT / "analysis" / f"{options.tag}.json"
-    artifacts = [result_path, teacher_dir, *arm_dirs.values(), *discover_dirs.values()]
+    teacher_exists = teacher_dir.exists()
+    teacher_complete = complete_teacher_artifacts(teacher_dir, split_path, options.seed)
+    if teacher_exists and not teacher_complete:
+        raise FileExistsError(
+            "refusing to reuse incomplete or mismatched teacher artifacts: "
+            f"{teacher_dir}"
+        )
+    artifacts = [result_path, *arm_dirs.values(), *discover_dirs.values()]
     if any(path.exists() for path in artifacts):
         raise FileExistsError("refusing to overwrite an existing relational-KD pilot artifact")
 
-    if not teacher_ckpt.is_file():
+    if not teacher_complete:
         teacher_args = load_args(sources[0], "train_teacher", teacher_dir, options.seed)
         apply_overrides(teacher_args, options, teacher_dir)
         teacher_args.split_path = str(split_path)
