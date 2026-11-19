@@ -8819,3 +8819,11 @@ relational KD 的 candidate unknown recall 在三个 seed 的两臂均为 `1.0`�
 单个 run 中，全局 known acceptance 为 `94.90%–94.92%`，但按预测已知类统计的 q95 标准差为 `1.69–2.22`，q95 极差为约 `8.82–12.38`，说明全局阈值下确实存在类别间分数尺度差异。该现象本身不能证明类别条件阈值有效，因此进一步比较相同 raw CIFAR 类别在不同 semantic-hard split 的 q95 排名稳定性。control 的三个 seed 对之间 Spearman 相关为 `0.037/-0.176/-0.319`；gated 为 `-0.088/0.077/0.052`，均值接近零且没有稳定正方向。各 pair 的 q95 平均绝对差为 `1.97–2.47`。完整机器结果和表格见 [`analysis/known_validation_classwise_scale_confidence_gated.json`](analysis/known_validation_classwise_scale_confidence_gated.json) 与 [`analysis/known_validation_classwise_scale_confidence_gated.md`](analysis/known_validation_classwise_scale_confidence_gated.md)，后两项为本地 `.gitignore` 忽略产物。
 
 综合既有 seed 2061–2063 的 OOB known coverage 审计、seed 2054/2055 的工作点权衡，以及本轮跨 split 排名不稳定证据，当前类别条件 q95、预测类归一化和类别特定阈值都缺少可迁移依据。停止该方向，不启动重复的阈值扫描或训练实验；默认仍使用全局 known-validation 阈值。当前结果只能说明存在 split-specific 的尺度异质性，不能把它解释为稳定的类别偏差，也不能据此设计类别定向 loss。后续若继续优化，应回到能够在 known-only 协议下定义、并在全新配对 split 上直接验证的 rejection representation 或不确定性机制。
+
+### 2026-11-19：下一阶段候选机制筛选（仅代码/实验记录审计）
+
+在选择新训练方向前，检索现有日志与代码：普通及 confidence-gated rejection relational KD、双视图标量一致性、pairwise rank consistency、superclass-aware rejection SupCon、structure representation、VOS/inter-class virtual outlier、外部 Outlier Exposure、NNPU 和候选门控均已有实现或明确结果，不再以更换系数/名称重复启动。当前明确的 rejection 主线仍是 shared-backbone independent rejection representation；已知验证类别分数尺度也没有跨 split 稳定次序，因此暂不设计类别特定阈值或类别权重。
+
+筛选出的新候选是 **episode-conditioned pseudo-novel rejection**：只用 CIFAR-100 已知训练类别标签构造 episode，在每个 episode 内将一部分类别从 rejection support 集排除，仅把这些类别的训练图像作为该 episode 的 pseudo-novel query；其余类别构成 known support。它与 VOS 的特征空间合成及 mixed-pool 伪标签门控不同，目标是直接测试 rejection 表征能否迁移到“当前 support 未覆盖、但语义相近”的类别。此处仅是待审假设，不是已经实现或验证的方法。
+
+训练前必须先解决一个关键正确性问题：不能在同一 episode 把 pseudo-novel query 同时作为普通 known rejection CE 正样本，否则监督自相矛盾；也不能因此丢弃 CIFAR 训练集的分类监督。实现应将 episode 标签/损失限制在 rejection 分支的 episode objective，分类主干仍使用标准训练标签，未知真实类别标签和 test/mixed-pool 标签完全不进入 episode 构造。先用小型合成 batch 验证 support/query 类别互斥、episode 重采样可复现、query 只作用于 rejection 项、known 分类 CE 不变及 finite/nonzero 梯度；再用 known-only 留出类别验证跨 episode 的风险排序和已知覆盖，不满足预注册门槛则不进入 GPU paired pilot。任何 pilot 均需在新的 semantic-hard split 上与当前 shared-backbone 主线单因素配对，并以 known-validation checkpoint/全局 95% coverage calibration 处理；test labels 只在流程完成后用于完整检测与聚类指标。
