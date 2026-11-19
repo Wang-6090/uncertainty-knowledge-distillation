@@ -8811,3 +8811,11 @@ relational KD 的 candidate unknown recall 在三个 seed 的两臂均为 `1.0`�
 为确定候选 purity 下降是否来自少数固定类别，对 seed `2143/2144/2145` 的冻结 `discovery_detail.json` 和已知验证阈值做逐类别回顾性统计；不重训、不改阈值、不改变方法选择。未知类标签只用于最终测试结果的分组说明。control 到 treatment 的未知类平均 false-accept 率变化分别为 `-3.275/+0.925/-2.575` 个百分点，与总体 unknown rejection 的变化相反，说明方向仍跨 split 不一致。各 split 内 40 个未知类的 false-accept 变化标准差为 `0.0918/0.0763/0.0752`，单类变化分散；常见的误拒升高类也未形成稳定的同一组。known-class accept 的最大下降在 seed `2143` 出现在 raw class `71`（`-9 pp`），seed `2144` 为 class `59`（`-11 pp`），seed `2145` 为 class `35`（`-10 pp`），不是同一类别驱动总体差异。
 
 该诊断没有支持利用测试类别构造类定向 loss 或阈值规则，也不能证明类别条件错误不存在。它只说明当前 confidence gate 对已知/未知类别的影响有明显 split 异质性，不足以据此设计一个稳健的类别特定补丁。脚本为已有的 [`scripts/analyze_classwise_open_errors.py`](scripts/analyze_classwise_open_errors.py)，本地结果为 `analysis/classwise_confidence_gated_s2143.json`、`s2144.json`、`s2145.json`。下一阶段若继续，应先只用 known train/validation 输出检验类别条件置信度或错误风险信号是否跨 split 稳定，再决定是否提出新的、独立预注册训练机制；不在这些测试类结果上做规则或参数选择。
+
+### 2026-11-19：known-validation 类别分数尺度跨 split 稳定性审计
+
+为落实上一节提出的 known-only 检查，本轮只读取 confidence-gated 三 seed 的冻结 `feature_rejector_scores.npz`、logits、已知校准子集协议和全局阈值；不重训、不改模型、不重新拟合阈值，也不读取 mixed pool/test 标签。审计脚本 [`scripts/audit_known_validation_classwise_scale.py`](scripts/audit_known_validation_classwise_scale.py) 同时修正并核对了导出 `source_index` 与 `bundle.calibration` 的底层 CIFAR 索引，六个 run 均完成对齐；脚本编译检查和真实运行均通过。
+
+单个 run 中，全局 known acceptance 为 `94.90%–94.92%`，但按预测已知类统计的 q95 标准差为 `1.69–2.22`，q95 极差为约 `8.82–12.38`，说明全局阈值下确实存在类别间分数尺度差异。该现象本身不能证明类别条件阈值有效，因此进一步比较相同 raw CIFAR 类别在不同 semantic-hard split 的 q95 排名稳定性。control 的三个 seed 对之间 Spearman 相关为 `0.037/-0.176/-0.319`；gated 为 `-0.088/0.077/0.052`，均值接近零且没有稳定正方向。各 pair 的 q95 平均绝对差为 `1.97–2.47`。完整机器结果和表格见 [`analysis/known_validation_classwise_scale_confidence_gated.json`](analysis/known_validation_classwise_scale_confidence_gated.json) 与 [`analysis/known_validation_classwise_scale_confidence_gated.md`](analysis/known_validation_classwise_scale_confidence_gated.md)，后两项为本地 `.gitignore` 忽略产物。
+
+综合既有 seed 2061–2063 的 OOB known coverage 审计、seed 2054/2055 的工作点权衡，以及本轮跨 split 排名不稳定证据，当前类别条件 q95、预测类归一化和类别特定阈值都缺少可迁移依据。停止该方向，不启动重复的阈值扫描或训练实验；默认仍使用全局 known-validation 阈值。当前结果只能说明存在 split-specific 的尺度异质性，不能把它解释为稳定的类别偏差，也不能据此设计类别定向 loss。后续若继续优化，应回到能够在 known-only 协议下定义、并在全新配对 split 上直接验证的 rejection representation 或不确定性机制。
