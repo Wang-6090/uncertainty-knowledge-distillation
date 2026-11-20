@@ -94,6 +94,8 @@ def validate_sources(teacher: dict[str, Any], student: dict[str, Any], discover_
         raise ValueError("source student must have a positive rejection feature dimension")
     if student.get("alpha_vos", 0.0) != 0.0 or student.get("alpha_vos_rejection", 0.0) != 0.0:
         raise ValueError("source student must keep VOS disabled for this screening")
+    if student.get("checkpoint_selection") != "known_acc":
+        raise ValueError("source student must select checkpoints by known validation accuracy")
     if discover_config.get("threshold_policy") != "known_coverage":
         raise ValueError("source discovery config must use known_coverage")
     if float(discover_config.get("target_known_coverage", 0.0)) != 0.95:
@@ -102,6 +104,22 @@ def validate_sources(teacher: dict[str, Any], student: dict[str, Any], discover_
         raise ValueError("source discovery config must use NNPU rejector training")
     if not bool(discover_config.get("matched_discovery_pool")):
         raise ValueError("source discovery config must use matched discovery pools")
+
+
+def validate_report(path: Path) -> dict[str, Any]:
+    report = read_json(path)
+    protocol = report.get("rejector_protocol", {})
+    if report.get("threshold_policy") != "known_val_known_coverage":
+        raise ValueError(f"{path}: threshold is not known-validation coverage")
+    if float(report.get("target_known_coverage", 0.0)) != 0.95:
+        raise ValueError(f"{path}: target known coverage is not 0.95")
+    if protocol.get("hard_labels_used") is not False:
+        raise ValueError(f"{path}: hard mixed-pool labels were used")
+    if protocol.get("test_labels_used_for_training_or_calibration") is not False:
+        raise ValueError(f"{path}: test labels were used before final evaluation")
+    if report.get("clustering_skipped") is True:
+        raise ValueError(f"{path}: clustering was skipped in a formal screening arm")
+    return report
 
 
 def main() -> None:
@@ -222,6 +240,8 @@ def main() -> None:
         args.threshold_policy = "known_coverage"
         args.target_known_coverage = 0.95
         args.save_calibration_scores = True
+        args.skip_clustering = False
+        args.cluster_k = "auto"
         if options.limit_val is not None:
             args.limit_val = options.limit_val
         if options.limit_test is not None:
@@ -233,7 +253,7 @@ def main() -> None:
             else:
                 args.limit_discovery = options.limit_discovery
         discover(args)
-        reports[name] = read_json(discover_dir / "discovery_report.json")
+        reports[name] = validate_report(discover_dir / "discovery_report.json")
 
     result = {
         "question": "Does episode-conditioned pseudo-novel rejection improve the shared-backbone pipeline?",
