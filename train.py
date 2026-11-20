@@ -824,12 +824,13 @@ def build_parser():
     )
     p.add_argument(
         "--rejection-gradient-conflict-mode",
-        choices=["off", "project_auxiliary"],
+        choices=["off", "project_auxiliary", "project_auxiliary_componentwise"],
         default="off",
         help=(
             "Opt-in projection of rejection auxiliary gradients that conflict "
-            "with known-support rejection gradients; requires an independent "
-            "rejection encoder and is disabled by default."
+            "with known-support rejection gradients; componentwise mode routes "
+            "each auxiliary loss separately. Requires an independent rejection "
+            "encoder and is disabled by default."
         ),
     )
     p.add_argument(
@@ -962,6 +963,17 @@ def build_parser():
 
     p = sub.add_parser("train_student")
     add_common(p)
+    p.add_argument(
+        "--rejection-gradient-conflict-mode",
+        choices=["off", "project_auxiliary", "project_auxiliary_componentwise"],
+        default="off",
+        help=(
+            "Opt-in projection of rejection auxiliary gradients that conflict "
+            "with known-support rejection gradients; componentwise mode routes "
+            "each auxiliary loss separately. Requires an independent rejection "
+            "encoder and is disabled by default."
+        ),
+    )
     p.add_argument(
         "--alpha-rejection-episode-pseudonovel",
         type=float,
@@ -3897,11 +3909,11 @@ def fit_student(args):
             "--alpha-rejection-episode-pseudonovel requires --rejection-feature-dim > 0"
         )
     if (
-        args.rejection_gradient_conflict_mode == "project_auxiliary"
+        args.rejection_gradient_conflict_mode != "off"
         and not args.independent_rejection_encoder
     ):
         raise ValueError(
-            "--rejection-gradient-conflict-mode=project_auxiliary requires "
+            "--rejection-gradient-conflict-mode requires "
             "--independent-rejection-encoder"
         )
     if args.alpha_structure_supcon > 0.0 and args.structure_feature_dim <= 0:

@@ -8908,3 +8908,16 @@ smoke 的 control/treatment 检测 AUROC 为 `0.607734/0.609217`，AUPR 为 `0.5
 检测与聚类分开看：路由改善了 AUROC/AUPR/FPR95 和三项聚类指标，候选 purity 也提高；但 OSCR、95% known coverage 下 unknown rejection 和 known accuracy 下降，接受后 known accuracy 也从 `0.714210` 降至 `0.700000`。因此它没有形成完整的开放集检测收益，不能把聚类改善解释为整体方法改进。
 
 机制审计通过：control 四轮的冲突率和投影比例均为 `0`；treatment 每轮冲突率为 `0.36/0.33/0.32/0.31`，投影比例约为 `0.03/0.02/0.02/0.02`。这说明投影确实只在部分冲突批次触发，并没有把所有 auxiliary gradient 默认削弱。该结果是单一 semantic-hard split 上的描述性证据；因 fixed-coverage unknown rejection 和 known utility 同时退化，按协议冻结 `project_auxiliary`，不启动确认 seed，不扫描投影系数、冲突阈值或损失权重，也不修改默认 `off`。正式机器结果见 `analysis/rejection_gradient_conflict_formal_s2152.json`，训练与 discovery 产物保留在对应 `runs/rejection_gradient_conflict_formal_s2152_*` 目录。
+
+随后做了只读的分数与校准归因，不重训、不改阈值、不使用测试标签选择方法。treatment 的 known-validation calibrated threshold 从 `4.946689` 提高到 `5.225995`，验证集实际 known acceptance 两臂均为 `94.9106%`，说明阈值校准流程本身一致；treatment 测试 known/unknown 分数均值分别为 `-1.2395/2.8071`，control 为 `-1.4267/2.7682`，均值间隔由 `4.1949` 变为 `4.0466`。因此 unknown rejection 下降不是报告字段错误或 test-driven 阈值，而是路由后 rejection 分数分布和 known-only 校准工作点的真实 trade-off。与此同时候选数从 `1326` 降至 `1123`、purity 从 `73.152%` 升至 `74.889%`、Auto-K 绝对误差从 `9` 降至 `8`，解释了聚类指标改善：当前路由更偏向保守、纯度更高的候选池，但牺牲未知实例覆盖。下一阶段若继续，只研究能把候选纯度和未知覆盖分开的结构性机制；不在当前 split 上继续调 projection 参数。
+## 2026-11-20：分量级拒识梯度路由实现审计与 smoke
+
+今天继续围绕前一阶段的结构性问题推进。`project_auxiliary` 把所有拒识辅助损失先求和再投影，可能让不同分量之间的抵消掩盖真实冲突；因此实现了新的 opt-in 模式 `project_auxiliary_componentwise`，对每个非零权重且确实有 autograd 路径的加权辅助项分别计算梯度、相对同一个 known-support 梯度独立投影，最后再求和。已启用项数量和每项冲突率/投影比例分别记录。默认 `off` 和已冻结的 `project_auxiliary` 路径保留，教师、拒识分数、校准、聚类和标签使用规则均未改变。
+
+实现审计中发现 CLI 参数最初只接到了 `train_teacher`，无法被实际的 `train_student` 命令解析，已补齐并增加命令行回归测试。另确认新模式的辅助项分组与旧聚合模式完全一致；拒识 consistency 项继续留在普通残差损失路径中，避免把“改变分组”和“改变路由顺序”混在同一实验里。
+
+正确性验证通过：核心测试 `319 passed, 1 warning`，全量测试 `378 passed, 1 warning`，Python 编译和 `git diff --check` 通过。seed 2153 的 CIFAR-100 semantic-hard 60/40 划分已生成，preflight 确认 control/treatment 唯一物质差异为 `off` 与 `project_auxiliary_componentwise`，输出目录采用拒绝覆盖策略。
+
+随后完成一轮低预算 paired smoke（两臂共用 seed-matched teacher、split、配置、1 epoch、训练/验证/测试/发现样本上限；固定 known-validation 95% coverage 校准；未知标签只在最终评价使用）。control 和 treatment 的训练、已知校准、Auto-K 与聚类链路均完成。treatment 的逐批诊断显示平均启用辅助分量数 `2.0`：`outlier_margin` 冲突率 `1.0`、平均投影比例 `0.01211`，`uncertainty_pu` 冲突率 `0`、投影比例 `0`。这证明分量级路由确实运行并保留了逐项差异；smoke 规模过小且只有 1 epoch，不报告其检测或聚类数值，也不据此选择方法。
+
+当前决策：实现和协议门禁通过，可以进入 seed 2153 的正式 paired screening；正式实验仍需按协议同时报告检测、固定覆盖拒识、候选池和聚类，并在已知效用或未知覆盖继续退化时冻结，不扫描投影参数或损失权重。

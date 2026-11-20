@@ -222,6 +222,37 @@ def project_auxiliary_gradient_against_reference(
     }
 
 
+def project_auxiliary_gradients_componentwise_against_reference(
+    reference_gradients,
+    auxiliary_gradient_groups,
+    parameters,
+    *,
+    eps: float = 1e-12,
+):
+    """Route each named auxiliary gradient independently against a reference.
+
+    The aggregate rejection router first sums all auxiliary objectives.  This
+    helper keeps the same projection rule but applies it to each named
+    objective before summing, so cancellation between auxiliary terms cannot
+    hide a conflict.  It returns aggregate gradients and per-term diagnostics.
+    """
+    if not auxiliary_gradient_groups:
+        return [torch.zeros_like(parameter) for parameter in parameters], {}
+    routed = [torch.zeros_like(parameter) for parameter in parameters]
+    diagnostics = {}
+    for name, gradients in auxiliary_gradient_groups.items():
+        projected, details = project_auxiliary_gradient_against_reference(
+            reference_gradients,
+            gradients,
+            parameters,
+            eps=eps,
+        )
+        for index, gradient in enumerate(projected):
+            routed[index].add_(gradient)
+        diagnostics[name] = details
+    return routed, diagnostics
+
+
 def _parameter_gradients_or_zeros(objective, parameters):
     """Return parameter gradients, using zeros for a disabled objective."""
     if objective is None or not objective.requires_grad:
@@ -1968,12 +1999,18 @@ def train_one_epoch_student(
     alpha_outlier_rejection_uniform: float = 0.0,
     freeze_bn_stats: bool = False,
 ):
-    if rejection_gradient_conflict_mode not in {"off", "project_auxiliary"}:
+    if rejection_gradient_conflict_mode not in {
+        "off",
+        "project_auxiliary",
+        "project_auxiliary_componentwise",
+    }:
         raise ValueError(
-            "rejection_gradient_conflict_mode must be off or project_auxiliary"
+            "rejection_gradient_conflict_mode must be off, project_auxiliary, "
+            "or project_auxiliary_componentwise"
         )
-    if rejection_gradient_conflict_mode == "project_auxiliary" and not getattr(
-        student, "independent_rejection_encoder_enabled", False
+    if (
+        rejection_gradient_conflict_mode != "off"
+        and not getattr(student, "independent_rejection_encoder_enabled", False)
     ):
         raise ValueError(
             "rejection gradient conflict projection requires an independent rejection encoder"
@@ -2115,6 +2152,11 @@ def train_one_epoch_student(
     rejection_gradient_conflict_batches = 0
     rejection_gradient_conflict_total_batches = 0
     rejection_gradient_conflict_projection_sum = 0.0
+    rejection_gradient_componentwise_conflict_counts = {}
+    rejection_gradient_componentwise_seen_batches = {}
+    rejection_gradient_componentwise_total_batches = 0
+    rejection_gradient_componentwise_projection_sums = {}
+    rejection_gradient_componentwise_active_terms_sum = 0
     encoder_parameters = list(student.encoder.parameters()) if audit_loss_gradients else []
     classifier_parameters = (
         list(student.classifier.parameters()) if audit_loss_gradients else []
@@ -2125,7 +2167,7 @@ def train_one_epoch_student(
         if structure_module is not None:
             structure_parameters.extend(structure_module.parameters())
     rejection_parameters = []
-    if audit_loss_gradients or rejection_gradient_conflict_mode == "project_auxiliary":
+    if audit_loss_gradients or rejection_gradient_conflict_mode != "off":
         for module_name in (
             "rejection_encoder",
             "rejection_projector",
@@ -4688,32 +4730,77 @@ def train_one_epoch_student(
             + alpha_rejection_decorrelation * loss_rejection_decorrelation
             + alpha_rejection_variance_floor * loss_rejection_variance_floor
         )
-        rejection_auxiliary_objective = (
-            alpha_rejection_episode_pseudonovel * loss_rejection_episode_pseudonovel
-            + alpha_rejection_kd * loss_rejection_kd
-            + alpha_rejection_feat_kd * loss_rejection_feat_kd
-            + alpha_rejection_relational_kd * loss_rejection_relational_kd
-            + alpha_rejection_confidence_relational_kd
-            * loss_rejection_confidence_relational_kd
-            + alpha_discovery_rejection_pu_feature_margin
-            * loss_discovery_rejection_pu_feature_margin
-            + alpha_discovery_rejection_boundary * loss_discovery_rejection_boundary
-            + alpha_discovery_rejection_feature_margin
-            * loss_discovery_rejection_feature_margin
-            + alpha_discovery_rejection_feature_separation
-            * loss_discovery_rejection_feature_separation
-            + alpha_discovery_rejection_knn_boundary
-            * loss_discovery_rejection_knn_boundary
-            + alpha_discovery_uncertainty_feature_margin
-            * loss_discovery_uncertainty_feature_margin
-            + alpha_discovery_uncertainty_separation
-            * loss_discovery_uncertainty_separation
-            + alpha_discovery_uncertainty_pu * loss_discovery_uncertainty_pu
-            + alpha_outlier_rejection_feature_margin
-            * loss_outlier_rejection_feature_margin
-            + alpha_outlier_uncertainty * loss_outlier_uncertainty
-            + alpha_outlier_rejection_uniform * loss_outlier_rejection_uniform
-            + alpha_vos_rejection * loss_vos_rejection
+        rejection_auxiliary_objectives = {
+            "episode_pseudonovel": (
+                alpha_rejection_episode_pseudonovel * loss_rejection_episode_pseudonovel
+            ),
+            "kd": alpha_rejection_kd * loss_rejection_kd,
+            "feat_kd": alpha_rejection_feat_kd * loss_rejection_feat_kd,
+            "relational_kd": alpha_rejection_relational_kd * loss_rejection_relational_kd,
+            "confidence_relational_kd": (
+                alpha_rejection_confidence_relational_kd
+                * loss_rejection_confidence_relational_kd
+            ),
+            "discovery_pu_margin": (
+                alpha_discovery_rejection_pu_feature_margin
+                * loss_discovery_rejection_pu_feature_margin
+            ),
+            "discovery_boundary": (
+                alpha_discovery_rejection_boundary * loss_discovery_rejection_boundary
+            ),
+            "discovery_margin": (
+                alpha_discovery_rejection_feature_margin
+                * loss_discovery_rejection_feature_margin
+            ),
+            "discovery_separation": (
+                alpha_discovery_rejection_feature_separation
+                * loss_discovery_rejection_feature_separation
+            ),
+            "discovery_knn": (
+                alpha_discovery_rejection_knn_boundary
+                * loss_discovery_rejection_knn_boundary
+            ),
+            "uncertainty_margin": (
+                alpha_discovery_uncertainty_feature_margin
+                * loss_discovery_uncertainty_feature_margin
+            ),
+            "uncertainty_separation": (
+                alpha_discovery_uncertainty_separation
+                * loss_discovery_uncertainty_separation
+            ),
+            "uncertainty_pu": alpha_discovery_uncertainty_pu * loss_discovery_uncertainty_pu,
+            "outlier_margin": (
+                alpha_outlier_rejection_feature_margin
+                * loss_outlier_rejection_feature_margin
+            ),
+            "outlier_uncertainty": alpha_outlier_uncertainty * loss_outlier_uncertainty,
+            "outlier_uniform": (
+                alpha_outlier_rejection_uniform * loss_outlier_rejection_uniform
+            ),
+            "vos_rejection": alpha_vos_rejection * loss_vos_rejection,
+        }
+        rejection_auxiliary_weights = {
+            "episode_pseudonovel": alpha_rejection_episode_pseudonovel,
+            "kd": alpha_rejection_kd,
+            "feat_kd": alpha_rejection_feat_kd,
+            "relational_kd": alpha_rejection_relational_kd,
+            "confidence_relational_kd": alpha_rejection_confidence_relational_kd,
+            "discovery_pu_margin": alpha_discovery_rejection_pu_feature_margin,
+            "discovery_boundary": alpha_discovery_rejection_boundary,
+            "discovery_margin": alpha_discovery_rejection_feature_margin,
+            "discovery_separation": alpha_discovery_rejection_feature_separation,
+            "discovery_knn": alpha_discovery_rejection_knn_boundary,
+            "uncertainty_margin": alpha_discovery_uncertainty_feature_margin,
+            "uncertainty_separation": alpha_discovery_uncertainty_separation,
+            "uncertainty_pu": alpha_discovery_uncertainty_pu,
+            "outlier_margin": alpha_outlier_rejection_feature_margin,
+            "outlier_uncertainty": alpha_outlier_uncertainty,
+            "outlier_uniform": alpha_outlier_rejection_uniform,
+            "vos_rejection": alpha_vos_rejection,
+        }
+        rejection_auxiliary_objective = sum(
+            rejection_auxiliary_objectives.values(),
+            loss.new_zeros(()),
         )
         if audit_loss_gradients:
             gradient_diagnostics = compute_encoder_gradient_diagnostics(
@@ -4879,23 +4966,68 @@ def train_one_epoch_student(
             else None
         )
         optimizer.zero_grad()
-        if rejection_gradient_conflict_mode == "project_auxiliary" and rejection_parameters:
+        if rejection_gradient_conflict_mode != "off" and rejection_parameters:
             rejection_gradient_conflict_total_batches += 1
             reference_gradients = _parameter_gradients_or_zeros(
                 rejection_known_objective, rejection_parameters
             )
-            auxiliary_gradients = _parameter_gradients_or_zeros(
-                rejection_auxiliary_objective, rejection_parameters
-            )
-            projected_gradients, conflict_stats = project_auxiliary_gradient_against_reference(
-                reference_gradients,
-                auxiliary_gradients,
-                rejection_parameters,
-            )
-            rejection_gradient_conflict_batches += int(conflict_stats["conflict"])
-            rejection_gradient_conflict_projection_sum += float(
-                conflict_stats["projection_fraction"]
-            )
+            if rejection_gradient_conflict_mode == "project_auxiliary_componentwise":
+                rejection_gradient_componentwise_total_batches += 1
+                active_auxiliary_objectives = {
+                    name: objective
+                    for name, objective in rejection_auxiliary_objectives.items()
+                    if rejection_auxiliary_weights[name] != 0.0
+                    and objective.requires_grad
+                }
+                rejection_gradient_componentwise_active_terms_sum += len(
+                    active_auxiliary_objectives
+                )
+                auxiliary_gradients = {
+                    name: _parameter_gradients_or_zeros(objective, rejection_parameters)
+                    for name, objective in active_auxiliary_objectives.items()
+                }
+                projected_gradients, component_stats = (
+                    project_auxiliary_gradients_componentwise_against_reference(
+                        reference_gradients,
+                        auxiliary_gradients,
+                        rejection_parameters,
+                    )
+                )
+                conflict_count = 0
+                projection_sum = 0.0
+                for name, details in component_stats.items():
+                    rejection_gradient_componentwise_seen_batches[name] = (
+                        rejection_gradient_componentwise_seen_batches.get(name, 0) + 1
+                    )
+                    rejection_gradient_componentwise_conflict_counts[name] = (
+                        rejection_gradient_componentwise_conflict_counts.get(name, 0)
+                        + int(details["conflict"])
+                    )
+                    rejection_gradient_componentwise_projection_sums[name] = (
+                        rejection_gradient_componentwise_projection_sums.get(name, 0.0)
+                        + float(details["projection_fraction"])
+                    )
+                    conflict_count += int(details["conflict"])
+                    projection_sum += float(details["projection_fraction"])
+                rejection_gradient_conflict_batches += int(conflict_count > 0)
+                rejection_gradient_conflict_projection_sum += projection_sum / max(
+                    len(component_stats), 1
+                )
+            else:
+                auxiliary_gradients = _parameter_gradients_or_zeros(
+                    rejection_auxiliary_objective, rejection_parameters
+                )
+                projected_gradients, conflict_stats = (
+                    project_auxiliary_gradient_against_reference(
+                        reference_gradients,
+                        auxiliary_gradients,
+                        rejection_parameters,
+                    )
+                )
+                rejection_gradient_conflict_batches += int(conflict_stats["conflict"])
+                rejection_gradient_conflict_projection_sum += float(
+                    conflict_stats["projection_fraction"]
+                )
             (loss - rejection_known_objective - rejection_auxiliary_objective).backward()
             for parameter, reference, auxiliary in zip(
                 rejection_parameters, reference_gradients, projected_gradients
@@ -5409,14 +5541,31 @@ def train_one_epoch_student(
     stats["rejection_gradient_conflict_mode"] = rejection_gradient_conflict_mode
     stats["rejection_gradient_conflict_rate"] = (
         rejection_gradient_conflict_batches / max(rejection_gradient_conflict_total_batches, 1)
-        if rejection_gradient_conflict_mode == "project_auxiliary"
+        if rejection_gradient_conflict_mode != "off"
         else 0.0
     )
     stats["rejection_gradient_conflict_projection_fraction"] = (
         rejection_gradient_conflict_projection_sum / max(rejection_gradient_conflict_total_batches, 1)
-        if rejection_gradient_conflict_mode == "project_auxiliary"
+        if rejection_gradient_conflict_mode != "off"
         else 0.0
     )
+    if rejection_gradient_conflict_mode == "project_auxiliary_componentwise":
+        stats["rejection_gradient_componentwise_active_terms_per_batch"] = (
+            rejection_gradient_componentwise_active_terms_sum
+            / max(rejection_gradient_componentwise_total_batches, 1)
+        )
+        for name in sorted(rejection_gradient_componentwise_conflict_counts):
+            safe_name = name.replace("-", "_")
+            stats[f"rejection_gradient_componentwise_{safe_name}_conflict_rate"] = (
+                rejection_gradient_componentwise_conflict_counts[name]
+                / max(rejection_gradient_componentwise_seen_batches[name], 1)
+            )
+            stats[
+                f"rejection_gradient_componentwise_{safe_name}_projection_fraction"
+            ] = (
+                rejection_gradient_componentwise_projection_sums[name]
+                / max(rejection_gradient_componentwise_seen_batches[name], 1)
+            )
     return stats
 
 

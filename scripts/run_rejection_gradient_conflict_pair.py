@@ -62,6 +62,12 @@ def main() -> None:
         ),
     )
     parser.add_argument("--tag", default="rejection_gradient_conflict_screening")
+    parser.add_argument(
+        "--treatment-mode",
+        choices=("project_auxiliary", "project_auxiliary_componentwise"),
+        default="project_auxiliary_componentwise",
+        help="Opt-in routing rule used by the treatment arm.",
+    )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--limit-train", type=int, default=None)
@@ -128,7 +134,7 @@ def main() -> None:
     arms = {}
     for name, arm_dir, mode in (
         ("control", control_dir, "off"),
-        ("treatment", treatment_dir, "project_auxiliary"),
+        ("treatment", treatment_dir, options.treatment_mode),
     ):
         args = load_args(student_source, "train_student", arm_dir, options.seed)
         args.split_path = str(split_path)
@@ -174,7 +180,10 @@ def main() -> None:
         "control_mode": arms["control"].rejection_gradient_conflict_mode,
         "treatment_mode": arms["treatment"].rejection_gradient_conflict_mode,
         "materialized_training_differences": {
-            "rejection_gradient_conflict_mode": ["off", "project_auxiliary"]
+            "rejection_gradient_conflict_mode": [
+                "off",
+                options.treatment_mode,
+            ]
         },
         "output_directories": {name: str(path) for name, path in (
             ("teacher", teacher_dir),
