@@ -8845,3 +8845,18 @@ relational KD 的 candidate unknown recall 在三个 seed 的两臂均为 `1.0`�
 重试 smoke 使用 seed `2150`、共同 teacher、1 epoch、训练/验证/测试/匹配发现池规模 `256/128/256/256`，control 的 episode 系数为 `0`，treatment 为预先固定的 `0.1`。两臂配置核对通过，训练和 discovery 均完成，报告确认 `threshold_policy=known_val_known_coverage`、`target_known_coverage=0.95`、`test_labels_used_for_training_or_calibration=false`、`hard_labels_used=false`。treatment 训练 history 中 episode loss 为 `4.7365`、留出比例 `0.2617`、episode rejection 梯度范数 `0.1917`，说明新损失真实进入优化。低预算测试结果 control/treatment 的 AUROC 为 `0.4959/0.4817`，AUPR 为 `0.4127/0.4014`，未知拒识率均为 `6.06%`，已知接受率为 `96.82%/95.54%`；1 epoch、256 个测试样本且跳过聚类，结果仅作流程 smoke，不能作为方法收益或劣势结论。runner 同步修正了已知准确率字段，下一步再运行完整测试并提交这阶段 runner、日志和 split 记录。
 
 正式 screening 前再次检查 runner：源 discovery 配置的 `skip_clustering=true` 只适合早期 smoke，若原样沿用会漏掉聚类结果。已将 runner 固定为 `skip_clustering=false`、`cluster_k=auto`，并在结果读取时拒绝聚类被跳过、拒绝非 known-validation 阈值和任何 test/mixed-pool hard label 使用。seed 2150 的历史 smoke 不重跑；下一次正式 screening 将按该修正版 runner 执行。
+
+### 2026-11-20：episode-conditioned pseudo-novel rejection seed 2151 正式 screening 完成
+
+按修正版正式协议，在新的 semantic-hard CIFAR-100 60/40 split `2151` 上完成 control 与 treatment 的完整配对实验。两臂共用同一 teacher、split、学生初始化、训练预算、已有损失、known-validation checkpoint selection、matched mixed discovery pool、feature-rejector、known-only 95% coverage calibration 和 Auto-K；唯一预设训练差异为 `alpha_rejection_episode_pseudonovel=0` 与 `0.1`。`holdout_fraction=0.25`、episode uncertainty weight `1.0` 固定不变，`open_val_ratio=0.0`，聚类强制开启且使用 `cluster_k=auto`。测试标签没有用于训练、checkpoint 选择、阈值校准或参数选择，仅用于流程完成后的最终检测和聚类评价。
+
+| 方法 | AUROC | AUPR | FPR95 | OSCR | Known acc | Known accept | Unknown reject | Cluster ACC | NMI | ARI |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| control | 0.788320 | 0.677180 | 0.612333 | 0.581533 | 0.695333 | 0.937667 | 0.277000 | 0.269906 | 0.502959 | 0.158946 |
+| episode pseudo-novel | 0.774224 | 0.662766 | 0.655000 | 0.581582 | 0.703333 | 0.945500 | 0.240250 | 0.239907 | 0.476790 | 0.126787 |
+
+相对 control，treatment 的 AUROC/AUPR 分别下降 `0.014096/0.014414`，FPR95 上升 `0.042667`，OSCR 仅提高 `0.000049`；known accuracy 提高 `0.800` 个百分点、known accept 提高 `0.783` 个百分点，但 unknown reject 下降 `3.675` 个百分点。聚类 ACC/NMI/ARI 分别下降 `0.030`、`0.026` 和 `0.032`。因此该 seed 没有显示检测或新类发现收益，已知分类准确率的改善也伴随明显的未知拒识和聚类退化，不能作为方法改进。
+
+机制审计通过：control 四个 epoch 的 episode loss、留出比例和 episode rejection 梯度均为 `0`；treatment 的 episode loss 为 `5.951904/6.581804/6.733679/6.840358`，留出比例为 `0.261065/0.263194/0.260926/0.260463`，对应 rejection 分支梯度范数为 `1.938851/2.402320/2.499891/2.576594`。这证明 pseudo-novel loss 进入总损失并产生有效梯度；它没有改变主分类标签，也没有读取未知测试标签。完整原始报告保存在本地 `analysis/episode_pseudonovel_screening_s2151.json`，训练与 discovery 产物在对应的 `runs/episode_pseudonovel_screening_s2151_*` 目录中；这些运行产物按仓库规则被忽略，split 定义纳入版本控制。
+
+按预先固定的筛选条件，本 pilot 因排序指标和聚类指标均未改善，冻结 episode-conditioned pseudo-novel rejection，不启动 `2152/2153` 确认实验，不扫描系数、留出比例或 uncertainty weight，也不修改默认关闭配置。下一阶段转向新的、已知标签可定义且不重复 relational KD/类别阈值方向的机制假设；先做代码和协议审计，再决定是否值得启动新的单因素实验。
