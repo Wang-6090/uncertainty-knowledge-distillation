@@ -8944,3 +8944,13 @@ smoke 的 control/treatment 检测 AUROC 为 `0.607734/0.609217`，AUPR 为 `0.5
 机制统计显示 componentwise treatment 四轮总冲突率为 `0.6746/0.6627/0.6450/0.6361`，总投影比例为 `0.04422/0.03476/0.03452/0.02790`；每轮平均启用分量数均为 `2.0`。`outlier_margin` 的冲突率为 `0.4704/0.5059/0.5059/0.4379`，投影比例为 `0.05959/0.04554/0.04759/0.03343`；`uncertainty_pu` 的冲突率为 `0.3698/0.3314/0.3077/0.3462`，投影比例为 `0.02885/0.02397/0.02144/0.02237`。control 四轮冲突率和投影比例均为 `0`，说明 treatment 的新路由确实执行了分量级投影，而非日志字段误报。
 
 本轮结果与 seed 2152 的旧聚合路由不同：componentwise 在 seed 2153 上提高了固定 coverage 下未知拒识，但 AUROC/AUPR 没有提高，候选池变大且纯度下降，三项聚类指标也下降；known accuracy、known acceptance 和 OSCR 同时下降。因此它没有形成稳定的端到端新类发现收益，不能据此替换默认 `off`，也不启动确认 seed、投影强度扫描或损失权重扫描。该候选按协议冻结。正式汇总见 `analysis/rejection_gradient_componentwise_formal_s2153.json`，训练和 discovery 产物保留在 `runs/rejection_gradient_componentwise_formal_s2153_*`。
+
+## 2026-11-20：冻结 checkpoint 的组合评分审计
+
+梯度路由候选冻结后，转向当前更直接的结构性矛盾：拒识评分如果只依赖 feature rejector，未知覆盖和候选纯度可能随工作点一起变化。仓库已有两个固定的拒识器与学生不确定性组合评分，因此在不重训教师/学生的前提下做了冻结评分审计。四个 discovery 运行只改变 `score_mode`，均使用相同的正式 seed 2153 control/treatment checkpoint、matched mixed discovery pool、NNPU rejector、独立 known-validation 95% coverage 校准和 Auto-K 聚类；没有测试标签调权或扫描融合权重。
+
+相对同一 checkpoint 的原始 `feature_rejector`，固定 `feature_rejector_uncertainty_conjunction` 的结果为：control 的 AUROC/AUPR/FPR95/OSCR 分别变化 `+0.004905/-0.000376/-0.028833/+0.007118`，unknown rejection `+7.275 pp`，candidate purity `-0.575 pp`，Cluster ACC/NMI/ARI 变化 `+0.468/-2.242/+1.240 pp`；componentwise treatment 的 AUROC/AUPR/FPR95/OSCR 分别变化 `+0.013638/+0.022607/-0.013000/+0.007538`，unknown rejection `+3.725 pp`，candidate purity `+4.664 pp`，Cluster ACC/NMI/ARI 变化 `+1.733/+0.921/+2.268 pp`。两臂 known accuracy 均保持原 checkpoint 的值，校准集 acceptance 均为 `94.9246%`。
+
+固定 0.5/0.5 `feature_rejector_uncertainty_fusion` 也改善了两臂的排序指标和固定覆盖拒识，但聚类变化不如 conjunction 一致。conjunction 更符合当前问题的目标：要求 rejector 风险和不确定性风险同时支持未知判断，减少单一信号放宽候选池造成的污染。审计报告和标签隔离字段均通过，脚本为 `scripts/run_frozen_score_mode_audit.py`，协议见 `docs/team_a_representation/frozen_score_mode_audit_protocol.md`，汇总保存在 `analysis/frozen_score_audit_s2153.json`。
+
+当前判断：conjunction 是值得进入下一阶段确认的候选，但 seed 2153 冻结 checkpoint 的结果仍属于单 seed 探索，不能修改默认 score mode。下一阶段只在新的独立 seed 上复核这一预先固定的 conjunction 规则；不先扫描阈值、融合权重或候选比例。
