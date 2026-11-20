@@ -170,6 +170,70 @@ def compute_parameter_gradient_diagnostics(
     return diagnostics
 
 
+def project_auxiliary_gradient_against_reference(
+    reference_gradients,
+    auxiliary_gradients,
+    parameters,
+    *,
+    eps: float = 1e-12,
+):
+    """Project an auxiliary parameter gradient away from a conflicting reference.
+
+    This is the two-objective PCGrad update used by the opt-in rejection
+    conflict protocol.  Only the auxiliary vector is modified: when its dot
+    product with the reference vector is negative, remove the component that
+    points against the reference.  Missing gradients are treated as zeros and
+    the returned tensors are detached so callers can assign them to
+    ``parameter.grad`` after backpropagating the remaining objective.
+    """
+    if len(reference_gradients) != len(auxiliary_gradients) or len(parameters) != len(reference_gradients):
+        raise ValueError("gradient lists and parameters must have equal length")
+    reference_parts = []
+    auxiliary_parts = []
+    for reference, auxiliary, parameter in zip(
+        reference_gradients, auxiliary_gradients, parameters
+    ):
+        zero = torch.zeros_like(parameter)
+        reference_parts.append((reference if reference is not None else zero).detach().reshape(-1))
+        auxiliary_parts.append((auxiliary if auxiliary is not None else zero).detach().reshape(-1))
+    if not reference_parts:
+        return [], {"conflict": False, "dot": 0.0, "projection_fraction": 0.0}
+    reference_vector = torch.cat(reference_parts)
+    auxiliary_vector = torch.cat(auxiliary_parts)
+    dot = float(torch.dot(reference_vector, auxiliary_vector).item())
+    reference_norm_sq = float(torch.dot(reference_vector, reference_vector).item())
+    conflict = dot < 0.0 and reference_norm_sq > float(eps)
+    projected = auxiliary_vector
+    if conflict:
+        projected = auxiliary_vector - (dot / (reference_norm_sq + float(eps))) * reference_vector
+    removed = auxiliary_vector - projected
+    auxiliary_norm = float(auxiliary_vector.norm().item())
+    projection_fraction = float(removed.norm().item() / max(auxiliary_norm, float(eps)))
+    result = []
+    offset = 0
+    for parameter in parameters:
+        count = parameter.numel()
+        result.append(projected[offset : offset + count].view_as(parameter).clone())
+        offset += count
+    return result, {
+        "conflict": bool(conflict),
+        "dot": dot,
+        "projection_fraction": projection_fraction,
+    }
+
+
+def _parameter_gradients_or_zeros(objective, parameters):
+    """Return parameter gradients, using zeros for a disabled objective."""
+    if objective is None or not objective.requires_grad:
+        return [None for _ in parameters]
+    return torch.autograd.grad(
+        objective,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+
+
 def compute_encoder_gradient_diagnostics(losses, encoder_parameters):
     """Return raw-loss encoder gradient norms and selected cosine similarities.
 
@@ -1726,6 +1790,7 @@ def train_one_epoch_student(
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
     audit_loss_gradients: bool = False,
+    rejection_gradient_conflict_mode: str = "off",
     discovery_loader=None,
     alpha_discovery: float = 0.0,
     alpha_discovery_unknown: float = 0.0,
@@ -1903,6 +1968,16 @@ def train_one_epoch_student(
     alpha_outlier_rejection_uniform: float = 0.0,
     freeze_bn_stats: bool = False,
 ):
+    if rejection_gradient_conflict_mode not in {"off", "project_auxiliary"}:
+        raise ValueError(
+            "rejection_gradient_conflict_mode must be off or project_auxiliary"
+        )
+    if rejection_gradient_conflict_mode == "project_auxiliary" and not getattr(
+        student, "independent_rejection_encoder_enabled", False
+    ):
+        raise ValueError(
+            "rejection gradient conflict projection requires an independent rejection encoder"
+        )
     if kd_uncertainty_source not in {"head", "mc_epistemic", "mc_predictive_entropy"}:
         raise ValueError(
             "kd_uncertainty_source must be 'head', 'mc_epistemic', "
@@ -2037,6 +2112,9 @@ def train_one_epoch_student(
     outlier_rejection_uniform_meter = AverageMeter()
     gradient_audit_sums = {}
     gradient_audit_batches = 0
+    rejection_gradient_conflict_batches = 0
+    rejection_gradient_conflict_total_batches = 0
+    rejection_gradient_conflict_projection_sum = 0.0
     encoder_parameters = list(student.encoder.parameters()) if audit_loss_gradients else []
     classifier_parameters = (
         list(student.classifier.parameters()) if audit_loss_gradients else []
@@ -2047,7 +2125,7 @@ def train_one_epoch_student(
         if structure_module is not None:
             structure_parameters.extend(structure_module.parameters())
     rejection_parameters = []
-    if audit_loss_gradients:
+    if audit_loss_gradients or rejection_gradient_conflict_mode == "project_auxiliary":
         for module_name in (
             "rejection_encoder",
             "rejection_projector",
@@ -4601,6 +4679,42 @@ def train_one_epoch_student(
             * loss_outlier_rejection_feature_margin
             + alpha_outlier_rejection_uniform * loss_outlier_rejection_uniform
         )
+        rejection_known_objective = (
+            alpha_unc * loss_unc
+            + alpha_rejection_known_ce * loss_rejection_ce
+            + alpha_rejection_supcon * loss_rejection_supcon
+            + alpha_rejection_superclass_supcon * loss_rejection_superclass_supcon
+            + alpha_rejection_center * loss_rejection_center
+            + alpha_rejection_decorrelation * loss_rejection_decorrelation
+            + alpha_rejection_variance_floor * loss_rejection_variance_floor
+        )
+        rejection_auxiliary_objective = (
+            alpha_rejection_episode_pseudonovel * loss_rejection_episode_pseudonovel
+            + alpha_rejection_kd * loss_rejection_kd
+            + alpha_rejection_feat_kd * loss_rejection_feat_kd
+            + alpha_rejection_relational_kd * loss_rejection_relational_kd
+            + alpha_rejection_confidence_relational_kd
+            * loss_rejection_confidence_relational_kd
+            + alpha_discovery_rejection_pu_feature_margin
+            * loss_discovery_rejection_pu_feature_margin
+            + alpha_discovery_rejection_boundary * loss_discovery_rejection_boundary
+            + alpha_discovery_rejection_feature_margin
+            * loss_discovery_rejection_feature_margin
+            + alpha_discovery_rejection_feature_separation
+            * loss_discovery_rejection_feature_separation
+            + alpha_discovery_rejection_knn_boundary
+            * loss_discovery_rejection_knn_boundary
+            + alpha_discovery_uncertainty_feature_margin
+            * loss_discovery_uncertainty_feature_margin
+            + alpha_discovery_uncertainty_separation
+            * loss_discovery_uncertainty_separation
+            + alpha_discovery_uncertainty_pu * loss_discovery_uncertainty_pu
+            + alpha_outlier_rejection_feature_margin
+            * loss_outlier_rejection_feature_margin
+            + alpha_outlier_uncertainty * loss_outlier_uncertainty
+            + alpha_outlier_rejection_uniform * loss_outlier_rejection_uniform
+            + alpha_vos_rejection * loss_vos_rejection
+        )
         if audit_loss_gradients:
             gradient_diagnostics = compute_encoder_gradient_diagnostics(
                 {
@@ -4765,7 +4879,35 @@ def train_one_epoch_student(
             else None
         )
         optimizer.zero_grad()
-        loss.backward()
+        if rejection_gradient_conflict_mode == "project_auxiliary" and rejection_parameters:
+            rejection_gradient_conflict_total_batches += 1
+            reference_gradients = _parameter_gradients_or_zeros(
+                rejection_known_objective, rejection_parameters
+            )
+            auxiliary_gradients = _parameter_gradients_or_zeros(
+                rejection_auxiliary_objective, rejection_parameters
+            )
+            projected_gradients, conflict_stats = project_auxiliary_gradient_against_reference(
+                reference_gradients,
+                auxiliary_gradients,
+                rejection_parameters,
+            )
+            rejection_gradient_conflict_batches += int(conflict_stats["conflict"])
+            rejection_gradient_conflict_projection_sum += float(
+                conflict_stats["projection_fraction"]
+            )
+            (loss - rejection_known_objective - rejection_auxiliary_objective).backward()
+            for parameter, reference, auxiliary in zip(
+                rejection_parameters, reference_gradients, projected_gradients
+            ):
+                reference = reference if reference is not None else torch.zeros_like(parameter)
+                gradient = reference.detach() + auxiliary.detach()
+                if parameter.grad is None:
+                    parameter.grad = gradient.clone()
+                else:
+                    parameter.grad.add_(gradient)
+        else:
+            loss.backward()
         optimizer.step()
         if classifier_before_step is not None:
             update_sq = sum(
@@ -5264,6 +5406,17 @@ def train_one_epoch_student(
         stats["student_classifier_update_norm"] = student_classifier_update_meter.avg
         for name, total in gradient_audit_sums.items():
             stats[f"gradient_audit_{name}"] = total / max(gradient_audit_batches, 1)
+    stats["rejection_gradient_conflict_mode"] = rejection_gradient_conflict_mode
+    stats["rejection_gradient_conflict_rate"] = (
+        rejection_gradient_conflict_batches / max(rejection_gradient_conflict_total_batches, 1)
+        if rejection_gradient_conflict_mode == "project_auxiliary"
+        else 0.0
+    )
+    stats["rejection_gradient_conflict_projection_fraction"] = (
+        rejection_gradient_conflict_projection_sum / max(rejection_gradient_conflict_total_batches, 1)
+        if rejection_gradient_conflict_mode == "project_auxiliary"
+        else 0.0
+    )
     return stats
 
 

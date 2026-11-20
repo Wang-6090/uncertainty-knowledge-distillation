@@ -8860,3 +8860,19 @@ relational KD 的 candidate unknown recall 在三个 seed 的两臂均为 `1.0`�
 机制审计通过：control 四个 epoch 的 episode loss、留出比例和 episode rejection 梯度均为 `0`；treatment 的 episode loss 为 `5.951904/6.581804/6.733679/6.840358`，留出比例为 `0.261065/0.263194/0.260926/0.260463`，对应 rejection 分支梯度范数为 `1.938851/2.402320/2.499891/2.576594`。这证明 pseudo-novel loss 进入总损失并产生有效梯度；它没有改变主分类标签，也没有读取未知测试标签。完整原始报告保存在本地 `analysis/episode_pseudonovel_screening_s2151.json`，训练与 discovery 产物在对应的 `runs/episode_pseudonovel_screening_s2151_*` 目录中；这些运行产物按仓库规则被忽略，split 定义纳入版本控制。
 
 按预先固定的筛选条件，本 pilot 因排序指标和聚类指标均未改善，冻结 episode-conditioned pseudo-novel rejection，不启动 `2152/2153` 确认实验，不扫描系数、留出比例或 uncertainty weight，也不修改默认关闭配置。下一阶段转向新的、已知标签可定义且不重复 relational KD/类别阈值方向的机制假设；先做代码和协议审计，再决定是否值得启动新的单因素实验。
+
+### 2026-11-20：拒识梯度冲突投影机制实现与验证
+
+在冻结 episode-conditioned pseudo-novel rejection 后，针对当前独立 rejection 分支中“已知支持目标”和开放集辅助目标可能产生反向梯度”的具体训练问题，设计了新的 opt-in 梯度路由机制 `rejection_gradient_conflict_mode=project_auxiliary`。该机制不是新的不确定性信号，也不改变教师不确定性、学生不确定性头、分类熵或最终拒识分数；它只在独立 rejection 分支的参数上处理两个已加权目标组的梯度。
+
+其中 `g_known` 包含已知不确定性、rejection known CE、rejection SupCon/ superclass SupCon、center、decorrelation 和 variance-floor；`g_aux` 包含 episode/拒识 KD、关系 KD、rejection discovery margin/separation/kNN/PU/boundary、uncertainty 辅助项、outlier rejection 和 VOS rejection 等开放集辅助项。若 `g_known·g_aux<0`，按
+
+```text
+g_aux' = g_aux - (g_known·g_aux / (||g_known||² + eps)) g_known
+```
+
+将辅助梯度投影到不再与已知目标冲突的半空间；无冲突或已知梯度为零时保持原梯度。默认模式仍为 `off`，且只有配置独立 rejection encoder 时允许启用。训练 history 新增模式、冲突批次比例和被移除的辅助梯度比例，便于确认机制真实执行。
+
+本阶段只做实现与正确性验证，没有产生任务性能结论。新增单元测试覆盖冲突投影、非冲突保持、禁用损失无梯度处理和真实 one-batch independent rejection training 接线；完整测试套件为 `375 passed, 1 warning`，Python 编译检查和 `git diff --check` 均通过。低预算 smoke 已确认 checkpoint 可保存、history 字段正常记录，并观察到非零冲突率和投影比例；该 smoke 的低预算 detection 数值不进入方法比较。
+
+正式实验协议见 `docs/team_a_representation/rejection_gradient_conflict_protocol.md`。下一阶段只在新的 semantic-hard CIFAR-100 60/40 split（建议 seed `2152`）上做一次 paired screening：control 为 `off`，treatment 为 `project_auxiliary`，两臂关闭 episode pseudo-novel，其他训练、校准、检测和聚类流程完全一致。正式运行前必须重新审计 teacher、student 初始化、配置差异和标签隔离；若 detection 与 clustering 没有同时出现预设的正向证据，则冻结该机制，不扫描投影系数或冲突阈值。

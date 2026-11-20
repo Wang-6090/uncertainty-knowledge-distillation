@@ -161,6 +161,7 @@ from novel_discovery.pipeline import (
     score_distribution_overlap,
     compute_encoder_gradient_diagnostics,
     compute_parameter_gradient_diagnostics,
+    project_auxiliary_gradient_against_reference,
 )
 from train import (
     build_bundle_from_args,
@@ -723,6 +724,37 @@ class ErrorNeighborhoodAuditTest(unittest.TestCase):
 
 
 class CommandLineTest(unittest.TestCase):
+
+    def test_rejection_auxiliary_gradient_projection_removes_conflict(self):
+        parameter = torch.nn.Parameter(torch.zeros(2))
+        projected, details = project_auxiliary_gradient_against_reference(
+            [torch.tensor([1.0, 0.0])],
+            [torch.tensor([-1.0, 1.0])],
+            [parameter],
+        )
+        self.assertTrue(details["conflict"])
+        self.assertLessEqual(float(torch.dot(projected[0], torch.tensor([1.0, 0.0]))), 1e-6)
+        self.assertTrue(torch.allclose(projected[0], torch.tensor([0.0, 1.0])))
+
+    def test_rejection_auxiliary_gradient_projection_preserves_nonconflict(self):
+        parameter = torch.nn.Parameter(torch.zeros(2))
+        projected, details = project_auxiliary_gradient_against_reference(
+            [torch.tensor([1.0, 0.0])],
+            [torch.tensor([1.0, 1.0])],
+            [parameter],
+        )
+        self.assertFalse(details["conflict"])
+        self.assertTrue(torch.allclose(projected[0], torch.tensor([1.0, 1.0])))
+
+    def test_rejection_auxiliary_gradient_projection_accepts_disabled_objective(self):
+        parameter = torch.nn.Parameter(torch.zeros(2))
+        projected, details = project_auxiliary_gradient_against_reference(
+            [None],
+            [None],
+            [parameter],
+        )
+        self.assertFalse(details["conflict"])
+        self.assertTrue(torch.equal(projected[0], torch.zeros_like(parameter)))
     def test_relational_distillation_is_disabled_by_default(self):
         args = parse_args(["train_student"])
         self.assertEqual(args.alpha_relational_kd, 0.0)
@@ -3850,6 +3882,60 @@ class DiscoveryTrainingDispatchTest(unittest.TestCase):
         self.assertGreater(
             stats["gradient_audit_grad_norm_rejection_relational_kd_term"], 0.0
         )
+
+    def test_rejection_gradient_conflict_projection_training_path(self):
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = torch.nn.Linear(3, 5)
+                self.classifier = torch.nn.Linear(5, 2)
+                self.projector = torch.nn.Linear(5, 4)
+                self.uncertainty_head = torch.nn.Linear(5, 1)
+                self.rejection_encoder = torch.nn.Linear(3, 5)
+                self.rejection_classifier = torch.nn.Linear(5, 2)
+                self.independent_rejection_encoder_enabled = True
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                inputs = images.mean(dim=(2, 3))
+                features = self.encoder(inputs)
+                rejection_features = self.rejection_encoder(inputs)
+                return {
+                    "logits": self.classifier(features),
+                    "features": features,
+                    "proj": F.normalize(self.projector(features), dim=-1),
+                    "uncertainty": torch.sigmoid(
+                        self.uncertainty_head(features)
+                    ).squeeze(-1),
+                    "rejection_features": rejection_features,
+                    "rejection_logits": self.rejection_classifier(rejection_features),
+                }
+
+        torch.manual_seed(37)
+        student = TinyModel()
+        teacher = TinyModel()
+        optimizer = torch.optim.SGD(student.parameters(), lr=0.01)
+        images = torch.rand(4, 3, 8, 8)
+        labels = torch.tensor([0, 1, 0, 1])
+        loader = [
+            (images, labels, labels, torch.ones(4, dtype=torch.bool), torch.arange(4))
+        ]
+        stats = train_one_epoch_student(
+            student,
+            teacher,
+            loader,
+            optimizer,
+            torch.device("cpu"),
+            alpha_unc=0.0,
+            alpha_kd=0.0,
+            alpha_rejection_known_ce=1.0,
+            alpha_rejection_relational_kd=1.0,
+            alpha_supcon=0.0,
+            rejection_gradient_conflict_mode="project_auxiliary",
+        )
+        self.assertEqual(stats["rejection_gradient_conflict_mode"], "project_auxiliary")
+        self.assertGreaterEqual(stats["rejection_gradient_conflict_rate"], 0.0)
+        self.assertTrue(math.isfinite(stats["rejection_gradient_conflict_projection_fraction"]))
 
     def test_episode_pseudonovel_training_is_rejection_only_and_active(self):
         class TinyModel(torch.nn.Module):

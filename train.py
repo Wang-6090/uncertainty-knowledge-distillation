@@ -823,6 +823,16 @@ def build_parser():
         help="Known-class CE weight for the optional rejection branch.",
     )
     p.add_argument(
+        "--rejection-gradient-conflict-mode",
+        choices=["off", "project_auxiliary"],
+        default="off",
+        help=(
+            "Opt-in projection of rejection auxiliary gradients that conflict "
+            "with known-support rejection gradients; requires an independent "
+            "rejection encoder and is disabled by default."
+        ),
+    )
+    p.add_argument(
         "--rejection-known-ce-decay-start-epoch",
         type=int,
         default=0,
@@ -3886,6 +3896,14 @@ def fit_student(args):
         raise ValueError(
             "--alpha-rejection-episode-pseudonovel requires --rejection-feature-dim > 0"
         )
+    if (
+        args.rejection_gradient_conflict_mode == "project_auxiliary"
+        and not args.independent_rejection_encoder
+    ):
+        raise ValueError(
+            "--rejection-gradient-conflict-mode=project_auxiliary requires "
+            "--independent-rejection-encoder"
+        )
     if args.alpha_structure_supcon > 0.0 and args.structure_feature_dim <= 0:
         raise ValueError(
             "--alpha-structure-supcon requires --structure-feature-dim > 0"
@@ -4752,6 +4770,7 @@ def fit_student(args):
             uncertainty_weight_min=args.uncertainty_weight_min,
             uncertainty_weight_max=args.uncertainty_weight_max,
             audit_loss_gradients=args.audit_loss_gradients,
+            rejection_gradient_conflict_mode=args.rejection_gradient_conflict_mode,
             discovery_loader=discovery_loader,
             alpha_discovery=args.alpha_discovery,
             alpha_discovery_feature_consistency=args.alpha_discovery_feature_consistency,
