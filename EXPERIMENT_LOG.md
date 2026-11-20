@@ -8966,3 +8966,31 @@ smoke 的 control/treatment 检测 AUROC 为 `0.607734/0.609217`，AUPR 为 `0.5
 审计结论是：训练端新增机制都已确认真实接入损失或梯度路径，但没有一种在固定 known-validation 95% coverage 下同时稳定改善检测与聚类；它们分别暴露了未知覆盖、候选纯度和聚类质量之间的 trade-off，因此全部冻结，默认配置不变。当前唯一值得推进的是 discovery-time 固定 conjunction：`min(z_feature_rejector, z_calibrated_uncertainty_error)`。2152/2153 相对 raw `feature_rejector` 有较多正向变化，但证据来自不同训练机制的冻结 checkpoint，仍不能改默认。
 
 需要特别区分历史 seed 2090：它比较的是 fusion 到 conjunction，而近期 2152/2153 比较的是 raw feature rejector 到 conjunction，control 不同，不能合并成一个 treatment effect。下一阶段只做固定 conjunction 对 raw feature rejector 的正式 42/123/3407 复核；运行前补齐 split、checkpoint、预算、rejector、discovery pool 和聚类配置的兼容性 preflight，不扫描阈值、分量权重或候选比例。
+
+## 2026-11-21：正式 A/B/C 三种子 conjunction 复核
+
+今天完成了上一阶段预先固定的 `feature_rejector_uncertainty_conjunction` 正式复核。目标是确认它相对同一冻结 checkpoint 的 raw `feature_rejector`，能否在共同 CIFAR-100 60/40 协议下同时改善未知检测和新类聚类。为避免把训练机制差异混入评分实验，A（CE-only）、B（standard KD）、C（uncertainty KD）均直接读取已有 student checkpoint，没有重训；每个 seed 内 control/treatment 只改变 discovery-time `score_mode`。
+
+运行前 preflight 对 seed、`splits/cifar100_60_40.json`、checkpoint、模型字段和输出覆盖风险进行了检查，seed `42/123/3407` 全部通过。三组运行均 materialize 为 matched mixed pool（5400，known prior 0.2）、NNPU `nu_corrected`、embedding rejector、known-validation 95% coverage、Auto-K 和聚类；历史 source config 中的 unknown/hard/global 协议没有被静默复用。新增审计脚本还增加了运行后门禁：必须是 known-validation threshold、rejector 不得报告 test-label 使用、effective threshold source 必须为 known validation。
+
+### 检测结果
+
+相对 raw `feature_rejector`，三种子均出现一致的检测退化：
+
+| 臂 | AUROC 变化均值 ± sd | AUPR 变化均值 ± sd | FPR95 变化均值 ± sd | OSCR 变化均值 ± sd | unknown rejection 变化均值 |
+|---|---:|---:|---:|---:|---:|
+| A CE-only | `-0.054018 ± 0.011008` | `-0.066570 ± 0.013946` | `+0.115222 ± 0.024129` | `-0.036856 ± 0.008169` | `-17.008 pp` |
+| B standard KD | `-0.069140 ± 0.005629` | `-0.081142 ± 0.022514` | `+0.197944 ± 0.053658` | `-0.046678 ± 0.008598` | `-17.150 pp` |
+| C uncertainty KD | `-0.093852 ± 0.033671` | `-0.092942 ± 0.013196` | `+0.228611 ± 0.006124` | `-0.061248 ± 0.023763` | `-16.575 pp` |
+
+known 分类准确率在每个臂内保持不变，因为两种 score mode 共用同一 checkpoint；但 conjunction 的最终 known acceptance 变为 A/B 三个 seed 均 `1.0`，C 为 `0.987833/0.999000/1.000000`。也就是说，conjunction 在这些正式 checkpoint 上几乎不拒识未知样本，不能解释为有效的开放集检测改进。
+
+### 聚类结果
+
+A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K/KMeans。C 只有 seed 42 和 123 产生候选，候选数为 `158/18`，seed 3407 仍为空；这两个极小候选池上的 Cluster ACC 分别为 `0.379747/0.388889`，但 Auto-K 绝对误差为 `9/36`，NMI 为 `0.720855/0.381958`，ARI 为 `0.090936/-0.041391`，没有稳定方向。聚类局部 ACC 上升来自候选池骤减，不能当作端到端收益。
+
+### 校准与机制判断
+
+公式、标签隔离和阈值方向审计均通过：conjunction 确实使用 `min(z_feature_rejector, z_calibrated_uncertainty_error)`，未知标签只参与最终评价。问题是 isotonic uncertainty calibration 产生大量并列高分，`min` 后 known-validation 95% 分位数落在并列最大值，使 realized coverage 偏离目标。这是固定方法的校准退化，不能在看到测试结果后修改阈值、融合权重或分位数。
+
+正式逐 seed 原始值、均值、样本标准差和检测/聚类分开汇总见 [`analysis/formal_conjunction_audit_20261121.md`](analysis/formal_conjunction_audit_20261121.md)，机器结果见 `analysis/formal_conjunction_audit_20261121_s42.json`、`s123.json`、`s3407.json`。本阶段结论是：conjunction 在共同正式协议下为稳定负结果，冻结为 opt-in 之外的候选，不修改默认 `feature_rejector`，也不继续重复扫描当前规则。
