@@ -8958,3 +8958,11 @@ smoke 的 control/treatment 检测 AUROC 为 `0.607734/0.609217`，AUPR 为 `0.5
 随后在已有独立 seed 2152 的 control/treatment checkpoint 上做了第二次冻结复核，仍只改变 discovery-time score mode，没有重训。相对各自原始 `feature_rejector`，conjunction 在 control 上将 AUROC/AUPR/FPR95/OSCR 变化为 `+0.011579/+0.025265/+0.005500/+0.005513`，unknown rejection `+0.525 pp`，candidate count `-59`，candidate purity `+5.901 pp`，Cluster ACC/NMI/ARI `+3.479/+2.969/+2.192 pp`；在 treatment 上将 AUROC/AUPR/FPR95/OSCR 变化为 `+0.013018/+0.029452/-0.032500/+0.008695`，unknown rejection `+6.025 pp`，candidate count `+253`，candidate purity `+3.745 pp`，Cluster ACC/NMI/ARI `+1.619/-0.159/+1.212 pp`。两臂 candidate unknown recall 均为 `1.0`，known accuracy 保持不变。
 
 两 seed 的 conjunction 结果都改善排序和至少部分聚类/候选池指标，且不需要改变训练；但 2152 treatment 的 NMI 略降，两个 seed 的 checkpoint 又来自前面不同的梯度路由实验，因此仍不能把它当作最终算法收益。该方法从“探索性评分审计”升级为“值得进入正式 A/B/C 复核的固定候选”，规则冻结为 conjunction，不扫描阈值、分量权重或候选比例。第二次汇总见 `analysis/frozen_score_confirmation_s2152.json`，协议文档已更新。
+
+### 2026-11-21：最近修改综合审计
+
+对 11 月 18–20 日的 UA-DKD、关系蒸馏、confidence-gated 关系蒸馏、episode pseudo-novel rejection、两种拒识梯度投影和冻结评分审计做了统一复核。完整记录见 [`analysis/recent_modification_audit_20261121.md`](analysis/recent_modification_audit_20261121.md)。
+
+审计结论是：训练端新增机制都已确认真实接入损失或梯度路径，但没有一种在固定 known-validation 95% coverage 下同时稳定改善检测与聚类；它们分别暴露了未知覆盖、候选纯度和聚类质量之间的 trade-off，因此全部冻结，默认配置不变。当前唯一值得推进的是 discovery-time 固定 conjunction：`min(z_feature_rejector, z_calibrated_uncertainty_error)`。2152/2153 相对 raw `feature_rejector` 有较多正向变化，但证据来自不同训练机制的冻结 checkpoint，仍不能改默认。
+
+需要特别区分历史 seed 2090：它比较的是 fusion 到 conjunction，而近期 2152/2153 比较的是 raw feature rejector 到 conjunction，control 不同，不能合并成一个 treatment effect。下一阶段只做固定 conjunction 对 raw feature rejector 的正式 42/123/3407 复核；运行前补齐 split、checkpoint、预算、rejector、discovery pool 和聚类配置的兼容性 preflight，不扫描阈值、分量权重或候选比例。
