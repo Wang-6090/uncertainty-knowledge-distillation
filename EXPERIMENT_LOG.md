@@ -8876,3 +8876,11 @@ g_aux' = g_aux - (g_known·g_aux / (||g_known||² + eps)) g_known
 本阶段只做实现与正确性验证，没有产生任务性能结论。新增单元测试覆盖冲突投影、非冲突保持、禁用损失无梯度处理和真实 one-batch independent rejection training 接线；完整测试套件为 `375 passed, 1 warning`，Python 编译检查和 `git diff --check` 均通过。低预算 smoke 已确认 checkpoint 可保存、history 字段正常记录，并观察到非零冲突率和投影比例；该 smoke 的低预算 detection 数值不进入方法比较。
 
 正式实验协议见 `docs/team_a_representation/rejection_gradient_conflict_protocol.md`。下一阶段只在新的 semantic-hard CIFAR-100 60/40 split（建议 seed `2152`）上做一次 paired screening：control 为 `off`，treatment 为 `project_auxiliary`，两臂关闭 episode pseudo-novel，其他训练、校准、检测和聚类流程完全一致。正式运行前必须重新审计 teacher、student 初始化、配置差异和标签隔离；若 detection 与 clustering 没有同时出现预设的正向证据，则冻结该机制，不扫描投影系数或冲突阈值。
+
+### 2026-11-20：拒识梯度冲突投影 paired smoke 完成
+
+为验证正式 runner 的完整接线，在新 semantic-hard split `2152` 上运行了 1 epoch、训练/验证/测试/匹配 discovery pool 为 `256/128/256/256` 的 paired smoke。runner 为 [`scripts/run_rejection_gradient_conflict_pair.py`](scripts/run_rejection_gradient_conflict_pair.py)，先通过 `--preflight-only` 审计了 materialized training config；control/treatment 唯一训练差异为 `rejection_gradient_conflict_mode=off/project_auxiliary`，两臂均使用独立 rejection encoder，episode pseudo-novel 系数均为 `0`。输出目录拒绝覆盖，teacher、student 和 discovery 分别使用同一 split、同一 seed 和同一 teacher。
+
+流程完整执行了训练、known-validation checkpoint selection、known-only 95% coverage calibration、feature-rejector 和 Auto-K 聚类。两臂 discovery report 均为 `threshold_policy=known_val_known_coverage`、target coverage `0.95`、`hard_labels_used=false`、`test_labels_used_for_training_or_calibration=false`，聚类没有被跳过。treatment history 记录 `rejection_gradient_conflict_rate=0.25`、`rejection_gradient_conflict_projection_fraction=0.008368`，control 的模式为 `off`；这证明路由在真实训练链路中触发并被保存。
+
+smoke 的 control/treatment 检测 AUROC 为 `0.607734/0.609217`，AUPR 为 `0.548852/0.570770`，unknown reject 为 `10.526%/17.544%`；但 1 epoch 小样本 known accuracy 仅约 `0.704%`，Cluster ACC/NMI/ARI 为 `0.200000/0.415624/0.009664` 对 `0.137931/0.413865/-0.042880`。这些数值只用于确认流程和产物，不具备方法比较意义，也不据此启动确认实验。正式 screening 仍需使用完整预算；本阶段已新增 runner 和 seed 2152 split，待提交推送。
