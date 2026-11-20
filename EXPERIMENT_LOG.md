@@ -8827,3 +8827,13 @@ relational KD 的 candidate unknown recall 在三个 seed 的两臂均为 `1.0`�
 筛选出的新候选是 **episode-conditioned pseudo-novel rejection**：只用 CIFAR-100 已知训练类别标签构造 episode，在每个 episode 内将一部分类别从 rejection support 集排除，仅把这些类别的训练图像作为该 episode 的 pseudo-novel query；其余类别构成 known support。它与 VOS 的特征空间合成及 mixed-pool 伪标签门控不同，目标是直接测试 rejection 表征能否迁移到“当前 support 未覆盖、但语义相近”的类别。此处仅是待审假设，不是已经实现或验证的方法。
 
 训练前必须先解决一个关键正确性问题：不能在同一 episode 把 pseudo-novel query 同时作为普通 known rejection CE 正样本，否则监督自相矛盾；也不能因此丢弃 CIFAR 训练集的分类监督。实现应将 episode 标签/损失限制在 rejection 分支的 episode objective，分类主干仍使用标准训练标签，未知真实类别标签和 test/mixed-pool 标签完全不进入 episode 构造。先用小型合成 batch 验证 support/query 类别互斥、episode 重采样可复现、query 只作用于 rejection 项、known 分类 CE 不变及 finite/nonzero 梯度；再用 known-only 留出类别验证跨 episode 的风险排序和已知覆盖，不满足预注册门槛则不进入 GPU paired pilot。任何 pilot 均需在新的 semantic-hard split 上与当前 shared-backbone 主线单因素配对，并以 known-validation checkpoint/全局 95% coverage calibration 处理；test labels 只在流程完成后用于完整检测与聚类指标。
+
+### 2026-11-20：episode-conditioned pseudo-novel rejection 实现与 smoke 验证
+
+今天开始执行上一节筛选出的新机制，但只完成实现级验证，没有启动正式 CIFAR 训练。新增默认关闭的 `--alpha-rejection-episode-pseudonovel`，固定支持 `--rejection-episode-holdout-fraction` 和 `--rejection-episode-uncertainty-weight`。每个 known training batch 内按已知标签随机留出完整类别作为 episode query；主分类 CE、logits KD 和分类表征仍使用原标签，只有 rejection 分支将留出类别视为相对当前 support 的 pseudo-novel。query 行被排除出 rejection known CE，并接收 uniform rejection logits 与 uncertainty=1 目标；support 行保留普通 rejection CE/uncertainty calibration。这避免同一训练样本同时接收 known 与 pseudo-novel rejection 标签。
+
+代码审计确认该 loss 不读取 raw unknown、mixed-pool 或 test 标签，且通过总损失进入 rejection branch。新增 [`docs/team_a_representation/episode_pseudonovel_rejection_protocol.md`](docs/team_a_representation/episode_pseudonovel_rejection_protocol.md) 固定了机制、标签隔离、正式 paired screening 和停止条件。新增单测覆盖完整类别留出、query-only 梯度、非法比例和 one-epoch 训练接线；结果为 `4 passed`（episode 相关测试）。针对训练入口的相关回归筛选为 `85 passed, 1 warning`，`train_student --help` 已显示三个新参数，Python 编译检查通过。
+
+当前没有 AUROC、未知拒识率、候选纯度或聚类性能结论；默认配置和已有实验均未改变。下一步应先运行完整测试套件，并检查一个真实训练配置的保存 history/config 是否正确记录 episode 字段；只有这些检查通过，才在全新 semantic-hard split 上做预先固定的 paired smoke，随后再决定是否进入正式 screening。
+
+随后审计发现，初版实现用全局 PyTorch RNG 选择 episode 留出类别；这会消耗数据增强或 dropout 共享的随机流，破坏后续 paired control/treatment 的单因素条件。已改为可选独立 CPU generator，并在 `train_student` 中按 `seed + 1000003 * epoch` 固定每轮 episode 抽样；默认关闭时不创建该 generator，历史路径不变。新增 generator 可复现性测试，episode 相关筛选为 `19 passed`，编译检查和 `git diff --check` 通过。该修复仍未产生任务指标，下一步先在修复后的实现上重跑隔离 toy smoke，再运行完整测试并提交推送。

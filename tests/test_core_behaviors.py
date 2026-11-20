@@ -53,6 +53,8 @@ from novel_discovery.losses import (
     relational_distance_distillation_loss,
     confidence_gated_relational_distance_distillation_loss,
     teacher_uncertainty_distillation_loss,
+    sample_episode_pseudo_novel_mask,
+    episode_pseudo_novel_rejection_loss,
 )
 from scripts.analyze_classwise_open_errors import _threshold_by_sample
 from scripts.audit_discovery_candidate_pool import (
@@ -3030,6 +3032,51 @@ class OutlierTransformTest(unittest.TestCase):
 
 
 class LossBehaviorTest(unittest.TestCase):
+    def test_episode_pseudonovel_mask_holds_out_complete_known_classes(self):
+        torch.manual_seed(123)
+        labels = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3])
+        mask, held_out = sample_episode_pseudo_novel_mask(labels, 0.5)
+        self.assertEqual(mask.dtype, torch.bool)
+        self.assertGreaterEqual(held_out.numel(), 1)
+        self.assertLess(held_out.numel(), 4)
+        self.assertTrue(torch.equal(torch.unique(labels[mask]), torch.sort(held_out).values))
+        self.assertFalse(torch.isin(labels[~mask], held_out).any().item())
+
+    def test_episode_pseudonovel_rejection_loss_only_updates_query_rows(self):
+        logits = torch.tensor(
+            [[3.0, -1.0, 0.0], [-1.0, 3.0, 0.0], [0.0, -1.0, 3.0]],
+            requires_grad=True,
+        )
+        uncertainty = torch.tensor([0.1, 0.2, 0.3], requires_grad=True)
+        mask = torch.tensor([False, True, True])
+        loss = episode_pseudo_novel_rejection_loss(logits, uncertainty, mask)
+        self.assertTrue(torch.isfinite(loss).item())
+        loss.backward()
+        self.assertTrue(torch.allclose(logits.grad[0], torch.zeros_like(logits.grad[0])))
+        self.assertGreater(float(logits.grad[1:].abs().sum()), 0.0)
+        self.assertEqual(float(uncertainty.grad[0]), 0.0)
+        self.assertGreater(float(uncertainty.grad[1:].abs().sum()), 0.0)
+
+    def test_episode_pseudonovel_mask_rejects_invalid_fraction(self):
+        labels = torch.tensor([0, 1])
+        with self.assertRaises(ValueError):
+            sample_episode_pseudo_novel_mask(labels, 0.0)
+        with self.assertRaises(ValueError):
+            sample_episode_pseudo_novel_mask(labels, 1.0)
+
+    def test_episode_pseudonovel_mask_explicit_generator_is_reproducible(self):
+        labels = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3])
+        first_generator = torch.Generator(device="cpu").manual_seed(3407)
+        second_generator = torch.Generator(device="cpu").manual_seed(3407)
+        first_mask, first_classes = sample_episode_pseudo_novel_mask(
+            labels, 0.5, generator=first_generator
+        )
+        second_mask, second_classes = sample_episode_pseudo_novel_mask(
+            labels, 0.5, generator=second_generator
+        )
+        self.assertTrue(torch.equal(first_mask, second_mask))
+        self.assertTrue(torch.equal(first_classes, second_classes))
+
     def test_confidence_gated_relational_kd_uses_confident_examples_and_gradients(self):
         student = torch.randn(8, 5, requires_grad=True)
         teacher = torch.randn(8, 7, requires_grad=True)
@@ -3802,6 +3849,67 @@ class DiscoveryTrainingDispatchTest(unittest.TestCase):
         self.assertGreater(stats["rejection_relational_kd"], 0.0)
         self.assertGreater(
             stats["gradient_audit_grad_norm_rejection_relational_kd_term"], 0.0
+        )
+
+    def test_episode_pseudonovel_training_is_rejection_only_and_active(self):
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = torch.nn.Linear(3, 5)
+                self.classifier = torch.nn.Linear(5, 2)
+                self.projector = torch.nn.Linear(5, 4)
+                self.rejection_encoder = torch.nn.Linear(3, 5)
+                self.rejection_classifier = torch.nn.Linear(5, 2)
+                self.rejection_uncertainty_head = torch.nn.Linear(5, 1)
+                self.uncertainty_head = torch.nn.Linear(5, 1)
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                inputs = images.mean(dim=(2, 3))
+                features = self.encoder(inputs)
+                rejection_features = self.rejection_encoder(inputs)
+                return {
+                    "logits": self.classifier(features),
+                    "features": features,
+                    "proj": F.normalize(self.projector(features), dim=-1),
+                    "rejection_features": rejection_features,
+                    "rejection_logits": self.rejection_classifier(rejection_features),
+                    "uncertainty": torch.sigmoid(
+                        self.rejection_uncertainty_head(rejection_features)
+                    ).squeeze(-1),
+                }
+
+        torch.manual_seed(37)
+        student = TinyModel()
+        teacher = TinyModel()
+        optimizer = torch.optim.SGD(student.parameters(), lr=0.01)
+        images = torch.rand(8, 3, 8, 8)
+        labels = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
+        loader = [
+            (images, labels, labels, torch.ones(8, dtype=torch.bool), torch.arange(8))
+        ]
+
+        stats = train_one_epoch_student(
+            student,
+            teacher,
+            loader,
+            optimizer,
+            torch.device("cpu"),
+            alpha_unc=0.0,
+            alpha_kd=0.0,
+            alpha_rejection_known_ce=1.0,
+            alpha_rejection_episode_pseudonovel=1.0,
+            rejection_episode_holdout_fraction=0.5,
+            alpha_supcon=0.0,
+            audit_loss_gradients=True,
+        )
+
+        self.assertGreater(stats["rejection_episode_pseudonovel"], 0.0)
+        self.assertGreater(stats["rejection_episode_pseudonovel_fraction"], 0.0)
+        self.assertLess(stats["rejection_episode_pseudonovel_fraction"], 1.0)
+        self.assertGreater(
+            stats["gradient_audit_grad_norm_rejection_episode_pseudonovel_term"],
+            0.0,
         )
 
     def test_uncertainty_separation_alone_consumes_discovery_batches(self):

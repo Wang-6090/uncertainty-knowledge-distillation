@@ -953,6 +953,27 @@ def build_parser():
     p = sub.add_parser("train_student")
     add_common(p)
     p.add_argument(
+        "--alpha-rejection-episode-pseudonovel",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-only episode-conditioned pseudo-novel rejection weight; "
+            "disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--rejection-episode-holdout-fraction",
+        type=float,
+        default=0.25,
+        help="Fraction of batch-present known classes held out as pseudo-novel queries.",
+    )
+    p.add_argument(
+        "--rejection-episode-uncertainty-weight",
+        type=float,
+        default=1.0,
+        help="Relative high-uncertainty weight for episode pseudo-novel queries.",
+    )
+    p.add_argument(
         "--alpha-rejection-superclass-supcon",
         type=float,
         default=0.0,
@@ -3855,6 +3876,16 @@ def fit_teacher(args):
 def fit_student(args):
     if args.structure_feature_dim < 0:
         raise ValueError("--structure-feature-dim must be non-negative")
+    if args.alpha_rejection_episode_pseudonovel < 0.0:
+        raise ValueError("--alpha-rejection-episode-pseudonovel must be non-negative")
+    if not 0.0 < args.rejection_episode_holdout_fraction < 1.0:
+        raise ValueError("--rejection-episode-holdout-fraction must be in (0, 1)")
+    if args.rejection_episode_uncertainty_weight < 0.0:
+        raise ValueError("--rejection-episode-uncertainty-weight must be non-negative")
+    if args.alpha_rejection_episode_pseudonovel > 0.0 and args.rejection_feature_dim <= 0:
+        raise ValueError(
+            "--alpha-rejection-episode-pseudonovel requires --rejection-feature-dim > 0"
+        )
     if args.alpha_structure_supcon > 0.0 and args.structure_feature_dim <= 0:
         raise ValueError(
             "--alpha-structure-supcon requires --structure-feature-dim > 0"
@@ -4638,6 +4669,20 @@ def fit_student(args):
             alpha_unc=args.alpha_unc,
             alpha_rejection_known_ce=(
                 args.alpha_rejection_known_ce * rejection_known_ce_scale
+            ),
+            alpha_rejection_episode_pseudonovel=(
+                args.alpha_rejection_episode_pseudonovel
+            ),
+            rejection_episode_holdout_fraction=(
+                args.rejection_episode_holdout_fraction
+            ),
+            rejection_episode_uncertainty_weight=(
+                args.rejection_episode_uncertainty_weight
+            ),
+            rejection_episode_seed=(
+                args.seed + 1000003 * (epoch + 1)
+                if args.alpha_rejection_episode_pseudonovel > 0.0
+                else None
             ),
             alpha_rejection_supcon=args.alpha_rejection_supcon,
             alpha_rejection_superclass_supcon=args.alpha_rejection_superclass_supcon,

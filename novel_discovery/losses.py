@@ -67,6 +67,78 @@ def classification_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Ten
     return F.cross_entropy(logits, labels)
 
 
+def sample_episode_pseudo_novel_mask(
+    labels: torch.Tensor,
+    holdout_fraction: float = 0.25,
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Hold out complete known classes as pseudo-novel query samples.
+
+    The labels are the ordinary known-class indices from the current batch.
+    This helper never creates labels outside that known set: it only returns a
+    batch mask and the selected class indices.  It is intended for an
+    episode-style rejection objective where the held-out classes are novel
+    relative to the episode support, while the main classifier still trains on
+    the original labels.
+    """
+    if labels.ndim != 1:
+        raise ValueError("labels must be a 1-D tensor")
+    fraction = float(holdout_fraction)
+    if not 0.0 < fraction < 1.0:
+        raise ValueError("holdout_fraction must be in (0, 1)")
+    mask = torch.zeros_like(labels, dtype=torch.bool)
+    valid = labels >= 0
+    classes = torch.unique(labels[valid], sorted=True)
+    if classes.numel() < 2:
+        return mask, classes.new_empty((0,))
+    holdout_count = max(1, int(math.ceil(classes.numel() * fraction)))
+    holdout_count = min(holdout_count, int(classes.numel()) - 1)
+    # Use an explicit CPU generator when paired training supplies one, so
+    # episode sampling does not consume the augmentation/dropout RNG stream.
+    if generator is None:
+        order = torch.randperm(classes.numel(), device=classes.device)
+    else:
+        order = torch.randperm(classes.numel(), device="cpu", generator=generator)
+        order = order.to(device=classes.device)
+    held_out_classes = classes[order[:holdout_count]]
+    mask = torch.isin(labels, held_out_classes) & valid
+    return mask, held_out_classes
+
+
+def episode_pseudo_novel_rejection_loss(
+    rejection_logits: torch.Tensor,
+    uncertainty: torch.Tensor,
+    pseudo_novel_mask: torch.Tensor,
+    uncertainty_weight: float = 1.0,
+) -> torch.Tensor:
+    """Train held-out episode classes as novel in the rejection branch only.
+
+    Pseudo-novel samples receive a uniform known-class distribution target and
+    an uncertainty target of one.  Samples outside the mask contribute zero;
+    the caller keeps their ordinary known-class rejection supervision.  The
+    objective uses no unknown/test labels and is intentionally separate from
+    the main classification loss.
+    """
+    if rejection_logits.ndim != 2 or uncertainty.ndim != 1:
+        raise ValueError("rejection logits must be [N,K] and uncertainty [N]")
+    if rejection_logits.size(0) != uncertainty.size(0):
+        raise ValueError("rejection logits and uncertainty must have matching rows")
+    if pseudo_novel_mask.ndim != 1 or pseudo_novel_mask.numel() != rejection_logits.size(0):
+        raise ValueError("pseudo_novel_mask must contain one value per sample")
+    if float(uncertainty_weight) < 0.0:
+        raise ValueError("uncertainty_weight must be non-negative")
+    mask = pseudo_novel_mask.to(device=rejection_logits.device, dtype=torch.bool)
+    if not mask.any():
+        return rejection_logits.sum() * 0.0
+    selected_logits = rejection_logits[mask]
+    uniform_target_loss = -F.log_softmax(selected_logits, dim=-1).mean(dim=-1).mean()
+    selected_uncertainty = uncertainty[mask].clamp(1e-6, 1.0 - 1e-6)
+    uncertainty_target_loss = F.binary_cross_entropy(
+        selected_uncertainty, torch.ones_like(selected_uncertainty)
+    )
+    return uniform_target_loss + float(uncertainty_weight) * uncertainty_target_loss
+
+
 def feature_cross_covariance_loss(
     shared_features: torch.Tensor,
     rejection_features: torch.Tensor,

@@ -26,6 +26,8 @@ from tqdm import tqdm
 
 from .losses import (
     classification_loss,
+    episode_pseudo_novel_rejection_loss,
+    sample_episode_pseudo_novel_mask,
     feature_cross_covariance_loss,
     feature_variance_floor_loss,
     discovery_consistency_loss,
@@ -1665,6 +1667,10 @@ def train_one_epoch_student(
     device,
     alpha_unc: float = 0.1,
     alpha_rejection_known_ce: float = 0.0,
+    alpha_rejection_episode_pseudonovel: float = 0.0,
+    rejection_episode_holdout_fraction: float = 0.25,
+    rejection_episode_uncertainty_weight: float = 1.0,
+    rejection_episode_seed: int | None = None,
     alpha_rejection_supcon: float = 0.0,
     alpha_rejection_superclass_supcon: float = 0.0,
     rejection_coarse_by_known_label=None,
@@ -1921,6 +1927,8 @@ def train_one_epoch_student(
     relational_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
     rejection_ce_meter = AverageMeter()
+    rejection_episode_pseudonovel_meter = AverageMeter()
+    rejection_episode_pseudonovel_fraction_meter = AverageMeter()
     rejection_supcon_meter = AverageMeter()
     rejection_superclass_supcon_meter = AverageMeter()
     rejection_center_meter = AverageMeter()
@@ -2052,6 +2060,10 @@ def train_one_epoch_student(
     discovery_iter = iter(discovery_loader) if discovery_loader is not None else None
     if joint_memory_bank is None:
         joint_memory_bank = {}
+    episode_generator = None
+    if alpha_rejection_episode_pseudonovel > 0.0 and rejection_episode_seed is not None:
+        episode_generator = torch.Generator(device="cpu")
+        episode_generator.manual_seed(int(rejection_episode_seed))
     joint_memory_features = joint_memory_bank.get("features")
     joint_memory_logits = joint_memory_bank.get("logits")
     outlier_iter = iter(outlier_loader) if outlier_loader is not None else None
@@ -2079,18 +2091,60 @@ def train_one_epoch_student(
         )
         s_out = student(images)
         loss_ce = classification_loss(s_out["logits"], labels)
+        episode_pseudo_novel_mask = torch.zeros_like(labels, dtype=torch.bool)
+        if alpha_rejection_episode_pseudonovel > 0.0:
+            if s_out.get("rejection_logits") is None:
+                raise ValueError(
+                    "alpha_rejection_episode_pseudonovel requires a rejection branch"
+                )
+            episode_pseudo_novel_mask, _ = (
+                sample_episode_pseudo_novel_mask(
+                    labels,
+                    holdout_fraction=rejection_episode_holdout_fraction,
+                    generator=episode_generator,
+                )
+            )
+        episode_support_mask = ~episode_pseudo_novel_mask
         if uncertainty_target_mode == "teacher":
+            uncertainty_logits = s_out["uncertainty"]
+            uncertainty_target = teacher_kd_uncertainty_value
+            if alpha_rejection_episode_pseudonovel > 0.0:
+                uncertainty_logits = uncertainty_logits[episode_support_mask]
+                uncertainty_target = uncertainty_target[episode_support_mask]
             loss_unc = teacher_uncertainty_distillation_loss(
-                s_out["uncertainty"], teacher_kd_uncertainty_value
+                uncertainty_logits, uncertainty_target
             )
         else:
+            uncertainty_logits = s_out["uncertainty"]
+            uncertainty_class_logits = s_out["logits"]
+            uncertainty_labels = labels
+            if alpha_rejection_episode_pseudonovel > 0.0:
+                uncertainty_logits = uncertainty_logits[episode_support_mask]
+                uncertainty_class_logits = uncertainty_class_logits[episode_support_mask]
+                uncertainty_labels = labels[episode_support_mask]
             loss_unc = uncertainty_alignment_loss(
-                s_out["uncertainty"], s_out["logits"], labels,
+                uncertainty_logits, uncertainty_class_logits, uncertainty_labels,
                 target_mode=uncertainty_target_mode,
             )
         loss_rejection_ce = s_out["logits"].new_tensor(0.0)
         if alpha_rejection_known_ce > 0.0 and s_out.get("rejection_logits") is not None:
-            loss_rejection_ce = classification_loss(s_out["rejection_logits"], labels)
+            rejection_ce_logits = s_out["rejection_logits"]
+            rejection_ce_labels = labels
+            if alpha_rejection_episode_pseudonovel > 0.0:
+                rejection_ce_logits = rejection_ce_logits[episode_support_mask]
+                rejection_ce_labels = labels[episode_support_mask]
+            if rejection_ce_labels.numel() > 0:
+                loss_rejection_ce = classification_loss(
+                    rejection_ce_logits, rejection_ce_labels
+                )
+        loss_rejection_episode_pseudonovel = s_out["logits"].new_tensor(0.0)
+        if alpha_rejection_episode_pseudonovel > 0.0:
+            loss_rejection_episode_pseudonovel = episode_pseudo_novel_rejection_loss(
+                s_out["rejection_logits"],
+                s_out["uncertainty"],
+                episode_pseudo_novel_mask,
+                uncertainty_weight=rejection_episode_uncertainty_weight,
+            )
         loss_rejection_supcon = s_out["logits"].new_tensor(0.0)
         if alpha_rejection_supcon > 0.0 and s_out.get("rejection_logits") is not None:
             loss_rejection_supcon = supervised_contrastive_loss(
@@ -4469,6 +4523,8 @@ def train_one_epoch_student(
             loss_ce
             + alpha_unc * loss_unc
             + alpha_rejection_known_ce * loss_rejection_ce
+            + alpha_rejection_episode_pseudonovel
+            * loss_rejection_episode_pseudonovel
             + alpha_rejection_supcon * loss_rejection_supcon
             + alpha_rejection_superclass_supcon * loss_rejection_superclass_supcon
             + alpha_rejection_center * loss_rejection_center
@@ -4591,6 +4647,10 @@ def train_one_epoch_student(
                 {
                     "known_uncertainty_term": alpha_unc * loss_unc,
                     "known_ce_term": alpha_rejection_known_ce * loss_rejection_ce,
+                    "episode_pseudonovel_term": (
+                        alpha_rejection_episode_pseudonovel
+                        * loss_rejection_episode_pseudonovel
+                    ),
                     "supcon_term": alpha_rejection_supcon * loss_rejection_supcon,
                     "center_term": alpha_rejection_center * loss_rejection_center,
                     "decorrelation_term": (
@@ -4669,6 +4729,7 @@ def train_one_epoch_student(
                 prefix="rejection",
                 pair_names=(
                     ("known_uncertainty_term", "known_ce_term"),
+                    ("known_ce_term", "episode_pseudonovel_term"),
                     ("known_uncertainty_term", "discovery_uncertainty_pu_term"),
                     ("known_uncertainty_term", "outlier_uncertainty_term"),
                     ("known_ce_term", "kd_term"),
@@ -4806,6 +4867,12 @@ def train_one_epoch_student(
         relational_kd_meter.update(loss_relational_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
+        rejection_episode_pseudonovel_meter.update(
+            loss_rejection_episode_pseudonovel.item(), images.size(0)
+        )
+        rejection_episode_pseudonovel_fraction_meter.update(
+            float(episode_pseudo_novel_mask.float().mean().item()), images.size(0)
+        )
         rejection_supcon_meter.update(loss_rejection_supcon.item(), images.size(0))
         rejection_superclass_supcon_meter.update(
             loss_rejection_superclass_supcon.item(), images.size(0)
@@ -5014,6 +5081,10 @@ def train_one_epoch_student(
         "relational_kd": relational_kd_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,
+        "rejection_episode_pseudonovel": rejection_episode_pseudonovel_meter.avg,
+        "rejection_episode_pseudonovel_fraction": (
+            rejection_episode_pseudonovel_fraction_meter.avg
+        ),
         "rejection_supcon": rejection_supcon_meter.avg,
         "rejection_superclass_supcon": rejection_superclass_supcon_meter.avg,
         "rejection_center": rejection_center_meter.avg,
