@@ -8921,3 +8921,26 @@ smoke 的 control/treatment 检测 AUROC 为 `0.607734/0.609217`，AUPR 为 `0.5
 随后完成一轮低预算 paired smoke（两臂共用 seed-matched teacher、split、配置、1 epoch、训练/验证/测试/发现样本上限；固定 known-validation 95% coverage 校准；未知标签只在最终评价使用）。control 和 treatment 的训练、已知校准、Auto-K 与聚类链路均完成。treatment 的逐批诊断显示平均启用辅助分量数 `2.0`：`outlier_margin` 冲突率 `1.0`、平均投影比例 `0.01211`，`uncertainty_pu` 冲突率 `0`、投影比例 `0`。这证明分量级路由确实运行并保留了逐项差异；smoke 规模过小且只有 1 epoch，不报告其检测或聚类数值，也不据此选择方法。
 
 当前决策：实现和协议门禁通过，可以进入 seed 2153 的正式 paired screening；正式实验仍需按协议同时报告检测、固定覆盖拒识、候选池和聚类，并在已知效用或未知覆盖继续退化时冻结，不扫描投影参数或损失权重。
+
+正式 seed 2153 paired screening 已完成。两臂共用同一教师、类别划分、学生初始化、训练预算、发现池、known-validation 95% coverage 校准和聚类流程；control 为 `off`，treatment 为 `project_auxiliary_componentwise`。两臂校准集实际 known acceptance 均为 `94.9246%`，说明本轮阈值工作点一致；配置中的测试标签隔离审计通过。
+
+| 指标 | control | componentwise | 变化 |
+|---|---:|---:|---:|
+| AUROC | 0.796823 | 0.795798 | -0.001025 |
+| AUPR | 0.709135 | 0.702102 | -0.007033 |
+| FPR95 | 0.623167 | 0.624000 | +0.000833 |
+| OSCR | 0.574622 | 0.569060 | -0.005563 |
+| Known accuracy | 0.681500 | 0.674000 | -0.007500 |
+| Known acceptance | 0.964833 | 0.951333 | -1.350 pp |
+| Unknown rejection | 0.231250 | 0.266500 | +3.525 pp |
+| Candidate count | 1136 | 1358 | +222 |
+| Candidate purity | 0.814261 | 0.784978 | -2.928 pp |
+| Candidate unknown recall | 1.000000 | 1.000000 | 0.000 pp |
+| Auto-K absolute error | 7 | 5 | -2 |
+| Cluster ACC | 0.285211 | 0.268778 | -0.016434 |
+| Cluster NMI | 0.507751 | 0.492774 | -0.014977 |
+| Cluster ARI | 0.173408 | 0.154268 | -0.019140 |
+
+机制统计显示 componentwise treatment 四轮总冲突率为 `0.6746/0.6627/0.6450/0.6361`，总投影比例为 `0.04422/0.03476/0.03452/0.02790`；每轮平均启用分量数均为 `2.0`。`outlier_margin` 的冲突率为 `0.4704/0.5059/0.5059/0.4379`，投影比例为 `0.05959/0.04554/0.04759/0.03343`；`uncertainty_pu` 的冲突率为 `0.3698/0.3314/0.3077/0.3462`，投影比例为 `0.02885/0.02397/0.02144/0.02237`。control 四轮冲突率和投影比例均为 `0`，说明 treatment 的新路由确实执行了分量级投影，而非日志字段误报。
+
+本轮结果与 seed 2152 的旧聚合路由不同：componentwise 在 seed 2153 上提高了固定 coverage 下未知拒识，但 AUROC/AUPR 没有提高，候选池变大且纯度下降，三项聚类指标也下降；known accuracy、known acceptance 和 OSCR 同时下降。因此它没有形成稳定的端到端新类发现收益，不能据此替换默认 `off`，也不启动确认 seed、投影强度扫描或损失权重扫描。该候选按协议冻结。正式汇总见 `analysis/rejection_gradient_componentwise_formal_s2153.json`，训练和 discovery 产物保留在 `runs/rejection_gradient_componentwise_formal_s2153_*`。
