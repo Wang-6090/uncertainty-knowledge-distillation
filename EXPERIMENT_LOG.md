@@ -8884,3 +8884,27 @@ g_aux' = g_aux - (g_known·g_aux / (||g_known||² + eps)) g_known
 流程完整执行了训练、known-validation checkpoint selection、known-only 95% coverage calibration、feature-rejector 和 Auto-K 聚类。两臂 discovery report 均为 `threshold_policy=known_val_known_coverage`、target coverage `0.95`、`hard_labels_used=false`、`test_labels_used_for_training_or_calibration=false`，聚类没有被跳过。treatment history 记录 `rejection_gradient_conflict_rate=0.25`、`rejection_gradient_conflict_projection_fraction=0.008368`，control 的模式为 `off`；这证明路由在真实训练链路中触发并被保存。
 
 smoke 的 control/treatment 检测 AUROC 为 `0.607734/0.609217`，AUPR 为 `0.548852/0.570770`，unknown reject 为 `10.526%/17.544%`；但 1 epoch 小样本 known accuracy 仅约 `0.704%`，Cluster ACC/NMI/ARI 为 `0.200000/0.415624/0.009664` 对 `0.137931/0.413865/-0.042880`。这些数值只用于确认流程和产物，不具备方法比较意义，也不据此启动确认实验。正式 screening 仍需使用完整预算；本阶段已新增 runner 和 seed 2152 split，待提交推送。
+
+### 2026-11-20：拒识梯度冲突投影 seed 2152 正式 screening 完成
+
+按正式协议在 semantic-hard CIFAR-100 60/40 split `2152` 上完成完整预算 paired screening。两臂共用同一 split-matched teacher、学生初始化、4 epoch 训练预算、mixed discovery pool、known-validation checkpoint selection、feature-rejector、known-only 95% coverage calibration 和 Auto-K；唯一训练差异为 `rejection_gradient_conflict_mode=off` 与 `project_auxiliary`。两臂均关闭 episode pseudo-novel rejection，配置审计没有发现额外 loss 系数差异。两份 discovery report 均确认 `threshold_policy=known_val_known_coverage`、target `0.95`、`hard_labels_used=false`、`test_labels_used_for_training_or_calibration=false`，聚类均已执行。
+
+| 指标 | control | project_auxiliary | treatment-control |
+|---|---:|---:|---:|
+| AUROC | 0.774804 | 0.781140 | +0.006336 |
+| AUPR | 0.664592 | 0.668892 | +0.004299 |
+| FPR95 | 0.642000 | 0.631833 | -0.010167 |
+| OSCR | 0.578220 | 0.572823 | -0.005396 |
+| Known accuracy | 0.697500 | 0.685500 | -1.200 pp |
+| Known acceptance | 0.940667 | 0.953000 | +1.233 pp |
+| Unknown rejection | 0.242500 | 0.210250 | -3.225 pp |
+| Candidate purity | 0.731523 | 0.748887 | +1.736 pp |
+| Candidate unknown recall | 1.000000 | 1.000000 | 0.000 pp |
+| Auto-K (absolute error) | 9 | 8 | -1 |
+| Cluster ACC | 0.255656 | 0.307213 | +0.051557 |
+| Cluster NMI | 0.502476 | 0.522902 | +0.020426 |
+| Cluster ARI | 0.175486 | 0.206756 | +0.031270 |
+
+检测与聚类分开看：路由改善了 AUROC/AUPR/FPR95 和三项聚类指标，候选 purity 也提高；但 OSCR、95% known coverage 下 unknown rejection 和 known accuracy 下降，接受后 known accuracy 也从 `0.714210` 降至 `0.700000`。因此它没有形成完整的开放集检测收益，不能把聚类改善解释为整体方法改进。
+
+机制审计通过：control 四轮的冲突率和投影比例均为 `0`；treatment 每轮冲突率为 `0.36/0.33/0.32/0.31`，投影比例约为 `0.03/0.02/0.02/0.02`。这说明投影确实只在部分冲突批次触发，并没有把所有 auxiliary gradient 默认削弱。该结果是单一 semantic-hard split 上的描述性证据；因 fixed-coverage unknown rejection 和 known utility 同时退化，按协议冻结 `project_auxiliary`，不启动确认 seed，不扫描投影系数、冲突阈值或损失权重，也不修改默认 `off`。正式机器结果见 `analysis/rejection_gradient_conflict_formal_s2152.json`，训练与 discovery 产物保留在对应 `runs/rejection_gradient_conflict_formal_s2152_*` 目录。
