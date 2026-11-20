@@ -33,7 +33,7 @@ refuses to overwrite output directories and validates the threshold and label
 audit fields in every report. The audit changes no teacher, student, optimizer,
 checkpoint-selection or representation setting.
 
-## Seed 2153 frozen audit
+## Frozen audits on seeds 2152 and 2153
 
 On the control checkpoint, conjunction changed unknown rejection from `23.125%`
 to `30.400%`, candidate purity from `81.426%` to `80.851%`, Cluster ACC from
@@ -50,8 +50,19 @@ candidate for a confirmation audit because it improved candidate purity and
 all three clustering measures on the componentwise checkpoint while retaining
 the unknown-rejection gain.
 
-This is one seed and reuses trained checkpoints, so it is exploratory evidence.
-It does not change the default score or establish a final algorithmic gain.
-The next stage, if pursued, is a fresh-seed frozen-score confirmation under the
-same predeclared conjunction rule; no conjunction threshold or component
-weight scan is allowed before that confirmation.
+The same fixed conjunction rule was then evaluated on the independent seed
+2152 checkpoints from the preceding aggregate-routing screen. Relative to the
+original `feature_rejector`, control changed candidate purity by `+5.901 pp`
+and Cluster ACC/NMI/ARI by `+3.479/+2.969/+2.192 pp`; the treatment changed
+unknown rejection by `+6.025 pp`, candidate purity by `+3.745 pp`, and Cluster
+ACC/NMI/ARI by `+1.619/-0.159/+1.212 pp`. AUROC, AUPR and OSCR improved in
+both arms, while known accuracy remained unchanged and candidate unknown
+recall stayed at `1.0`.
+
+The two-seed evidence is stronger than a single frozen audit, but the
+checkpoints come from earlier routing experiments and the NMI direction is not
+uniform. The mode therefore remains an opt-in candidate for the formal A/B/C
+protocol and does not change the default score. The next stage should compare
+the fixed conjunction rule against the original score on fresh matched
+students under seeds `42/123/3407`; no conjunction threshold, component weight
+or candidate-ratio scan is allowed before that comparison.

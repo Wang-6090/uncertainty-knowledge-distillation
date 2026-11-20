@@ -1,0 +1,110 @@
+{
+  "seed": 2152,
+  "source_discover_config": "D:\\dachuang\\runs\\rejection_gradient_conflict_formal_s2152_control_discover\\discover_config.json",
+  "student_checkpoints": {
+    "control": "D:\\dachuang\\runs\\rejection_gradient_conflict_formal_s2152_control\\student.pt",
+    "treatment": "D:\\dachuang\\runs\\rejection_gradient_conflict_formal_s2152_treatment\\student.pt"
+  },
+  "score_modes": [
+    "feature_rejector_uncertainty_conjunction"
+  ],
+  "test_labels_used_for_training_selection_or_calibration": false,
+  "results": {
+    "control:feature_rejector_uncertainty_conjunction": {
+      "auroc": 0.786383125,
+      "aupr": 0.6898571798885564,
+      "fpr95": 0.6475,
+      "oscr": 0.5837326666666667,
+      "known_class_accuracy_all_known": 0.6975,
+      "known_accept_rate": 0.954,
+      "unknown_reject_rate": 0.24775,
+      "cluster_candidate_count": 1267,
+      "cluster_candidate_purity": 0.7821625887924231,
+      "cluster_candidate_unknown_recall": 1.0,
+      "cluster_k_abs_error": 1,
+      "cluster_acc": 0.2904498816101026,
+      "cluster_nmi": 0.5321657190667729,
+      "cluster_ari": 0.19740536678693413,
+      "threshold_policy": "known_val_known_coverage",
+      "calibration_known_accept_rate": 0.9491059147180193,
+      "rejector_protocol": {
+        "active": true,
+        "score_mode": "feature_rejector_uncertainty_conjunction",
+        "discovery_pool_mode": "mixed",
+        "training": "nnpu",
+        "pool_selection": "all",
+        "strict_mixed": false,
+        "hard_labels_used": false,
+        "interpretation": "unlabeled_mixed_pu",
+        "test_labels_used_for_training_or_calibration": false,
+        "supervision_source": "known_labels_and_configured_discovery_pool",
+        "class_holdout_protocol": null
+      },
+      "effective_score_protocol": {
+        "requested_score_mode": "feature_rejector_uncertainty_conjunction",
+        "selected_score_mode": "feature_rejector_uncertainty_conjunction",
+        "score_mode_active": "feature_rejector_uncertainty_conjunction",
+        "feature_rejector_active": true,
+        "feature_rejector_score_active": false,
+        "fusion_active": true,
+        "fusion_base_score": "normalized_entropy_min_class_knn",
+        "fusion_base_score_active": false,
+        "knn_ood_enabled": false,
+        "knn_support_bank_source": "not_constructed",
+        "knn_support_bank_size": 0,
+        "threshold_policy": "known_val_known_coverage",
+        "threshold_source": "known_validation",
+        "threshold_calibration_dataset": "independent_calibration_subset",
+        "test_labels_used_for_training_or_calibration": false
+      }
+    },
+    "treatment:feature_rejector_uncertainty_conjunction": {
+      "auroc": 0.7941584583333333,
+      "aupr": 0.6983441717458126,
+      "fpr95": 0.5993333333333334,
+      "oscr": 0.5815188333333333,
+      "known_class_accuracy_all_known": 0.6855,
+      "known_accept_rate": 0.951,
+      "unknown_reject_rate": 0.2705,
+      "cluster_candidate_count": 1376,
+      "cluster_candidate_purity": 0.7863372093023255,
+      "cluster_candidate_unknown_recall": 1.0,
+      "cluster_k_abs_error": 8,
+      "cluster_acc": 0.3234011627906977,
+      "cluster_nmi": 0.5213091771317868,
+      "cluster_ari": 0.21887226055482856,
+      "threshold_policy": "known_val_known_coverage",
+      "calibration_known_accept_rate": 0.9491059147180193,
+      "rejector_protocol": {
+        "active": true,
+        "score_mode": "feature_rejector_uncertainty_conjunction",
+        "discovery_pool_mode": "mixed",
+        "training": "nnpu",
+        "pool_selection": "all",
+        "strict_mixed": false,
+        "hard_labels_used": false,
+        "interpretation": "unlabeled_mixed_pu",
+        "test_labels_used_for_training_or_calibration": false,
+        "supervision_source": "known_labels_and_configured_discovery_pool",
+        "class_holdout_protocol": null
+      },
+      "effective_score_protocol": {
+        "requested_score_mode": "feature_rejector_uncertainty_conjunction",
+        "selected_score_mode": "feature_rejector_uncertainty_conjunction",
+        "score_mode_active": "feature_rejector_uncertainty_conjunction",
+        "feature_rejector_active": true,
+        "feature_rejector_score_active": false,
+        "fusion_active": true,
+        "fusion_base_score": "normalized_entropy_min_class_knn",
+        "fusion_base_score_active": false,
+        "knn_ood_enabled": false,
+        "knn_support_bank_source": "not_constructed",
+        "knn_support_bank_size": 0,
+        "threshold_policy": "known_val_known_coverage",
+        "threshold_source": "known_validation",
+        "threshold_calibration_dataset": "independent_calibration_subset",
+        "test_labels_used_for_training_or_calibration": false
+      }
+    }
+  }
+}

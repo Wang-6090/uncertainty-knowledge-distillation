@@ -8954,3 +8954,7 @@ smoke 的 control/treatment 检测 AUROC 为 `0.607734/0.609217`，AUPR 为 `0.5
 固定 0.5/0.5 `feature_rejector_uncertainty_fusion` 也改善了两臂的排序指标和固定覆盖拒识，但聚类变化不如 conjunction 一致。conjunction 更符合当前问题的目标：要求 rejector 风险和不确定性风险同时支持未知判断，减少单一信号放宽候选池造成的污染。审计报告和标签隔离字段均通过，脚本为 `scripts/run_frozen_score_mode_audit.py`，协议见 `docs/team_a_representation/frozen_score_mode_audit_protocol.md`，汇总保存在 `analysis/frozen_score_audit_s2153.json`。
 
 当前判断：conjunction 是值得进入下一阶段确认的候选，但 seed 2153 冻结 checkpoint 的结果仍属于单 seed 探索，不能修改默认 score mode。下一阶段只在新的独立 seed 上复核这一预先固定的 conjunction 规则；不先扫描阈值、融合权重或候选比例。
+
+随后在已有独立 seed 2152 的 control/treatment checkpoint 上做了第二次冻结复核，仍只改变 discovery-time score mode，没有重训。相对各自原始 `feature_rejector`，conjunction 在 control 上将 AUROC/AUPR/FPR95/OSCR 变化为 `+0.011579/+0.025265/+0.005500/+0.005513`，unknown rejection `+0.525 pp`，candidate count `-59`，candidate purity `+5.901 pp`，Cluster ACC/NMI/ARI `+3.479/+2.969/+2.192 pp`；在 treatment 上将 AUROC/AUPR/FPR95/OSCR 变化为 `+0.013018/+0.029452/-0.032500/+0.008695`，unknown rejection `+6.025 pp`，candidate count `+253`，candidate purity `+3.745 pp`，Cluster ACC/NMI/ARI `+1.619/-0.159/+1.212 pp`。两臂 candidate unknown recall 均为 `1.0`，known accuracy 保持不变。
+
+两 seed 的 conjunction 结果都改善排序和至少部分聚类/候选池指标，且不需要改变训练；但 2152 treatment 的 NMI 略降，两个 seed 的 checkpoint 又来自前面不同的梯度路由实验，因此仍不能把它当作最终算法收益。该方法从“探索性评分审计”升级为“值得进入正式 A/B/C 复核的固定候选”，规则冻结为 conjunction，不扫描阈值、分量权重或候选比例。第二次汇总见 `analysis/frozen_score_confirmation_s2152.json`，协议文档已更新。
