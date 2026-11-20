@@ -8837,3 +8837,9 @@ relational KD 的 candidate unknown recall 在三个 seed 的两臂均为 `1.0`�
 当前没有 AUROC、未知拒识率、候选纯度或聚类性能结论；默认配置和已有实验均未改变。下一步应先运行完整测试套件，并检查一个真实训练配置的保存 history/config 是否正确记录 episode 字段；只有这些检查通过，才在全新 semantic-hard split 上做预先固定的 paired smoke，随后再决定是否进入正式 screening。
 
 随后审计发现，初版实现用全局 PyTorch RNG 选择 episode 留出类别；这会消耗数据增强或 dropout 共享的随机流，破坏后续 paired control/treatment 的单因素条件。已改为可选独立 CPU generator，并在 `train_student` 中按 `seed + 1000003 * epoch` 固定每轮 episode 抽样；默认关闭时不创建该 generator，历史路径不变。新增 generator 可复现性测试，episode 相关筛选为 `19 passed`，编译检查和 `git diff --check` 通过。该修复仍未产生任务指标，下一步先在修复后的实现上重跑隔离 toy smoke，再运行完整测试并提交推送。
+
+在进入 semantic-hard screening 前，固定 treatment 系数为 `alpha_rejection_episode_pseudonovel=0.1`，holdout fraction 保持 `0.25`、uncertainty weight 保持 `1.0`，不根据 toy smoke 调参。新增 `scripts/run_episode_pseudonovel_pair.py`：生成新 seed 的 semantic-hard 60/40 split，复用同一 teacher，拒绝覆盖已有输出，审计 control/treatment 仅有 episode 系数差异，并将 discovery 的 `open_val_ratio` 显式设为 `0.0`，确保 checkpoint/95% coverage calibration 只依赖 known validation。下一步先以新 seed 做低预算 paired smoke，检查配置和流程；smoke 不作为算法效果结论。
+
+第一次 smoke 在 teacher 完成后于 student 数据构建阶段被现有 matched-pool 参数校验阻止：`limit_discovery=256` 与源配置 `matched_pool_size=5400` 不兼容，未进入学生训练，也未产生任务指标。该失败说明 runner 的低预算参数需要同步缩小 matched pool；已修复为在 smoke 中将两臂共同的 `matched_pool_size` 设为 `256`、`limit_discovery=0`，不改变正式协议逻辑。原失败目录保留且不覆盖，重试使用新 tag。
+
+重试 smoke 使用 seed `2150`、共同 teacher、1 epoch、训练/验证/测试/匹配发现池规模 `256/128/256/256`，control 的 episode 系数为 `0`，treatment 为预先固定的 `0.1`。两臂配置核对通过，训练和 discovery 均完成，报告确认 `threshold_policy=known_val_known_coverage`、`target_known_coverage=0.95`、`test_labels_used_for_training_or_calibration=false`、`hard_labels_used=false`。treatment 训练 history 中 episode loss 为 `4.7365`、留出比例 `0.2617`、episode rejection 梯度范数 `0.1917`，说明新损失真实进入优化。低预算测试结果 control/treatment 的 AUROC 为 `0.4959/0.4817`，AUPR 为 `0.4127/0.4014`，未知拒识率均为 `6.06%`，已知接受率为 `96.82%/95.54%`；1 epoch、256 个测试样本且跳过聚类，结果仅作流程 smoke，不能作为方法收益或劣势结论。runner 同步修正了已知准确率字段，下一步再运行完整测试并提交这阶段 runner、日志和 split 记录。

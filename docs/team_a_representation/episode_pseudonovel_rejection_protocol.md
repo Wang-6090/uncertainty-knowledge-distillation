@@ -33,8 +33,10 @@ Only the rejection branch changes:
   `--alpha-rejection-episode-pseudonovel 0`.
 
 The initial fixed protocol uses a `0.25` holdout fraction of batch-present
-classes and uncertainty-loss weight `1.0`. The fraction is not to be scanned
-on the screening split.
+classes, uncertainty-loss weight `1.0`, and treatment coefficient
+`alpha_rejection_episode_pseudonovel=0.1`. These values are fixed before the
+first semantic-hard screening run; the fraction and coefficient are not to be
+scanned on that split.
 
 Episode class sampling uses a separate CPU RNG stream. In the training entry,
 the stream is seeded as `seed + 1000003 * epoch` so treatment sampling does not
