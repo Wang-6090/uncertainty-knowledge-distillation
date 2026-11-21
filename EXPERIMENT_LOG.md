@@ -9030,3 +9030,7 @@ A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K
 盘点显示 `runs/` 占用约 `85.03 GB`，而 `analysis/` 约 `34 MB`；主要空间来自已完成旧运行的训练 checkpoint。为保留结论可追溯性，本轮只处理 checkpoint 文件，不删除代码、`EXPERIMENT_LOG.md`、`analysis/`、split 文件、配置、训练历史、JSON 报告或其他审计元数据。
 
 清理范围固定为：`runs/` 下目录时间早于 `2026-11-10` 的 `.pt/.pth/.ckpt`，并排除当前 quality-aware 确认实验 `2155/2156`、已完成的 `2154` pilot、近期正式梯度/关系蒸馏实验、正式 conjunction 审计和已有无效运行归档目录。清理前候选为 `3,125` 个 checkpoint、约 `69.86 GB`，分布在 `2,727` 个目录；每个候选目录均仍保留至少一个非 checkpoint 元数据文件。清理后结论仍以实验记录和分析报告为准；若未来需要旧模型，只能依据保留的配置重新运行，不能再直接加载这些旧 checkpoint。
+
+### 2026-11-21：低影响 checkpoint 清理候选
+
+为降低清理风险，进一步把范围收窄到路径明确包含 `smoke`、旧实验归档 `runs/archive_old/` 或已确认无效归档 `runs/_archive_confirmed_invalid_20261024/` 的 checkpoint。预览得到 `324` 个文件、约 `9.334 GB`，对应 210 个目录；这些运行只用于接线、梯度/流程验证、历史 toy/旧归档或已明确排除的失败执行。配置、训练历史、报告、分析记录和无效原因均保留，正式 baseline、正式对照、近期实验和当前 quality-aware 确认实验不在候选范围内。脚本 [`scripts/cleanup_low_impact_checkpoints.ps1`](scripts/cleanup_low_impact_checkpoints.ps1) 默认只预览，执行时会先生成 `analysis/cleanup_low_impact_manifest_20261121.csv`。
