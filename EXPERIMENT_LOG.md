@@ -9004,3 +9004,7 @@ A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K
 实现门禁通过：质量权重显式公式、非法标签、有限损失、学生梯度和教师无梯度测试均通过，`pytest tests/test_uncertainty_kd.py` 为 `15 passed`；Python 编译检查和 CLI 参数解析通过。一次 toy teacher/student smoke 也真实跑通并保存 checkpoint。quality-aware student 的关键统计为 `kd=2.8597`、`kd_quality_weight_applied=true`、权重均值约 `1.0000`、标准差 `0.5627`、ESS fraction `0.7353`，说明该机制产生了实际的样本重加权；这只是接线与梯度证据，不是性能证据。
 
 协议见 `docs/team_a_representation/quality_aware_kd_protocol.md`。下一阶段只做一个新的 semantic-hard 单 seed 小预算三臂 pilot：standard logits-KD、unweighted DKD、quality-aware logits-KD；固定教师、数据顺序、训练预算、辅助损失、校准、拒识和 Auto-K，不扫描 floor/power。只有 pilot 同时改善检测/固定覆盖指标和候选或聚类指标，且 known accuracy 与 candidate purity 没有实质下降，才进入新 seed 复核；否则冻结该方向。
+
+### 2154 pilot 运行状态
+
+已在新 split `seed2154` 上通过 dry-run 并启动正式三臂运行。split、teacher 和输出目录均采用新路径，standard/decoupled/quality-aware 共享同一 split-matched teacher；当前 standard student 已保存，best known-validation accuracy 为 `0.6750`，其 discovery 已进入流程，decoupled student 随后开始训练。正式指标和晋级判断必须等三臂 discovery、自动 K 与标签隔离门禁全部完成后再记录；当前不把中间状态解释为方法效果。
