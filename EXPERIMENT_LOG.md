@@ -1,5 +1,46 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 最新研究结果：late rejection-CE decay 新 split 复核（2026-11-21，seed=2160）
+
+为检验“后期降低拒识头已知类 CE 压力”是否能同时改善检测与新类发现，
+在新的 semantic-hard seed=2160 上完成了预先固定 schedule 的配对实验。static-control
+全程 CE 系数为 `1.0`；late-decay 前两轮为 `1.0`，第 3/4 轮实际系数为
+`0.625/0.25`。两臂共享 split、teacher、student 结构和初始化、四轮预算、5,400
+样本 mixed pool（known prior `0.2`）、checkpoint 规则、拒识器、known-validation-only
+95% coverage 校准和 discovery 配置。配置逐项比较除 schedule、输出路径、学生 checkpoint
+以及训练后自然产生的 validation 最优值外没有意外差异。
+
+| seed=2160 | static-control | late-decay | treatment − control |
+|---|---:|---:|---:|
+| AUROC | 0.798998 | 0.811941 | +0.012943 |
+| AUPR | 0.699335 | 0.726373 | +0.027038 |
+| FPR95 | 0.608167 | 0.634333 | +2.62 pp |
+| OSCR | 0.594214 | 0.594852 | +0.06 pp |
+| test known acceptance | 92.400% | 92.717% | +0.32 pp |
+| accepted-known accuracy | 72.276% | 71.796% | −0.48 pp |
+| unknown rejection | 33.350% | 38.050% | +4.70 pp |
+| candidate purity | 74.525% | 77.693% | +3.17 pp |
+| ACC / NMI / ARI | 0.344693 / 0.529303 / 0.259345 | 0.407351 / 0.561216 / 0.300579 | +6.27 / +3.19 / +4.12 pp |
+| Auto-K error | 9 | 6 | −3 |
+
+该 split 上 late-decay 同时改善了排序、固定工作点未知拒识、候选纯度和聚类指标；
+候选未知召回保持 `100%`，真实未知候选数由 `1,334` 增至 `1,522`，误拒已知数由
+`456` 降至 `437`。但 FPR95 恶化 `2.62` 个百分点，accepted-known accuracy 下降
+`0.48` 个百分点，且目前仍只有一个新的独立 split，不能把它写成稳定收益或直接替换默认。
+
+机制审计确认 schedule 真正进入优化：late-decay 四轮拒识 CE 梯度范数为
+`13.131/13.524/7.962/2.842`，不确定性项梯度为 `0.101/0.154/0.187/0.194`，
+KD 梯度仍为 `12.535/10.249/9.036/8.492`，全部有限且非零。两臂 calibration known
+acceptance 均为 `94.939%`，阈值只来自 known validation，
+`test_labels_used_for_training_or_calibration=false`。
+
+结论：本次结果增强了 late-decay 作为候选训练目标的证据，但仍是“排序/工作点/聚类
+改善并伴随 FPR95 与 known utility 代价”的 tradeoff，不改默认、不继续根据测试结果扫
+schedule。若继续，应预注册 validation-only 的联合标准，在新的多 split 上同时检查排序、
+FPR95/尾部、95% coverage 工作点和 known utility。完整报告见
+[`analysis/rejection_ce_decay_s2160_20261121.md`](analysis/rejection_ce_decay_s2160_20261121.md)，
+机器结果见 [`analysis/rejection_ce_decay_s2160_20261121.json`](analysis/rejection_ce_decay_s2160_20261121.json)。
+
 ## 最新研究结果：后期 CE 衰减模型的聚类表征审计（2026-11-10）
 
 为定位 `late-decay` 在 seed=2125 上出现的聚类下降，使用已经完成的四组
