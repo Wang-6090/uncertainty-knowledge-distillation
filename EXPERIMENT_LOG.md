@@ -9018,3 +9018,9 @@ A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K
 相对 standard KD，quality-aware 的 AUROC/AUPR/FPR95/OSCR 变化为 `-0.00080/+0.01223/+0.01300/+0.00549`；known accuracy `+0.883 pp`，unknown rejection `-1.725 pp`，candidate purity `+4.948 pp`，NMI `+2.234 pp`，ARI `-2.275 pp`，Auto-K absolute error 从 `8` 降到 `0`。这说明质量权重确实改变了训练信号，并带来候选质量和自动 K 的积极信号，但检测与聚类并非所有指标同步改善，不能修改默认 standard-KD。
 
 本 pilot 按预注册规则进入两个 fresh semantic-hard seed 的确认阶段；不扫描 quality floor、power、temperature 或 loss coefficient。完整逐臂结果见 [`analysis/team_a_quality_kd_s2154.md`](analysis/team_a_quality_kd_s2154.md)，机器结果见 `analysis/team_a_quality_kd_s2154.json`。
+
+### 2026-11-21：quality-aware KD fresh confirmation 启动
+
+依据 2154 pilot 的预注册晋级规则，启动 fresh semantic-hard seeds `2155/2156` 的三臂确认：standard logits-KD、unweighted DKD 和 quality-aware logits-KD。运行前 dry-run 已通过；两组 seed 使用独立 split 和独立 teacher 输出目录，训练预算固定为 4 epoch，known-validation checkpoint selection、gradient audit、detector、calibration、candidate pool、Auto-K 和聚类流程保持一致，不扫描任何质量权重参数，也不覆盖 2154 或历史结果。
+
+正式运行已开始。teacher 阶段和 student/discovery 流程均按 seed 顺序执行；中间日志已确认控制臂 `kd_quality_weight_applied=false`，quality-aware 臂出现 `kd_quality_weight_applied=true` 且 KD target/non-target 项均为非零，说明新机制实际进入 KD 计算。最终结论必须等 `2155/2156` 三臂全部完成、标签隔离门禁和汇总门禁通过后再记录；当前中间指标不作为方法效果证据。
