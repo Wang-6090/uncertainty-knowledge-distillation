@@ -41,6 +41,38 @@ FPR95/尾部、95% coverage 工作点和 known utility。完整报告见
 [`analysis/rejection_ce_decay_s2160_20261121.md`](analysis/rejection_ce_decay_s2160_20261121.md)，
 机器结果见 [`analysis/rejection_ce_decay_s2160_20261121.json`](analysis/rejection_ce_decay_s2160_20261121.json)。
 
+## 补充审计：late CE decay 与边界不确定性修正的冻结组合（2026-11-21，seed=2160）
+
+针对 late-decay 在 seed=2160 上 FPR95 恶化的问题，对已完成的 static-control 和
+late-decay checkpoint 做了 evaluation-only 组合审计。两臂均只增加此前固定的边界不确定性
+修正 `band_multiplier=1.0, alpha=0.5`，不重训、不改 checkpoint、不扫参数；阈值仍由
+known validation 的 95% coverage 校准，校准子集与 checkpoint-selection 子集不重叠，
+测试标签只用于最终指标。
+
+边界修正相对各自 raw discovery 的变化如下：
+
+| 指标 | static-control | late-decay |
+|---|---:|---:|
+| AUROC | +0.009318 | +0.009384 |
+| AUPR | +0.022049 | +0.020483 |
+| FPR95 | 0.000000 | 0.000000 |
+| OSCR | +0.42 pp | +0.57 pp |
+| unknown rejection | +3.98 pp | +1.23 pp |
+| candidate purity | +2.16 pp | +3.75 pp |
+| ACC / NMI / ARI | +3.33 / +1.13 / +1.78 pp | +2.45 / +0.99 / +1.65 pp |
+| Auto-K error | 9 -> 12 | 6 -> 7 |
+
+late-decay 的 FPR95 仍为 `0.634333`，边界修正没有改善尾部错误；同时 test known
+acceptance 从 `92.717%` 升至 `94.033%`，accepted-known accuracy 从 `71.796%` 降至
+`71.411%`。因此该组合只能说明边界修正与 late-decay 在排序、OSCR、候选纯度和聚类上
+有部分互补，不能说明已经解决 FPR95 或 known utility 问题。
+
+结论：保留为冻结诊断，不改默认，不在该测试 split 上扫描 alpha/band。下一步若继续，
+应转向直接改善尾部排序的训练目标或 validation-only calibration，并在 fresh split 上
+把 FPR95、95% coverage 工作点和 known utility 列为共同成功标准。完整报告见
+[`analysis/rejection_ce_decay_boundary_combo_s2160_20261121.md`](analysis/rejection_ce_decay_boundary_combo_s2160_20261121.md)，
+协议见 [`docs/team_a_representation/ce_decay_boundary_combo_protocol.md`](docs/team_a_representation/ce_decay_boundary_combo_protocol.md)。
+
 ## 最新研究结果：后期 CE 衰减模型的聚类表征审计（2026-11-10）
 
 为定位 `late-decay` 在 seed=2125 上出现的聚类下降，使用已经完成的四组
