@@ -9034,3 +9034,5 @@ A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K
 ### 2026-11-21：低影响 checkpoint 清理候选
 
 为降低清理风险，进一步把范围收窄到路径明确包含 `smoke`、旧实验归档 `runs/archive_old/` 或已确认无效归档 `runs/_archive_confirmed_invalid_20261024/` 的 checkpoint。预览得到 `324` 个文件、约 `9.334 GB`，对应 210 个目录；这些运行只用于接线、梯度/流程验证、历史 toy/旧归档或已明确排除的失败执行。配置、训练历史、报告、分析记录和无效原因均保留，正式 baseline、正式对照、近期实验和当前 quality-aware 确认实验不在候选范围内。脚本 [`scripts/cleanup_low_impact_checkpoints.ps1`](scripts/cleanup_low_impact_checkpoints.ps1) 默认只预览，执行时会先生成 `analysis/cleanup_low_impact_manifest_20261121.csv`。
+
+随后按该清单完成清理：实际删除 `324` 个 checkpoint，释放约 `9.334 GB`；删除后 `runs/` 占用约 `75.99 GB`，低影响候选路径下不再有 checkpoint。清单保留在 `analysis/cleanup_low_impact_manifest_20261121.csv`，当前 quality-aware 确认实验目录仍存在，训练进程继续运行。该清理只影响这些 smoke/旧归档模型的直接加载，不改变已记录结论、配置、训练历史或分析报告。
