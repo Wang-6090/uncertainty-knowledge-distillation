@@ -559,7 +559,7 @@ def main() -> None:
         if any(value is None or value <= 0.0 for value in arms[weighted_arm]["kd_loss_by_epoch"]):
             raise RuntimeError(f"weighted KD loss path was not active for seed {seed}")
         if options.objective_profile in {"ua_dkd", "quality_aware"}:
-            for arm in ("decoupled", "uncertainty_decoupled"):
+            for arm in ("decoupled", weighted_arm):
                 for key in (
                     "kd_target_by_epoch",
                     "kd_non_target_by_epoch",

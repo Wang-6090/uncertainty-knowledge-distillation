@@ -9008,3 +9008,13 @@ A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K
 ### 2154 pilot 运行状态
 
 已在新 split `seed2154` 上通过 dry-run 并启动正式三臂运行。split、teacher 和输出目录均采用新路径，standard/decoupled/quality-aware 共享同一 split-matched teacher；当前 standard student 已保存，best known-validation accuracy 为 `0.6750`，其 discovery 已进入流程，decoupled student 随后开始训练。正式指标和晋级判断必须等三臂 discovery、自动 K 与标签隔离门禁全部完成后再记录；当前不把中间状态解释为方法效果。
+
+### 2026-11-21：quality-aware KD seed 2154 pilot 完成
+
+三臂正式运行已完成，runner 最初在汇总门禁中暴露了 profile arm 名称硬编码 bug：quality-aware 臂名称为 `quality_aware`，旧代码仍查找 `uncertainty_decoupled`。该 bug 只发生在汇总阶段，没有影响训练或 discovery 产物；修复后 runner 复用已有 checkpoint/report 成功完成汇总，没有重训。修复已加入 `scripts/run_uncertainty_kd_core_pair.py`。
+
+机制审计确认 quality-aware 的四个 epoch 均实际应用质量权重，末 epoch 权重标准差为 `0.50859`、ESS fraction 为 `0.79435`，KD 梯度和学生分类头更新均非零。standard 与 decoupled 的对应权重诊断为 `0.20195/0.96067`，该字段只是统一诊断，不代表它们应用了质量权重；两臂的 `kd_quality_weight_applied` 均为 false。三臂均使用 known-validation 95% coverage，realized calibration acceptance 为 `0.949384`，test labels 未进入训练或校准。
+
+相对 standard KD，quality-aware 的 AUROC/AUPR/FPR95/OSCR 变化为 `-0.00080/+0.01223/+0.01300/+0.00549`；known accuracy `+0.883 pp`，unknown rejection `-1.725 pp`，candidate purity `+4.948 pp`，NMI `+2.234 pp`，ARI `-2.275 pp`，Auto-K absolute error 从 `8` 降到 `0`。这说明质量权重确实改变了训练信号，并带来候选质量和自动 K 的积极信号，但检测与聚类并非所有指标同步改善，不能修改默认 standard-KD。
+
+本 pilot 按预注册规则进入两个 fresh semantic-hard seed 的确认阶段；不扫描 quality floor、power、temperature 或 loss coefficient。完整逐臂结果见 [`analysis/team_a_quality_kd_s2154.md`](analysis/team_a_quality_kd_s2154.md)，机器结果见 `analysis/team_a_quality_kd_s2154.json`。
