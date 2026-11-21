@@ -36,6 +36,7 @@ from novel_discovery.pipeline import (
     collect_diagonal_gaussian_stats,
     collect_prototypes,
     collect_classwise_knn_support,
+    compute_uncertainty_pu_unlabeled_weights,
     empirical_rank_normalize_numpy,
     fit_score_normalization,
     evaluate_classification,
@@ -135,7 +136,7 @@ def validate_rejector_configuration(args):
     if (
         args.discovery_pool_mode == "mixed"
         and args.rejector_training == "hard"
-        and args.rejector_pool_selection == "all"
+        and args.rejector_pool_selection in {"all", "weighted_risk"}
         and args.score_mode in {
             "feature_rejector",
             "feature_rejector_fusion",
@@ -183,6 +184,16 @@ def rejector_protocol_metadata(args):
         "discovery_pool_mode": pool_mode,
         "training": training,
         "pool_selection": selection,
+        "pool_weighting": (
+            {
+                "type": "continuous_label_free_risk",
+                "risk_source": "ranked_entropy_msp_prototype_distance_head_uncertainty",
+                "all_mixed_samples_retained": True,
+                "weights_are_not_labels": True,
+            }
+            if selection == "weighted_risk"
+            else None
+        ),
         "strict_mixed": bool(args.rejector_strict_mixed),
         "hard_labels_used": bool(active and training == "hard"),
         "interpretation": interpretation,
@@ -622,11 +633,12 @@ def build_parser():
         p.add_argument("--discovery-pool-mode", choices=["unknown", "mixed"], default="unknown")
         p.add_argument(
             "--rejector-pool-selection",
-            choices=["all", "high_risk", "weighted_boundary"],
+            choices=["all", "high_risk", "weighted_boundary", "weighted_risk"],
             default="all",
             help=(
-                "Use all discovery samples, only high-risk pseudo-unknowns, or "
-                "all samples with extra weight on prototype-boundary candidates."
+                "Use all discovery samples, only high-risk pseudo-unknowns, all "
+                "samples with extra weight on prototype-boundary candidates, or "
+                "all samples with continuous label-free risk weights."
             ),
         )
         p.add_argument("--rejector-candidate-ratio", type=float, default=0.25)
@@ -635,9 +647,9 @@ def build_parser():
             type=float,
             default=2.0,
             help=(
-                "Additional weight assigned to selected candidates when "
-                "--rejector-pool-selection=weighted_boundary; weights are normalized "
-                "to mean one before nnPU training."
+                "Maximum relative weight assigned to high-risk mixed-pool samples "
+                "when using a weighted rejector pool; weights are normalized to "
+                "mean one before nnPU training."
             ),
         )
         p.add_argument(
@@ -5531,32 +5543,69 @@ def discover(args):
                 attach_known_support_score(rejector_known_outputs, support_model_for_rejector)
                 attach_known_support_score(rejector_unknown_outputs, support_model_for_rejector)
             unlabeled_sample_weight = None
-            if args.rejector_pool_selection in {"high_risk", "weighted_boundary"}:
-                if args.rejector_candidate_mode in {"prototype_boundary", "confident_boundary"}:
-                    if support_model_for_rejector is None:
-                        support_model_for_rejector = fit_known_support_rejector(
-                            rejector_known_outputs, quantile=args.support_quantile
+            if args.rejector_pool_selection in {
+                "high_risk",
+                "weighted_boundary",
+                "weighted_risk",
+            }:
+                if args.rejector_pool_selection == "weighted_risk":
+                    candidate_logits = torch.from_numpy(rejector_unknown_outputs["logits"])
+                    candidate_uncertainty = torch.from_numpy(
+                        rejector_unknown_outputs["head_uncertainty"]
+                    )
+                    candidate_features = torch.from_numpy(
+                        rejector_unknown_outputs["features"]
+                    )
+                    candidate_prototypes = model.classifier.weight.detach().cpu()
+                    risk = compute_uncertainty_pu_unlabeled_weights(
+                        candidate_logits,
+                        uncertainty=candidate_uncertainty,
+                        features=candidate_features,
+                        prototypes=candidate_prototypes,
+                        mode="distance_consensus",
+                        temperature=0.5,
+                        power=1.0,
+                    ).numpy()
+                    candidate_weight = float(args.rejector_candidate_weight)
+                    if candidate_weight < 1.0:
+                        raise ValueError(
+                            "--rejector-candidate-weight must be at least 1 for weighted_risk"
                         )
-                    candidate_features = torch.from_numpy(rejector_unknown_outputs["features"])
-                    candidate_prototypes = torch.from_numpy(support_model_for_rejector["centers"])
-                    candidate_radii = torch.from_numpy(support_model_for_rejector["radii"])
-                    if args.rejector_candidate_mode == "prototype_boundary":
-                        candidate_mask = select_prototype_boundary_candidates(
-                            candidate_features,
-                            candidate_prototypes,
-                            candidate_radii,
-                            ratio=args.rejector_candidate_ratio,
-                        ).numpy()
-                    else:
-                        candidate_mask = select_confident_boundary_candidates(
-                            candidate_features,
-                            torch.from_numpy(rejector_unknown_outputs["logits"]),
-                            candidate_prototypes,
-                            candidate_radii,
-                            ratio=args.rejector_candidate_ratio,
-                        ).numpy()
+                    unlabeled_sample_weight = (
+                        1.0 + (candidate_weight - 1.0) * risk
+                    ).astype(np.float32)
+                    print(
+                        "feature rejector continuous risk weighting: "
+                        f"min={unlabeled_sample_weight.min():.3f}, "
+                        f"mean={unlabeled_sample_weight.mean():.3f}, "
+                        f"max={unlabeled_sample_weight.max():.3f}, "
+                        f"pool retained={len(unlabeled_sample_weight)}"
+                    )
                 else:
-                    if args.rejector_candidate_mode == "mc_epistemic_head_fusion":
+                    if args.rejector_candidate_mode in {"prototype_boundary", "confident_boundary"}:
+                        if support_model_for_rejector is None:
+                            support_model_for_rejector = fit_known_support_rejector(
+                                rejector_known_outputs, quantile=args.support_quantile
+                            )
+                        candidate_features = torch.from_numpy(rejector_unknown_outputs["features"])
+                        candidate_prototypes = torch.from_numpy(support_model_for_rejector["centers"])
+                        candidate_radii = torch.from_numpy(support_model_for_rejector["radii"])
+                        if args.rejector_candidate_mode == "prototype_boundary":
+                            candidate_mask = select_prototype_boundary_candidates(
+                                candidate_features,
+                                candidate_prototypes,
+                                candidate_radii,
+                                ratio=args.rejector_candidate_ratio,
+                            ).numpy()
+                        else:
+                            candidate_mask = select_confident_boundary_candidates(
+                                candidate_features,
+                                torch.from_numpy(rejector_unknown_outputs["logits"]),
+                                candidate_prototypes,
+                                candidate_radii,
+                                ratio=args.rejector_candidate_ratio,
+                            ).numpy()
+                    elif args.rejector_candidate_mode == "mc_epistemic_head_fusion":
                         candidate_mask = select_mc_epistemic_head_candidates(
                             torch.from_numpy(rejector_unknown_outputs["epistemic"]),
                             torch.from_numpy(rejector_unknown_outputs["head_uncertainty"]),
@@ -5567,8 +5616,7 @@ def discover(args):
                             torch.from_numpy(rejector_unknown_outputs["epistemic"]),
                             torch.from_numpy(rejector_unknown_outputs["head_uncertainty"]),
                             ratio=args.rejector_candidate_ratio,
-                        )
-                        candidate_mask = candidate_mask.numpy()
+                        ).numpy()
                     else:
                         pool_logits = torch.from_numpy(rejector_unknown_outputs["logits"])
                         pool_uncertainty = torch.from_numpy(rejector_unknown_outputs["head_uncertainty"])
@@ -5578,37 +5626,37 @@ def discover(args):
                             ratio=args.rejector_candidate_ratio,
                             mode=args.rejector_candidate_mode,
                         ).numpy()
-                if int(candidate_mask.sum()) < 2:
-                    raise ValueError("rejector high-risk selection produced fewer than two samples")
-                if args.rejector_pool_selection == "high_risk":
-                    rejector_unknown_outputs = {
-                        key: value[candidate_mask]
-                        if isinstance(value, np.ndarray) and value.shape[:1] == candidate_mask.shape
-                        else value
-                        for key, value in rejector_unknown_outputs.items()
-                    }
-                    print(
-                        "feature rejector pseudo-unknown selection: "
-                        f"{int(candidate_mask.sum())}/{len(candidate_mask)} samples"
-                    )
-                else:
-                    if args.rejector_candidate_mode not in {"prototype_boundary", "confident_boundary"}:
-                        raise ValueError(
-                            "weighted_boundary requires a support-boundary candidate mode"
+                    if int(candidate_mask.sum()) < 2:
+                        raise ValueError("rejector high-risk selection produced fewer than two samples")
+                    if args.rejector_pool_selection == "high_risk":
+                        rejector_unknown_outputs = {
+                            key: value[candidate_mask]
+                            if isinstance(value, np.ndarray) and value.shape[:1] == candidate_mask.shape
+                            else value
+                            for key, value in rejector_unknown_outputs.items()
+                        }
+                        print(
+                            "feature rejector pseudo-unknown selection: "
+                            f"{int(candidate_mask.sum())}/{len(candidate_mask)} samples"
                         )
-                    candidate_weight = float(args.rejector_candidate_weight)
-                    if candidate_weight < 1.0:
-                        raise ValueError(
-                            "--rejector-candidate-weight must be at least 1 for weighted_boundary"
+                    else:
+                        if args.rejector_candidate_mode not in {"prototype_boundary", "confident_boundary"}:
+                            raise ValueError(
+                                "weighted_boundary requires a support-boundary candidate mode"
+                            )
+                        candidate_weight = float(args.rejector_candidate_weight)
+                        if candidate_weight < 1.0:
+                            raise ValueError(
+                                "--rejector-candidate-weight must be at least 1 for weighted_boundary"
+                            )
+                        unlabeled_sample_weight = np.where(
+                            candidate_mask, candidate_weight, 1.0
+                        ).astype(np.float32)
+                        print(
+                            "feature rejector soft boundary weighting: "
+                            f"{int(candidate_mask.sum())}/{len(candidate_mask)} candidates, "
+                            f"weight={candidate_weight:g}, pool retained={len(candidate_mask)}"
                         )
-                    unlabeled_sample_weight = np.where(
-                        candidate_mask, candidate_weight, 1.0
-                    ).astype(np.float32)
-                    print(
-                        "feature rejector soft boundary weighting: "
-                        f"{int(candidate_mask.sum())}/{len(candidate_mask)} candidates, "
-                        f"weight={candidate_weight:g}, pool retained={len(candidate_mask)}"
-                    )
             if args.rejector_training == "soft_pu":
                 feature_rejector = fit_pu_feature_rejector(
                     rejector_known_outputs,

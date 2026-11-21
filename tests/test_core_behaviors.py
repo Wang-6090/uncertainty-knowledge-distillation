@@ -5122,6 +5122,31 @@ class ScoreBehaviorTest(unittest.TestCase):
             three_quarters - base, 0.75 * uncertainty_z, atol=1e-6
         )
 
+    def test_uncertainty_pu_risk_weights_are_label_free_bounded_and_ranked(self):
+        logits = torch.tensor(
+            [[4.0, 0.0], [1.0, 1.0], [0.0, 4.0]], dtype=torch.float32
+        )
+        uncertainty = torch.tensor([0.1, 0.5, 0.9], dtype=torch.float32)
+        features = torch.tensor(
+            [[1.0, 0.0], [0.7, 0.7], [0.0, 1.0]], dtype=torch.float32
+        )
+        prototypes = torch.tensor(
+            [[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32
+        )
+        weights = compute_uncertainty_pu_unlabeled_weights(
+            logits,
+            uncertainty=uncertainty,
+            features=features,
+            prototypes=prototypes,
+            mode="distance_consensus",
+            temperature=0.5,
+        )
+        self.assertEqual(tuple(weights.shape), (3,))
+        self.assertTrue(torch.isfinite(weights).all())
+        self.assertGreaterEqual(weights.min().item(), 0.0)
+        self.assertLessEqual(weights.max().item(), 1.0)
+        self.assertLess(weights[0].item(), weights[-1].item())
+
     def test_classwise_predicted_knn_normalization_uses_known_validation_classes(self):
         outputs = {
             "features": np.zeros((4, 2), dtype=np.float32),

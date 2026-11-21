@@ -9153,3 +9153,42 @@ fusion 相对同一 checkpoint 的 raw `feature_rejector` 全面退化：AUROC �
 [`docs/team_a_representation/rank_fusion_protocol.md`](docs/team_a_representation/rank_fusion_protocol.md)，
 canonical runner 为 [`scripts/run_rank_fusion_pilot.py`](scripts/run_rank_fusion_pilot.py)，机器结果保留在
 本地 `analysis/rank_fusion_pilot_canonical_20261121.json`。
+
+### 2026-11-22：连续无标签风险加权 mixed-pool nnPU 复核
+
+针对 seed 2160 FPR95 尾部审计暴露的 unknown 低分尾部问题，新增了一个独立的 opt-in 拒识训练候选
+`rejector_pool_selection=weighted_risk`。它保留全部 mixed discovery pool 样本，不生成 hard pseudo-label；
+样本权重来自 detached 的连续无标签风险（entropy、MSP、classifier prototype distance 和学生不确定性），
+按 `1 + (max_weight - 1) * risk` 限幅，默认 `max_weight=2.0`。control 为等权 `all_pool`，两臂共用
+semantic-hard seed 2161 的 teacher、student、预算、`nu_corrected` nnPU、独立 rejection encoder、known-validation
+95% coverage 校准、候选池和 Auto-K/聚类流程；测试标签只用于最终评价。配置差异门禁、标签隔离门禁和运行完整性检查均通过。
+
+| 指标 | all_pool | weighted_risk | 变化 |
+|---|---:|---:|---:|
+| AUROC | 0.792361 | 0.797080 | +0.004719 |
+| AUPR | 0.688500 | 0.692223 | +0.003722 |
+| FPR95 | 0.623500 | 0.609167 | -0.014333 |
+| OSCR | 0.580128 | 0.586364 | +0.006236 |
+| Known acceptance | 0.947167 | 0.947333 | +0.017 pp |
+| Accepted-known accuracy | 0.704381 | 0.704258 | -0.012 pp |
+| Unknown rejection | 0.260750 | 0.261250 | +0.050 pp |
+| Candidate count | 1360 | 1361 | +1 |
+| Candidate purity | 0.766912 | 0.767818 | +0.091 pp |
+| Candidate unknown recall | 1.000000 | 1.000000 | 0.000 pp |
+| Auto-K absolute error | 10 | 17 | +7 |
+| Cluster ACC | 0.347794 | 0.314475 | -3.332 pp |
+| Cluster NMI | 0.545028 | 0.493569 | -5.146 pp |
+| Cluster ARI | 0.254434 | 0.220561 | -3.387 pp |
+
+检测与聚类必须分开解释：weighted risk 在一个 fresh semantic-hard seed 上改善了排序指标，固定 coverage 下未知拒识
+只增加 `0.050` 个百分点，candidate purity 基本不变；但 Auto-K 绝对误差扩大，ACC/NMI/ARI 均明显下降，
+因此没有形成端到端的新类发现收益。FPR95 尾部诊断进一步显示，known q95 为 `5.1229 -> 5.1510`、
+unknown q05 为 `-2.2665 -> -3.0504`；FPR95 前缀中的 known 误拒为 `3741 -> 3655`，unknown 误接收均为 `200`。
+也就是说检测小幅改善主要来自 known 高分尾部收缩，unknown 低分尾部没有得到修复，不能把该结果解释为解决 hard unknown 学习问题。
+
+当前决策：`weighted_risk` 冻结为 opt-in 研究候选，不修改默认 `all`，不在 seed 2161 上扫描权重或阈值，
+也不重复训练同一协议。代码、协议文档、paired runner 和尾部审计工具分别见
+[`train.py`](train.py)、[`docs/team_a_representation/rejector_continuous_risk_weight_protocol.md`](docs/team_a_representation/rejector_continuous_risk_weight_protocol.md)、
+[`scripts/run_rejector_continuous_risk_pair.py`](scripts/run_rejector_continuous_risk_pair.py) 和
+[`scripts/audit_fpr95_tail_pair.py`](scripts/audit_fpr95_tail_pair.py)；机器汇总与审计见
+`analysis/rejector_continuous_risk_s2161.json`、`analysis/fpr95_tail_audit_rejector_continuous_risk_s2161.md`。
