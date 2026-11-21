@@ -1291,6 +1291,7 @@ def compute_uncertainty_pu_unlabeled_weights(
     temperature: float = 0.5,
     power: float = 1.0,
     support_bank: dict | None = None,
+    neighbor_k: int = 10,
 ) -> torch.Tensor | None:
     """Estimate soft likely-unknown weights for mixed-pool PU training.
 
@@ -1312,6 +1313,7 @@ def compute_uncertainty_pu_unlabeled_weights(
     if mode in {
         "prototype_distance",
         "distance_consensus",
+        "distance_neighbor_consensus",
         "support_consensus",
         "support_blended",
     }:
@@ -1360,7 +1362,7 @@ def compute_uncertainty_pu_unlabeled_weights(
         risk = max_softmax_risk
     elif mode == "entropy":
         risk = entropy
-    elif mode == "distance_consensus":
+    elif mode in {"distance_consensus", "distance_neighbor_consensus"}:
         components = [
             _rank_normalize(prototype_risk),
             _rank_normalize(entropy),
@@ -1368,7 +1370,27 @@ def compute_uncertainty_pu_unlabeled_weights(
         ]
         if uncertainty is not None:
             components.append(_rank_normalize(uncertainty.detach()))
-        risk = torch.stack(components, dim=0).mean(dim=0)
+        base_risk = torch.stack(components, dim=0).mean(dim=0)
+        if mode == "distance_neighbor_consensus":
+            if features is None or features.ndim != 2:
+                raise ValueError(
+                    "distance_neighbor_consensus requires 2-D feature vectors"
+                )
+            if neighbor_k <= 0:
+                raise ValueError("neighbor_k must be positive")
+            if features.size(0) <= 1:
+                risk = base_risk
+            else:
+                normalized_features = F.normalize(features.detach().float(), dim=-1)
+                similarity = normalized_features @ normalized_features.T
+                similarity.fill_diagonal_(float("-inf"))
+                k = min(int(neighbor_k), features.size(0) - 1)
+                neighbor_indices = similarity.topk(k, dim=1, largest=True).indices
+                neighbor_risk = base_risk[neighbor_indices].mean(dim=1)
+                # Local structure stabilizes the point-wise risk; it is not a label.
+                risk = 0.75 * base_risk + 0.25 * neighbor_risk
+        else:
+            risk = base_risk
     elif mode == "support_consensus":
         components = [
             _rank_normalize(support_risk),

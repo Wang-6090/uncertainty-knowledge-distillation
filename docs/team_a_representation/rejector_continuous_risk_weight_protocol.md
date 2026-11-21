@@ -14,6 +14,10 @@ remove difficult unknowns from the training pool.
 - treatment: `rejector_pool_selection=weighted_risk`, all mixed-pool samples
   retained with weights in `[1, 2]` from the existing ranked consensus of
   entropy, MSP risk, classifier-prototype distance, and student uncertainty;
+- follow-up candidate: `rejector_pool_selection=weighted_neighbor_risk`, which
+  keeps the same pointwise consensus and adds a fixed 10-neighbor feature-risk
+  consensus with coefficient `0.25`; this is a separate opt-in mechanism, not
+  a weight scan;
 - fixed: student checkpoint, teacher, semantic-hard CIFAR-100 60/40 split,
   mixed pool, `known_prior=0.2`, `nu_corrected` linear nnPU, feature mode,
   validation-only 95% known-coverage calibration, clustering and all test
@@ -24,6 +28,12 @@ remove difficult unknowns from the training pool.
 The candidate risk is detached and normalized before fitting. It is a weighting
 signal, not a label or a second detector score. The final detector remains the
 fitted feature rejector in both arms.
+
+For the neighbor variant, the feature kNN is computed on detached normalized
+student features from the mixed pool. Each sample's neighbor risk is the mean
+pointwise risk of its 10 nearest samples, and the combined risk is
+`0.75 * pointwise + 0.25 * neighbor`. No labels, threshold, or test score is
+used in this calculation.
 
 ## Decision rule
 

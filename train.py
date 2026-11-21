@@ -187,11 +187,15 @@ def rejector_protocol_metadata(args):
         "pool_weighting": (
             {
                 "type": "continuous_label_free_risk",
-                "risk_source": "ranked_entropy_msp_prototype_distance_head_uncertainty",
+                "risk_source": (
+                    "ranked_entropy_msp_prototype_distance_head_uncertainty"
+                    if selection == "weighted_risk"
+                    else "pointwise_consensus_plus_feature_knn_risk_consensus"
+                ),
                 "all_mixed_samples_retained": True,
                 "weights_are_not_labels": True,
             }
-            if selection == "weighted_risk"
+            if selection in {"weighted_risk", "weighted_neighbor_risk"}
             else None
         ),
         "strict_mixed": bool(args.rejector_strict_mixed),
@@ -633,12 +637,19 @@ def build_parser():
         p.add_argument("--discovery-pool-mode", choices=["unknown", "mixed"], default="unknown")
         p.add_argument(
             "--rejector-pool-selection",
-            choices=["all", "high_risk", "weighted_boundary", "weighted_risk"],
+            choices=[
+                "all",
+                "high_risk",
+                "weighted_boundary",
+                "weighted_risk",
+                "weighted_neighbor_risk",
+            ],
             default="all",
             help=(
                 "Use all discovery samples, only high-risk pseudo-unknowns, all "
                 "samples with extra weight on prototype-boundary candidates, or "
-                "all samples with continuous label-free risk weights."
+                "all samples with continuous label-free risk weights, or the same "
+                "weights stabilized by feature-neighbor risk consensus."
             ),
         )
         p.add_argument("--rejector-candidate-ratio", type=float, default=0.25)
@@ -5547,8 +5558,12 @@ def discover(args):
                 "high_risk",
                 "weighted_boundary",
                 "weighted_risk",
+                "weighted_neighbor_risk",
             }:
-                if args.rejector_pool_selection == "weighted_risk":
+                if args.rejector_pool_selection in {
+                    "weighted_risk",
+                    "weighted_neighbor_risk",
+                }:
                     candidate_logits = torch.from_numpy(rejector_unknown_outputs["logits"])
                     candidate_uncertainty = torch.from_numpy(
                         rejector_unknown_outputs["head_uncertainty"]
@@ -5562,14 +5577,19 @@ def discover(args):
                         uncertainty=candidate_uncertainty,
                         features=candidate_features,
                         prototypes=candidate_prototypes,
-                        mode="distance_consensus",
+                        mode=(
+                            "distance_neighbor_consensus"
+                            if args.rejector_pool_selection == "weighted_neighbor_risk"
+                            else "distance_consensus"
+                        ),
                         temperature=0.5,
                         power=1.0,
+                        neighbor_k=10,
                     ).numpy()
                     candidate_weight = float(args.rejector_candidate_weight)
                     if candidate_weight < 1.0:
                         raise ValueError(
-                            "--rejector-candidate-weight must be at least 1 for weighted_risk"
+                            "--rejector-candidate-weight must be at least 1 for weighted risk modes"
                         )
                     unlabeled_sample_weight = (
                         1.0 + (candidate_weight - 1.0) * risk

@@ -9192,3 +9192,19 @@ unknown q05 为 `-2.2665 -> -3.0504`；FPR95 前缀中的 known 误拒为 `3741 
 [`scripts/run_rejector_continuous_risk_pair.py`](scripts/run_rejector_continuous_risk_pair.py) 和
 [`scripts/audit_fpr95_tail_pair.py`](scripts/audit_fpr95_tail_pair.py)；机器汇总与审计见
 `analysis/rejector_continuous_risk_s2161.json`、`analysis/fpr95_tail_audit_rejector_continuous_risk_s2161.md`。
+
+### 2026-11-22：邻域风险一致性候选实现与 seed 2162 暂停
+
+针对 seed 2161 中“检测小幅改善但聚类退化”的现象，新增独立 opt-in
+`rejector_pool_selection=weighted_neighbor_risk`。该机制保留全部 mixed pool 样本，先计算原有
+entropy/MSP/prototype-distance/student-uncertainty 的 pointwise consensus，再在 detached normalized
+student feature 上计算固定 `k=10` 的邻域风险均值，使用 `0.75 * pointwise + 0.25 * neighbor` 作为权重风险。
+它只改变 nnPU 的 unlabeled sample weight，不改变最终 detector、known-validation 阈值或 clustering；
+默认 `all` 和已有 `weighted_risk` 行为保持不变。新增单测验证输出有限、有界，CLI、编译和核心测试门禁均通过。
+
+随后在全新 semantic-hard seed `2162` 启动 paired formal screening：control=`all`，treatment=`weighted_neighbor_risk`，
+固定 `max_weight=2.0`、`k=10`、邻域系数 `0.25`，不扫描任何参数。教师训练已完整完成并保存于
+`runs/rejector_neighbor_risk_s2162_teacher/teacher.pt`；学生训练在第一轮约 `41%` 时因本次暂停被
+`KeyboardInterrupt` 中断，尚未生成完整 student checkpoint、discovery report 或性能汇总。因此本轮没有
+可报告的检测、候选池或聚类结果，也不把中间 loss 当作证据。seed split、教师 checkpoint 和未完成目录均保留，
+下次应先检查是否实现了断点续跑；若不能可靠续跑，应使用新输出目录并复用已验证教师，而不是把部分学生产物当作正式结果。

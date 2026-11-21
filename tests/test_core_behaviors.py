@@ -5147,6 +5147,19 @@ class ScoreBehaviorTest(unittest.TestCase):
         self.assertLessEqual(weights.max().item(), 1.0)
         self.assertLess(weights[0].item(), weights[-1].item())
 
+        neighbor_weights = compute_uncertainty_pu_unlabeled_weights(
+            logits,
+            uncertainty=uncertainty,
+            features=features,
+            prototypes=prototypes,
+            mode="distance_neighbor_consensus",
+            temperature=0.5,
+            neighbor_k=2,
+        )
+        self.assertEqual(tuple(neighbor_weights.shape), (3,))
+        self.assertTrue(torch.isfinite(neighbor_weights).all())
+        self.assertTrue(torch.all(neighbor_weights >= 0.0))
+
     def test_classwise_predicted_knn_normalization_uses_known_validation_classes(self):
         outputs = {
             "features": np.zeros((4, 2), dtype=np.float32),

@@ -56,6 +56,11 @@ def main() -> None:
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--tag", default="rejector_continuous_risk_s2161")
     parser.add_argument(
+        "--treatment-pool-selection",
+        choices=("weighted_risk", "weighted_neighbor_risk"),
+        default="weighted_risk",
+    )
+    parser.add_argument(
         "--source-teacher",
         type=Path,
         default=Path("runs/rejection_ce_decay_s2160_20261121_teacher/train_teacher_config.json"),
@@ -90,7 +95,9 @@ def main() -> None:
     student_ckpt = student_dir / "student.pt"
     arm_dirs = {
         "all_pool": ROOT / "runs" / f"{options.tag}_all_pool",
-        "weighted_risk": ROOT / "runs" / f"{options.tag}_weighted_risk",
+        options.treatment_pool_selection: ROOT
+        / "runs"
+        / f"{options.tag}_{options.treatment_pool_selection}",
     }
     result_path = ROOT / "analysis" / f"{options.tag}.json"
     if result_path.exists() or any(p.exists() for p in (teacher_dir, student_dir, *arm_dirs.values())):
@@ -125,7 +132,11 @@ def main() -> None:
     fit_student(student_args)
 
     outputs = {}
-    for arm, pool_selection in (("all_pool", "all"), ("weighted_risk", "weighted_risk")):
+    treatment_arm = options.treatment_pool_selection
+    for arm, pool_selection in (
+        ("all_pool", "all"),
+        (treatment_arm, treatment_arm),
+    ):
         discover_args = load_args(source_discover, "discover", arm_dirs[arm], seed)
         discover_args.split_path = str(split_path)
         discover_args.device = options.device
@@ -172,7 +183,9 @@ def main() -> None:
         "split": str(split_path),
         "teacher_checkpoint": str(teacher_ckpt),
         "student_checkpoint": str(student_ckpt),
-        "single_changed_detector_factor": "rejector_pool_selection all vs weighted_risk",
+        "single_changed_detector_factor": (
+            f"rejector_pool_selection all vs {treatment_arm}"
+        ),
         "test_and_mixed_labels_used_for_training_selection_or_calibration": False,
         "test_labels_used_only_for_retrospective_metrics": True,
         "arms": outputs,
