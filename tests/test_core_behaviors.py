@@ -109,6 +109,7 @@ from novel_discovery.pipeline import (
     compute_openmax_score,
     compute_reciprocal_score,
     compute_relative_mahalanobis_distance,
+    empirical_rank_normalize_numpy,
     calibrate_coverage_threshold,
     compute_open_score,
     compute_hierarchical_entropy,
@@ -4851,6 +4852,83 @@ class ScoreBehaviorTest(unittest.TestCase):
                 score_mode="feature_rejector_uncertainty_conjunction",
                 normalization=normalization,
             )
+
+    def test_empirical_rank_normalization_is_monotonic_and_tie_stable(self):
+        values = np.array([0.0, 1.0, 1.0, 3.0, 5.0])
+        reference = np.array([1.0, 1.0, 3.0, 5.0])
+        ranks = empirical_rank_normalize_numpy(values, reference)
+
+        self.assertTrue(np.all(np.isfinite(ranks)))
+        self.assertTrue(np.all(np.diff(ranks) >= 0.0))
+        self.assertEqual(ranks[1], ranks[2])
+        self.assertLess(ranks[0], ranks[1])
+        self.assertEqual(ranks[-1], 1.0)
+
+        with self.assertRaisesRegex(ValueError, "sorted values"):
+            empirical_rank_normalize_numpy(values, {})
+
+    def test_feature_rejector_uncertainty_rank_fusion_uses_validation_rank_references(self):
+        outputs = {
+            "entropy": np.zeros(3),
+            "epistemic": np.zeros(3),
+            "aleatoric": np.zeros(3),
+            "head_uncertainty": np.array([0.1, 0.5, 0.9]),
+            "feature_rejector_score": np.array([0.2, 0.6, 1.0]),
+        }
+        normalization = fit_score_normalization(outputs, prototypes=None, gaussian_stats=None)
+        score, _ = compute_open_score(
+            outputs,
+            score_mode="feature_rejector_uncertainty_rank_fusion",
+            normalization=normalization,
+        )
+
+        expected = 0.5 * (
+            empirical_rank_normalize_numpy(
+                outputs["feature_rejector_score"],
+                normalization["feature_rejector_score_rank_reference"],
+            )
+            + empirical_rank_normalize_numpy(
+                outputs["head_uncertainty"],
+                normalization["head_uncertainty_rank_reference"],
+            )
+        )
+        np.testing.assert_allclose(score, expected)
+        self.assertEqual(score[0], 1.0 / 3.0)
+        self.assertEqual(score[-1], 1.0)
+
+        missing_reference = dict(normalization)
+        missing_reference.pop("head_uncertainty_rank_reference")
+        with self.assertRaisesRegex(ValueError, "rank references"):
+            compute_open_score(
+                outputs,
+                score_mode="feature_rejector_uncertainty_rank_fusion",
+                normalization=missing_reference,
+            )
+
+    def test_feature_rejector_uncertainty_rank_fusion_does_not_require_zscore_stats(self):
+        outputs = {
+            "entropy": np.zeros(2),
+            "epistemic": np.zeros(2),
+            "aleatoric": np.zeros(2),
+            "head_uncertainty": np.array([0.1, 0.9]),
+            "feature_rejector_score": np.array([0.2, 1.0]),
+        }
+        normalization = {
+            "head_uncertainty_rank_reference": {"sorted": [0.1, 0.9]},
+            "feature_rejector_score_rank_reference": {"sorted": [0.2, 1.0]},
+        }
+        score, _ = compute_open_score(
+            outputs,
+            score_mode="feature_rejector_uncertainty_rank_fusion",
+            normalization=normalization,
+        )
+        self.assertTrue(np.all(np.isfinite(score)))
+
+        validation_ranks = empirical_rank_normalize_numpy(
+            outputs["feature_rejector_score"],
+            normalization["feature_rejector_score_rank_reference"],
+        )
+        self.assertEqual(validation_ranks.tolist(), [0.5, 1.0])
 
     def test_knn_ood_uses_nearest_known_projection_distances(self):
         outputs = {"features": np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)}

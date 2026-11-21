@@ -8138,14 +8138,27 @@ def compute_open_score(
     elif score_mode in {
         "feature_rejector_uncertainty_fusion",
         "feature_rejector_uncertainty_conjunction",
+        "feature_rejector_uncertainty_rank_fusion",
     }:
         if "feature_rejector_score" not in outputs:
             raise ValueError(
                 f"{score_mode} requires a fitted rejector"
             )
-        if "calibrated_uncertainty_error" not in outputs:
+        uncertainty_key = (
+            "head_uncertainty"
+            if score_mode == "feature_rejector_uncertainty_rank_fusion"
+            else "calibrated_uncertainty_error"
+        )
+        if uncertainty_key not in outputs:
+            if score_mode == "feature_rejector_uncertainty_rank_fusion":
+                message = f"{score_mode} requires head_uncertainty"
+            else:
+                message = (
+                    f"{score_mode} requires calibrated uncertainty "
+                    "(calibrated_uncertainty_error)"
+                )
             raise ValueError(
-                f"{score_mode} requires validation-calibrated uncertainty"
+                message
             )
         if normalization is None:
             raise ValueError(
@@ -8162,14 +8175,36 @@ def compute_open_score(
                 float(stats["std"]), 1e-6
             )
 
-        rejector_component = normalized_component(
-            outputs["feature_rejector_score"], "feature_rejector_score"
-        )
-        uncertainty_component = normalized_component(
-            outputs["calibrated_uncertainty_error"],
-            "calibrated_uncertainty_error",
-        )
-        if score_mode == "feature_rejector_uncertainty_fusion":
+        if score_mode == "feature_rejector_uncertainty_rank_fusion":
+            rejector_reference = normalization.get(
+                "feature_rejector_score_rank_reference"
+            )
+            uncertainty_reference = normalization.get(
+                "head_uncertainty_rank_reference"
+            )
+            if rejector_reference is None or uncertainty_reference is None:
+                raise ValueError(
+                    "feature_rejector_uncertainty_rank_fusion requires "
+                    "known-validation rank references"
+                )
+            rejector_component = empirical_rank_normalize_numpy(
+                outputs["feature_rejector_score"], rejector_reference
+            )
+            uncertainty_component = empirical_rank_normalize_numpy(
+                outputs["head_uncertainty"], uncertainty_reference
+            )
+        else:
+            rejector_component = normalized_component(
+                outputs["feature_rejector_score"], "feature_rejector_score"
+            )
+            uncertainty_component = normalized_component(
+                outputs["calibrated_uncertainty_error"],
+                "calibrated_uncertainty_error",
+            )
+        if score_mode in {
+            "feature_rejector_uncertainty_fusion",
+            "feature_rejector_uncertainty_rank_fusion",
+        }:
             # Fixed 0.5/0.5 ablation: no validation/test-label tuning and no
             # extra fusion-weight search is permitted for this mechanism.
             score = 0.5 * rejector_component + 0.5 * uncertainty_component
@@ -8215,13 +8250,35 @@ def compute_open_score(
     return score, proto_dist
 
 
+def empirical_rank_normalize_numpy(
+    values: np.ndarray,
+    reference: dict | list | np.ndarray,
+) -> np.ndarray:
+    """Map scores to empirical CDF percentiles using a fixed reference set."""
+    values = np.asarray(values, dtype=float).reshape(-1)
+    if isinstance(reference, dict):
+        reference = reference.get("sorted")
+    if reference is None:
+        raise ValueError("empirical rank reference must contain sorted values")
+    reference = np.asarray(reference, dtype=float).reshape(-1)
+    if reference.size == 0:
+        raise ValueError("empirical rank reference must be non-empty")
+    if not np.isfinite(values).all() or not np.isfinite(reference).all():
+        raise ValueError("empirical rank inputs must be finite")
+    sorted_reference = np.sort(reference)
+    left = np.searchsorted(sorted_reference, values, side="left")
+    right = np.searchsorted(sorted_reference, values, side="right")
+    ranks = (left + right + 1.0) / (2.0 * float(sorted_reference.size))
+    return np.clip(ranks, 0.0, 1.0)
+
+
 def fit_score_normalization(
     outputs_known: Dict[str, np.ndarray],
     prototypes: np.ndarray | None,
     gaussian_stats: Dict[str, np.ndarray] | None = None,
     include_mahalanobis: bool = True,
     known_class_coarse_ids: Sequence[int] | None = None,
-) -> Dict[str, Dict[str, float]]:
+) -> Dict[str, object]:
     """Fit score statistics using known validation samples only."""
     entropy = np.asarray(outputs_known["entropy"], dtype=float)
 
@@ -8240,11 +8297,24 @@ def fit_score_normalization(
         result["feature_norm"] = stats(outputs_known["feature_norm"])
     result["epistemic"] = stats(outputs_known.get("epistemic", np.zeros_like(entropy)))
     result["aleatoric"] = stats(outputs_known.get("aleatoric", np.zeros_like(entropy)))
-    result["head_uncertainty"] = stats(
-        outputs_known.get("head_uncertainty", np.zeros_like(entropy))
+    head_uncertainty = np.asarray(
+        outputs_known.get("head_uncertainty", np.zeros_like(entropy)),
+        dtype=float,
     )
+    result["head_uncertainty"] = stats(head_uncertainty)
+    result["head_uncertainty_rank_reference"] = {
+        "sorted": np.sort(head_uncertainty).tolist(),
+        "count": int(head_uncertainty.size),
+    }
     if "feature_rejector_score" in outputs_known:
-        result["feature_rejector_score"] = stats(outputs_known["feature_rejector_score"])
+        feature_rejector_score = np.asarray(
+            outputs_known["feature_rejector_score"], dtype=float
+        )
+        result["feature_rejector_score"] = stats(feature_rejector_score)
+        result["feature_rejector_score_rank_reference"] = {
+            "sorted": np.sort(feature_rejector_score).tolist(),
+            "count": int(feature_rejector_score.size),
+        }
     if "calibrated_uncertainty_error" in outputs_known:
         result["calibrated_uncertainty_error"] = stats(
             outputs_known["calibrated_uncertainty_error"]

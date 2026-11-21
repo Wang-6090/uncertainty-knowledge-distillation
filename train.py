@@ -36,6 +36,7 @@ from novel_discovery.pipeline import (
     collect_diagonal_gaussian_stats,
     collect_prototypes,
     collect_classwise_knn_support,
+    empirical_rank_normalize_numpy,
     fit_score_normalization,
     evaluate_classification,
     evaluate_representation_geometry,
@@ -85,6 +86,7 @@ def validate_rejector_configuration(args):
         "feature_rejector_fusion",
         "feature_rejector_uncertainty_fusion",
         "feature_rejector_uncertainty_conjunction",
+        "feature_rejector_uncertainty_rank_fusion",
         "virtual_rejector",
     }
     if (
@@ -122,6 +124,7 @@ def validate_rejector_configuration(args):
             "feature_rejector_fusion",
             "feature_rejector_uncertainty_fusion",
             "feature_rejector_uncertainty_conjunction",
+            "feature_rejector_uncertainty_rank_fusion",
         }
     ):
         raise ValueError(
@@ -155,6 +158,7 @@ def rejector_protocol_metadata(args):
         "feature_rejector_fusion",
         "feature_rejector_uncertainty_fusion",
         "feature_rejector_uncertainty_conjunction",
+        "feature_rejector_uncertainty_rank_fusion",
         "virtual_rejector",
     }
     active = args.score_mode in rejector_score_modes
@@ -255,12 +259,14 @@ def effective_score_protocol_metadata(
         "feature_rejector_fusion",
         "feature_rejector_uncertainty_fusion",
         "feature_rejector_uncertainty_conjunction",
+        "feature_rejector_uncertainty_rank_fusion",
         "virtual_rejector",
     }
     fusion_modes = {
         "feature_rejector_fusion",
         "feature_rejector_uncertainty_fusion",
         "feature_rejector_uncertainty_conjunction",
+        "feature_rejector_uncertainty_rank_fusion",
     }
     policy = threshold_policy_report or {}
     policy_type = policy.get("type")
@@ -2731,6 +2737,7 @@ def build_parser():
             "feature_rejector_fusion",
             "feature_rejector_uncertainty_fusion",
             "feature_rejector_uncertainty_conjunction",
+            "feature_rejector_uncertainty_rank_fusion",
             "virtual_rejector",
             "known_support",
             "known_conformal",
@@ -5376,9 +5383,9 @@ def discover(args):
     uncertainty_error_calibration = None
     feature_rejector = None
     support_model_for_rejector = None
-    if args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction", "virtual_rejector"}:
+    if args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction", "feature_rejector_uncertainty_rank_fusion", "virtual_rejector"}:
         if args.rejector_training == "nnpu":
-            if args.score_mode not in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}:
+            if args.score_mode not in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction", "feature_rejector_uncertainty_rank_fusion"}:
                 raise ValueError(
                     "nnpu training is only available for feature_rejector modes"
                 )
@@ -5398,7 +5405,7 @@ def discover(args):
                         f"actual={discovery_pool_known_fraction:.6f}"
                     )
         if (
-            args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}
+            args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction", "feature_rejector_uncertainty_rank_fusion"}
             and args.rejector_strict_mixed
             and args.discovery_pool_mode == "mixed"
             and args.open_val_ratio <= 0.0
@@ -5408,7 +5415,7 @@ def discover(args):
             )
         if (
             args.rejector_training != "class_holdout"
-            and args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}
+            and args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction", "feature_rejector_uncertainty_rank_fusion"}
             and (
             bundle.discovery_pool is None or len(bundle.discovery_pool) == 0
             )
@@ -5418,7 +5425,7 @@ def discover(args):
                 "use the unknown discovery pool or provide --limit-discovery"
             )
         if (
-            args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}
+            args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction", "feature_rejector_uncertainty_rank_fusion"}
             and args.rejector_strict_mixed
             and args.discovery_pool_mode == "mixed"
             and outputs_open_val is not None
@@ -5765,7 +5772,7 @@ def discover(args):
         or selected_score_mode == "classwise_unified_novel_mass"
         or selected_score_mode == "classwise_mahalanobis"
         or selected_score_mode == "feature_rejector_fusion"
-        or selected_score_mode in {"feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}
+        or selected_score_mode in {"feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction", "feature_rejector_uncertainty_rank_fusion"}
     )
     score_normalization = (
         fit_score_normalization(
@@ -6310,6 +6317,31 @@ def discover(args):
                         f"fusion component export does not align: {raw_key}"
                     )
                 export_payload[output_key] = z
+                component_exported.append(output_key)
+        if selected_score_mode == "feature_rejector_uncertainty_rank_fusion":
+            for raw_key, reference_key, output_key in (
+                (
+                    "feature_rejector_score",
+                    "feature_rejector_score_rank_reference",
+                    "feature_rejector_component_rank",
+                ),
+                (
+                    "head_uncertainty",
+                    "head_uncertainty_rank_reference",
+                    "uncertainty_component_rank",
+                ),
+            ):
+                reference = score_normalization.get(reference_key)
+                if raw_key not in outputs_val or reference is None:
+                    raise RuntimeError(
+                        f"rank-fusion calibration export missing component {raw_key}"
+                    )
+                ranks = empirical_rank_normalize_numpy(outputs_val[raw_key], reference)
+                if len(ranks) != len(calibration_scores):
+                    raise RuntimeError(
+                        f"rank-fusion component export does not align: {raw_key}"
+                    )
+                export_payload[output_key] = ranks
                 component_exported.append(output_key)
         np.savez_compressed(
             calibration_scores_path,

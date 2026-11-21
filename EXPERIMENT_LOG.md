@@ -9060,3 +9060,23 @@ A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K
 结果具有明显 seed 敏感性：2155 上未知拒识、候选纯度和三项聚类指标均下降；2156 上检测、未知拒识、候选纯度和聚类多数指标改善。均值增益小于或接近跨 seed 波动，NMI、未知拒识和 Auto-K 没有稳定联合改善。因此按预注册晋级规则，quality-aware KD **冻结为 opt-in 诊断机制**，默认仍为 `kd_mode=standard`；不继续扫描 quality floor、power、temperature 或 loss coefficient，也不把该方向写成已确认的算法增益。逐 seed 报告和汇总见 `analysis/team_a_quality_kd_confirm_s2155.md`、`analysis/team_a_quality_kd_confirm_s2156.md` 和 `analysis/team_a_quality_kd_confirm_summary.md`，机器结果仍为对应 JSON 文件。
 
 下一次工作从新的候选机制筛选或正式 A/B/C 汇总规划开始；不重复 2155/2156 训练，也不覆盖已有结果。
+
+### 2026-11-21：canonical empirical rank fusion pilot 结束
+
+在正式 conjunction 复核暴露 isotonic calibration 大量并列、导致 `min`
+融合工作点退化后，先对一个固定的连续秩融合候选做冻结数据复核，不启动新训练。候选分数为
+`0.5 × rank(feature_rejector_score) + 0.5 × rank(raw head_uncertainty)`；两个经验秩都只以
+known-validation 参考分布计算，阈值仍使用 known-validation 95% coverage，未知标签只用于最终
+评价，不扫描权重、阈值或候选比例。
+
+审计同时把 runner 统一到主 pipeline 的 canonical mid-rank 实现，避免脚本与正式代码各自定义秩函数。
+在既有冻结 formal conjunction A/B/C artifacts 的 `42/123/3407`、共 9 个 arm/seed 配对上，rank
+fusion 相对同一 checkpoint 的 raw `feature_rejector` 全面退化：AUROC 平均 `-0.069463`、AUPR
+`-0.071072`、FPR95 `+0.102204`、OSCR `-0.049257`、未知拒识 `-4.103 pp`、候选纯度
+`-6.475 pp`；AUROC/AUPR/OSCR/未知拒识均为 `0/9` 组改善，FPR95 为 `9/9` 组变差。
+
+因此该候选没有通过预先固定的检测与候选池门槛，不进入正式 fresh-seed 训练，不修改默认
+`feature_rejector`，也不继续进行 rank 权重或阈值扫描。实现、信息边界和结果见
+[`docs/team_a_representation/rank_fusion_protocol.md`](docs/team_a_representation/rank_fusion_protocol.md)，
+canonical runner 为 [`scripts/run_rank_fusion_pilot.py`](scripts/run_rank_fusion_pilot.py)，机器结果保留在
+本地 `analysis/rank_fusion_pilot_canonical_20261121.json`。

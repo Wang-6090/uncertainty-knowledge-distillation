@@ -32,6 +32,7 @@ from novel_discovery.metrics import (
     compute_oscr,
     open_set_confusion,
 )
+from novel_discovery.pipeline import empirical_rank_normalize_numpy
 
 
 SEEDS = (42, 123, 3407)
@@ -41,20 +42,6 @@ ARMS = ("A", "B", "C")
 def _read_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
-
-
-def empirical_rank(values: np.ndarray, reference: np.ndarray) -> np.ndarray:
-    """Map values to their mid-rank in a known-only reference sample."""
-    values = np.asarray(values, dtype=float).reshape(-1)
-    reference = np.asarray(reference, dtype=float).reshape(-1)
-    if values.size == 0 or reference.size == 0:
-        raise ValueError("rank calibration requires non-empty arrays")
-    if not np.isfinite(values).all() or not np.isfinite(reference).all():
-        raise ValueError("rank calibration requires finite arrays")
-    ordered = np.sort(reference)
-    left = np.searchsorted(ordered, values, side="left")
-    right = np.searchsorted(ordered, values, side="right")
-    return (left.astype(float) + right.astype(float)) / (2.0 * len(ordered))
 
 
 def evaluate(score: np.ndarray, detail: dict[str, Any], threshold: float) -> dict[str, Any]:
@@ -97,12 +84,16 @@ def run_one(run_dir: Path) -> dict[str, Any]:
     test_feature = rejector["test_feature_rejector_score"]
     test_uncertainty = np.asarray(detail["head_uncertainty"], dtype=float)
 
-    validation_score = 0.5 * empirical_rank(
+    validation_score = 0.5 * empirical_rank_normalize_numpy(
         validation_feature, validation_feature
-    ) + 0.5 * empirical_rank(validation_uncertainty, validation_uncertainty)
-    test_score = 0.5 * empirical_rank(
+    ) + 0.5 * empirical_rank_normalize_numpy(
+        validation_uncertainty, validation_uncertainty
+    )
+    test_score = 0.5 * empirical_rank_normalize_numpy(
         test_feature, validation_feature
-    ) + 0.5 * empirical_rank(test_uncertainty, validation_uncertainty)
+    ) + 0.5 * empirical_rank_normalize_numpy(
+        test_uncertainty, validation_uncertainty
+    )
     threshold = float(np.quantile(validation_score, 0.95, method="linear"))
     result = evaluate(test_score, detail, threshold)
     result["calibration_known_accept_rate"] = float(np.mean(validation_score <= threshold))
