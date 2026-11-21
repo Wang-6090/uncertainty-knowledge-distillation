@@ -9036,3 +9036,27 @@ A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K
 为降低清理风险，进一步把范围收窄到路径明确包含 `smoke`、旧实验归档 `runs/archive_old/` 或已确认无效归档 `runs/_archive_confirmed_invalid_20261024/` 的 checkpoint。预览得到 `324` 个文件、约 `9.334 GB`，对应 210 个目录；这些运行只用于接线、梯度/流程验证、历史 toy/旧归档或已明确排除的失败执行。配置、训练历史、报告、分析记录和无效原因均保留，正式 baseline、正式对照、近期实验和当前 quality-aware 确认实验不在候选范围内。脚本 [`scripts/cleanup_low_impact_checkpoints.ps1`](scripts/cleanup_low_impact_checkpoints.ps1) 默认只预览，执行时会先生成 `analysis/cleanup_low_impact_manifest_20261121.csv`。
 
 随后按该清单完成清理：实际删除 `324` 个 checkpoint，释放约 `9.334 GB`；删除后 `runs/` 占用约 `75.99 GB`，低影响候选路径下不再有 checkpoint。清单保留在 `analysis/cleanup_low_impact_manifest_20261121.csv`，当前 quality-aware 确认实验目录仍存在，训练进程继续运行。该清理只影响这些 smoke/旧归档模型的直接加载，不改变已记录结论、配置、训练历史或分析报告。
+
+### 2026-11-21：quality-aware KD fresh confirmation 完成
+
+完成预先固定的 semantic-hard CIFAR-100 60/40 fresh seeds `2155/2156` 三臂确认：standard logits-KD、unweighted decoupled KD 和 quality-aware logits-KD。每个 seed 内三臂共用 split-matched teacher、学生初始化、数据顺序、4 epoch 预算、辅助损失、known-validation checkpoint selection、matched mixed discovery pool、rejector、95% known-coverage calibration、Auto-K 和聚类流程；feature KD 与 rejection-branch KD 关闭。两组结果的 `test_labels_used_for_training_or_calibration` 均为 `false`，实际 calibration acceptance 分别为 `0.949176` 和 `0.949384`，标签隔离与汇总门禁通过。
+
+机制审计确认 quality-aware 权重在两个 seed 的 4 个 epoch 均实际应用，教师质量权重使用 detached true-class probability，固定 `floor=0.25`、`power=1.0` 和 batch mean normalization。末 epoch 的权重标准差/ESS fraction 为：2155 `0.541676/0.773068`，2156 `0.512310/0.791916`；KD 梯度与学生分类头更新均非零，教师参数未参与更新。standard 和 decoupled 的 `kd_quality_weight_applied` 均为 `false`，没有把教师蒸馏权重与学生不确定性头、分类熵或最终拒识分数混用。
+
+相对同 seed 的 standard KD，quality-aware 的 paired 变化如下：
+
+| 指标 | seed 2155 | seed 2156 | 均值 ± 样本标准差 |
+|---|---:|---:|---:|
+| AUROC | -0.008288 | +0.020908 | +0.006310 ± 0.020645 |
+| AUPR | -0.026399 | +0.035464 | +0.004533 ± 0.043744 |
+| FPR95 | -1.667 pp | -0.967 pp | -1.317 ± 0.495 pp |
+| OSCR | +0.024564 | +0.015777 | +0.020170 ± 0.006213 |
+| 已知准确率 | +2.683 pp | +1.117 pp | +1.900 ± 1.108 pp |
+| 未知拒识率 | -7.200 pp | +8.750 pp | +0.775 ± 11.278 pp |
+| 候选池纯度 | -1.792 pp | +3.681 pp | +0.945 ± 3.870 pp |
+| Auto-K 绝对误差 | +7 | -7 | 0 ± 9.899 |
+| 聚类 ACC / NMI / ARI | -0.040531 / -0.044604 / -0.042205 | +0.044436 / +0.037641 / +0.071881 | +0.001952 / -0.003481 / +0.014838 |
+
+结果具有明显 seed 敏感性：2155 上未知拒识、候选纯度和三项聚类指标均下降；2156 上检测、未知拒识、候选纯度和聚类多数指标改善。均值增益小于或接近跨 seed 波动，NMI、未知拒识和 Auto-K 没有稳定联合改善。因此按预注册晋级规则，quality-aware KD **冻结为 opt-in 诊断机制**，默认仍为 `kd_mode=standard`；不继续扫描 quality floor、power、temperature 或 loss coefficient，也不把该方向写成已确认的算法增益。逐 seed 报告和汇总见 `analysis/team_a_quality_kd_confirm_s2155.md`、`analysis/team_a_quality_kd_confirm_s2156.md` 和 `analysis/team_a_quality_kd_confirm_summary.md`，机器结果仍为对应 JSON 文件。
+
+下一次工作从新的候选机制筛选或正式 A/B/C 汇总规划开始；不重复 2155/2156 训练，也不覆盖已有结果。
