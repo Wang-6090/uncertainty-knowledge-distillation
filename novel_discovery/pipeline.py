@@ -36,6 +36,8 @@ from .losses import (
     discovery_unknown_loss,
     discovery_view_loss,
     distillation_loss,
+    quality_aware_distillation_loss,
+    teacher_quality_weights,
     uncertainty_decoupled_distillation_loss,
     energy_margin_loss,
     pu_unknown_energy_margin_loss,
@@ -1820,6 +1822,9 @@ def train_one_epoch_student(
     uncertainty_weight_mode: str = "raw",
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
+    kd_quality_floor: float = 0.25,
+    kd_quality_power: float = 1.0,
+    kd_quality_weight_mode: str = "mean_normalized",
     audit_loss_gradients: bool = False,
     rejection_gradient_conflict_mode: str = "off",
     discovery_loader=None,
@@ -2198,12 +2203,21 @@ def train_one_epoch_student(
                 source=kd_uncertainty_source,
                 mc_samples=kd_mc_samples,
             )
-        diagnostic_kd_weights = uncertainty_weights(
-            teacher_kd_uncertainty_value,
-            mode=uncertainty_weight_mode,
-            uncertainty_weight_min=uncertainty_weight_min,
-            uncertainty_weight_max=uncertainty_weight_max,
-        )
+        if kd_mode == "quality_aware":
+            diagnostic_kd_weights = teacher_quality_weights(
+                teacher_kd_logits,
+                labels,
+                floor=kd_quality_floor,
+                power=kd_quality_power,
+                mode=kd_quality_weight_mode,
+            )
+        else:
+            diagnostic_kd_weights = uncertainty_weights(
+                teacher_kd_uncertainty_value,
+                mode=uncertainty_weight_mode,
+                uncertainty_weight_min=uncertainty_weight_min,
+                uncertainty_weight_max=uncertainty_weight_max,
+            )
         kd_weight_ess_fraction = (
             diagnostic_kd_weights.sum().square()
             / (diagnostic_kd_weights.square().sum().clamp_min(1e-12)
@@ -2401,6 +2415,16 @@ def train_one_epoch_student(
                 return_components=True,
             )
             loss_kd = loss_kd_target + loss_kd_non_target_weighted
+        elif kd_mode == "quality_aware":
+            loss_kd = quality_aware_distillation_loss(
+                s_out["logits"],
+                teacher_kd_logits,
+                labels,
+                temperature=temperature,
+                quality_floor=kd_quality_floor,
+                quality_power=kd_quality_power,
+                quality_weight_mode=kd_quality_weight_mode,
+            )
         else:
             loss_kd = distillation_loss(
                 s_out["logits"],
@@ -5348,6 +5372,10 @@ def train_one_epoch_student(
         "kd_uncertainty_weight_applied": bool(
             kd_mode in {"uncertainty", "uncertainty_decoupled"}
         ),
+        "kd_quality_weight_applied": bool(kd_mode == "quality_aware"),
+        "kd_quality_floor": float(kd_quality_floor),
+        "kd_quality_power": float(kd_quality_power),
+        "kd_quality_weight_mode": str(kd_quality_weight_mode),
         "kd_weight_mean": kd_weight_mean_meter.avg,
         "kd_weight_std": kd_weight_std_meter.avg,
         "kd_weight_ess_fraction": kd_weight_ess_meter.avg,

@@ -8,6 +8,8 @@ from torch.nn import functional as F
 from .uncertainty_kd import (
     feature_distillation_loss as _feature_distillation_loss,
     kl_distillation_loss,
+    quality_aware_kl_loss,
+    teacher_quality_weights as _teacher_quality_weights,
     uncertainty_calibration_loss,
     uncertainty_decoupled_kl_loss,
     uncertainty_weights as _uncertainty_weights,
@@ -241,6 +243,38 @@ def distillation_loss(
         uncertainty_weight_mode=uncertainty_weight_mode,
         uncertainty_weight_min=uncertainty_weight_min,
         uncertainty_weight_max=uncertainty_weight_max,
+    )
+
+
+def quality_aware_distillation_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    temperature: float = 2.0,
+    quality_floor: float = 0.25,
+    quality_power: float = 1.0,
+    quality_weight_mode: str = "mean_normalized",
+) -> torch.Tensor:
+    return quality_aware_kl_loss(
+        student_logits,
+        teacher_logits,
+        labels,
+        temperature=temperature,
+        quality_floor=quality_floor,
+        quality_power=quality_power,
+        quality_weight_mode=quality_weight_mode,
+    )
+
+
+def teacher_quality_weights(
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    floor: float = 0.25,
+    power: float = 1.0,
+    mode: str = "mean_normalized",
+) -> torch.Tensor:
+    return _teacher_quality_weights(
+        teacher_logits, labels, floor=floor, power=power, mode=mode
     )
 
 

@@ -55,6 +55,81 @@ def per_sample_kl_distillation_loss(
     )
 
 
+def teacher_quality_weights(
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    floor: float = 0.25,
+    power: float = 1.0,
+    mode: str = "mean_normalized",
+) -> torch.Tensor:
+    """Build detached KD weights from labelled teacher quality.
+
+    The training loader contains known-class labels, so the teacher's
+    probability assigned to the ground-truth class is an admissible quality
+    signal.  It is deliberately separate from the teacher uncertainty head:
+    a high uncertainty value is not assumed to be a calibrated estimate of
+    teacher error.  The floor prevents a few hard known samples from removing
+    the KD signal entirely; mean normalization keeps the expected KD scale
+    comparable with the standard objective.
+    """
+    if teacher_logits.ndim != 2:
+        raise ValueError("teacher_logits must have shape [batch_size, classes]")
+    if labels.shape != (teacher_logits.size(0),):
+        raise ValueError("labels must have shape [batch_size]")
+    if teacher_logits.size(0) == 0:
+        return teacher_logits.new_empty((0,))
+    floor = float(floor)
+    power = float(power)
+    if not 0.0 <= floor <= 1.0:
+        raise ValueError("quality floor must be in [0, 1]")
+    if power <= 0.0:
+        raise ValueError("quality power must be positive")
+    if bool(((labels < 0) | (labels >= teacher_logits.size(1))).any()):
+        raise ValueError("labels must index the logits class dimension")
+    quality = F.softmax(teacher_logits.detach(), dim=-1).gather(
+        1, labels.unsqueeze(1)
+    ).squeeze(1)
+    weights = quality.clamp_min(floor).pow(power)
+    if mode == "mean_normalized":
+        weights = weights / weights.mean().clamp_min(1e-6)
+    elif mode != "raw":
+        raise ValueError(f"Unsupported quality weight mode: {mode}")
+    return weights.detach()
+
+
+def quality_aware_kl_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    temperature: float = 2.0,
+    quality_floor: float = 0.25,
+    quality_power: float = 1.0,
+    quality_weight_mode: str = "mean_normalized",
+) -> torch.Tensor:
+    """Weight full logits KD by detached, label-verified teacher quality.
+
+    This objective is an opt-in alternative to uncertainty weighting.  The
+    teacher's uncertainty head is not used, and the ground-truth labels only
+    affect the weight, while the standard CE loss remains the source of hard
+    target supervision.
+    """
+    per_sample = per_sample_kl_distillation_loss(
+        student_logits, teacher_logits, temperature=temperature
+    )
+    if per_sample.numel() == 0:
+        return _zero_loss(student_logits)
+    weights = teacher_quality_weights(
+        teacher_logits,
+        labels,
+        floor=quality_floor,
+        power=quality_power,
+        mode=quality_weight_mode,
+    )
+    return (per_sample * weights).mean()
+
+
 def uncertainty_decoupled_kl_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,

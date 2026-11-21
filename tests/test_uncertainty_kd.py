@@ -13,18 +13,66 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from novel_discovery.losses import (
     distillation_loss,
     feature_distillation_loss,
+    quality_aware_distillation_loss,
+    teacher_quality_weights,
     uncertainty_decoupled_distillation_loss,
 )
 from novel_discovery.uncertainty_kd import (
     feature_distillation_loss as module_feature_distillation_loss,
     kl_distillation_loss,
     per_sample_kl_distillation_loss,
+    quality_aware_kl_loss,
+    teacher_quality_weights as module_teacher_quality_weights,
     uncertainty_calibration_loss,
     uncertainty_weights,
 )
 
 
 class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
+    def test_quality_weights_use_true_class_confidence_and_are_detached(self):
+        teacher_logits = torch.tensor(
+            [[4.0, 0.0, 0.0], [0.0, 2.0, 0.0]], requires_grad=True
+        )
+        labels = torch.tensor([0, 2])
+        weights = module_teacher_quality_weights(
+            teacher_logits, labels, floor=0.25, mode="mean_normalized"
+        )
+        expected_quality = torch.softmax(teacher_logits.detach(), dim=1)[
+            torch.arange(2), labels
+        ].clamp_min(0.25)
+        expected = expected_quality / expected_quality.mean()
+        self.assertTrue(torch.allclose(weights, expected))
+        self.assertFalse(weights.requires_grad)
+        self.assertTrue(torch.allclose(weights, teacher_quality_weights(
+            teacher_logits, labels, floor=0.25
+        )))
+
+    def test_quality_aware_kl_matches_weighted_per_sample_formula(self):
+        student = torch.tensor([[1.0, 0.0, -0.2], [0.1, 0.9, 0.0]], requires_grad=True)
+        teacher = torch.tensor([[0.8, 0.2, -0.1], [0.0, 1.0, 0.2]])
+        labels = torch.tensor([0, 2])
+        per_sample = per_sample_kl_distillation_loss(student, teacher, temperature=1.7)
+        weights = module_teacher_quality_weights(
+            teacher, labels, floor=0.25, power=1.0, mode="mean_normalized"
+        )
+        expected = (per_sample * weights).mean()
+        observed = quality_aware_kl_loss(
+            student, teacher, labels, temperature=1.7, quality_floor=0.25
+        )
+        self.assertTrue(torch.allclose(observed, expected))
+        observed.backward()
+        self.assertIsNotNone(student.grad)
+
+    def test_quality_aware_kl_rejects_invalid_labels_and_detaches_teacher(self):
+        student = torch.tensor([[1.0, 0.0], [0.0, 1.0]], requires_grad=True)
+        teacher = torch.tensor([[0.8, 0.2], [0.0, 1.0]], requires_grad=True)
+        with self.assertRaises(ValueError):
+            quality_aware_distillation_loss(student, teacher, torch.tensor([0, 2]))
+        loss = quality_aware_distillation_loss(student, teacher, torch.tensor([0, 1]))
+        loss.backward()
+        self.assertIsNone(teacher.grad)
+        self.assertGreater(student.grad.abs().sum().item(), 0.0)
+
     def test_standard_kl_only_backpropagates_to_student(self):
         student_logits = torch.tensor([[1.0, 0.0], [0.1, 0.9]], requires_grad=True)
         teacher_logits = torch.tensor([[0.8, 0.2], [0.0, 1.0]], requires_grad=True)

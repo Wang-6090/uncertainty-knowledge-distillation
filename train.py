@@ -1264,6 +1264,7 @@ def build_parser():
             "uncertainty",
             "decoupled",
             "uncertainty_decoupled",
+            "quality_aware",
         ],
         default="standard",
         help=(
@@ -1271,6 +1272,8 @@ def build_parser():
             "uncertainty is an explicit opt-in ablation because it is not yet "
             "a validated core method; decoupled separates target and non-target "
             "relations, and uncertainty_decoupled gates only non-target relations."
+            " quality_aware uses the labelled teacher true-class confidence to "
+            "downweight unreliable soft targets."
         ),
     )
     p.add_argument("--alpha-supcon", type=float, default=0.1)
@@ -1447,6 +1450,24 @@ def build_parser():
     )
     p.add_argument("--uncertainty-weight-min", type=float, default=None)
     p.add_argument("--uncertainty-weight-max", type=float, default=None)
+    p.add_argument(
+        "--kd-quality-floor",
+        type=float,
+        default=0.25,
+        help="Minimum teacher true-class confidence used by quality-aware KD.",
+    )
+    p.add_argument(
+        "--kd-quality-power",
+        type=float,
+        default=1.0,
+        help="Exponent applied to teacher true-class confidence for quality-aware KD.",
+    )
+    p.add_argument(
+        "--kd-quality-weight-mode",
+        choices=["raw", "mean_normalized"],
+        default="mean_normalized",
+        help="Scale convention for quality-aware KD weights.",
+    )
     p.add_argument("--teacher-ckpt", default="./runs/teacher.pt")
     p.add_argument("--student-ckpt", default="./runs/student.pt")
     p.add_argument(
@@ -4781,6 +4802,9 @@ def fit_student(args):
             uncertainty_weight_mode=args.uncertainty_weight_mode,
             uncertainty_weight_min=args.uncertainty_weight_min,
             uncertainty_weight_max=args.uncertainty_weight_max,
+            kd_quality_floor=args.kd_quality_floor,
+            kd_quality_power=args.kd_quality_power,
+            kd_quality_weight_mode=args.kd_quality_weight_mode,
             audit_loss_gradients=args.audit_loss_gradients,
             rejection_gradient_conflict_mode=args.rejection_gradient_conflict_mode,
             discovery_loader=discovery_loader,

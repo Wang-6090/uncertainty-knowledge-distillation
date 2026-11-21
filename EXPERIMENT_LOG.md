@@ -8994,3 +8994,13 @@ A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K
 公式、标签隔离和阈值方向审计均通过：conjunction 确实使用 `min(z_feature_rejector, z_calibrated_uncertainty_error)`，未知标签只参与最终评价。问题是 isotonic uncertainty calibration 产生大量并列高分，`min` 后 known-validation 95% 分位数落在并列最大值，使 realized coverage 偏离目标。这是固定方法的校准退化，不能在看到测试结果后修改阈值、融合权重或分位数。
 
 正式逐 seed 原始值、均值、样本标准差和检测/聚类分开汇总见 [`analysis/formal_conjunction_audit_20261121.md`](analysis/formal_conjunction_audit_20261121.md)，机器结果见 `analysis/formal_conjunction_audit_20261121_s42.json`、`s123.json`、`s3407.json`。本阶段结论是：conjunction 在共同正式协议下为稳定负结果，冻结为 opt-in 之外的候选，不修改默认 `feature_rejector`，也不继续重复扫描当前规则。
+
+## 2026-11-21：质量感知 logits-KD 原型接入与 smoke 验证
+
+在冻结 rank fusion 和 conjunction 负结果后，转向训练机制中更直接的失败原因：当前 uncertainty-KD 用教师不确定性对整条样本 KL 做 `exp(-u)` 缩放，但审计显示该权重接近均匀，且教师不确定性没有被证明等价于教师分类错误率。继续扫描同一不确定性权重没有必要，因此新增一个独立的 opt-in 机制：用已知训练标签验证教师真类概率 `q=p_teacher(y|x)`，对软标签 KL 进行质量加权；硬标签 CE、不确定性头、拒识分数和测试标签保持分离。
+
+新增 `kd_mode=quality_aware` 及 `kd-quality-floor/power/weight-mode` 参数。质量权重 detached，并支持 batch mean normalization；训练统计增加 `kd_quality_weight_applied`、权重均值、标准差和 ESS fraction。默认仍为 `kd_mode=standard`，不会改变既有实验。
+
+实现门禁通过：质量权重显式公式、非法标签、有限损失、学生梯度和教师无梯度测试均通过，`pytest tests/test_uncertainty_kd.py` 为 `15 passed`；Python 编译检查和 CLI 参数解析通过。一次 toy teacher/student smoke 也真实跑通并保存 checkpoint。quality-aware student 的关键统计为 `kd=2.8597`、`kd_quality_weight_applied=true`、权重均值约 `1.0000`、标准差 `0.5627`、ESS fraction `0.7353`，说明该机制产生了实际的样本重加权；这只是接线与梯度证据，不是性能证据。
+
+协议见 `docs/team_a_representation/quality_aware_kd_protocol.md`。下一阶段只做一个新的 semantic-hard 单 seed 小预算三臂 pilot：standard logits-KD、unweighted DKD、quality-aware logits-KD；固定教师、数据顺序、训练预算、辅助损失、校准、拒识和 Auto-K，不扫描 floor/power。只有 pilot 同时改善检测/固定覆盖指标和候选或聚类指标，且 known accuracy 与 candidate purity 没有实质下降，才进入新 seed 复核；否则冻结该方向。
