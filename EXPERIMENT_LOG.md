@@ -9024,3 +9024,9 @@ A、B 的三个 seed 在 conjunction 下候选池都为空，无法执行 Auto-K
 依据 2154 pilot 的预注册晋级规则，启动 fresh semantic-hard seeds `2155/2156` 的三臂确认：standard logits-KD、unweighted DKD 和 quality-aware logits-KD。运行前 dry-run 已通过；两组 seed 使用独立 split 和独立 teacher 输出目录，训练预算固定为 4 epoch，known-validation checkpoint selection、gradient audit、detector、calibration、candidate pool、Auto-K 和聚类流程保持一致，不扫描任何质量权重参数，也不覆盖 2154 或历史结果。
 
 正式运行已开始。teacher 阶段和 student/discovery 流程均按 seed 顺序执行；中间日志已确认控制臂 `kd_quality_weight_applied=false`，quality-aware 臂出现 `kd_quality_weight_applied=true` 且 KD target/non-target 项均为非零，说明新机制实际进入 KD 计算。最终结论必须等 `2155/2156` 三臂全部完成、标签隔离门禁和汇总门禁通过后再记录；当前中间指标不作为方法效果证据。
+
+### 2026-11-21：历史运行产物清理计划
+
+盘点显示 `runs/` 占用约 `85.03 GB`，而 `analysis/` 约 `34 MB`；主要空间来自已完成旧运行的训练 checkpoint。为保留结论可追溯性，本轮只处理 checkpoint 文件，不删除代码、`EXPERIMENT_LOG.md`、`analysis/`、split 文件、配置、训练历史、JSON 报告或其他审计元数据。
+
+清理范围固定为：`runs/` 下目录时间早于 `2026-11-10` 的 `.pt/.pth/.ckpt`，并排除当前 quality-aware 确认实验 `2155/2156`、已完成的 `2154` pilot、近期正式梯度/关系蒸馏实验、正式 conjunction 审计和已有无效运行归档目录。清理前候选为 `3,125` 个 checkpoint、约 `69.86 GB`，分布在 `2,727` 个目录；每个候选目录均仍保留至少一个非 checkpoint 元数据文件。清理后结论仍以实验记录和分析报告为准；若未来需要旧模型，只能依据保留的配置重新运行，不能再直接加载这些旧 checkpoint。
