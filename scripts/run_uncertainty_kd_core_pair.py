@@ -153,12 +153,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--objective-profile",
-        choices=["current_auxiliary", "ce_only", "ua_dkd"],
+        choices=["current_auxiliary", "ce_only", "ua_dkd", "quality_aware"],
         default="current_auxiliary",
         help=(
             "current_auxiliary compares the existing auxiliary-loss pipeline; "
             "ce_only compares CE-only, CE+standard-KD, and CE+uncertainty-KD; "
-            "ua_dkd compares standard KL, unweighted DKD, and uncertainty-gated DKD"
+            "ua_dkd compares standard KL, unweighted DKD, and uncertainty-gated DKD; "
+            "quality_aware compares standard KL, unweighted DKD, and quality-aware KL"
         ),
     )
     parser.add_argument(
@@ -182,8 +183,11 @@ def main() -> None:
 
     if options.kd_uncertainty_source != "head" and options.kd_mc_samples < 2:
         raise ValueError("--kd-mc-samples must be at least 2 for MC uncertainty")
-    if options.objective_profile == "ua_dkd" and options.include_no_kd:
-        raise ValueError("ua_dkd already defines a three-arm comparison; no-KD is not supported")
+    if options.objective_profile in {"ua_dkd", "quality_aware"} and options.include_no_kd:
+        raise ValueError(
+            f"{options.objective_profile} already defines a three-arm comparison; "
+            "no-KD is not supported"
+        )
 
     teacher_source = resolve(options.source_teacher_config)
     student_source = resolve(options.source_student_config)
@@ -198,7 +202,7 @@ def main() -> None:
         raise ValueError("use known-only checkpoint selection for this experiment")
     if float(base_student.get("alpha_kd", 0.0)) <= 0.0:
         raise ValueError("logit KD must be active")
-    if options.objective_profile in {"current_auxiliary", "ua_dkd"}:
+    if options.objective_profile in {"current_auxiliary", "ua_dkd", "quality_aware"}:
         if base_student.get("discovery_pool_mode") != "mixed":
             raise ValueError("student reference config must use a mixed discovery pool")
         if float(base_student.get("alpha_rejection_kd", 0.0)) != 0.0:
@@ -214,7 +218,7 @@ def main() -> None:
     base_student["kd_mode"] = "standard"
     base_student["kd_uncertainty_source"] = options.kd_uncertainty_source
     base_student["kd_mc_samples"] = int(options.kd_mc_samples)
-    if options.objective_profile == "ua_dkd":
+    if options.objective_profile in {"ua_dkd", "quality_aware"}:
         base_student["audit_loss_gradients"] = True
     base_student["open_val_ratio"] = 0.0
     base_discover = read_json(discover_source)
@@ -239,7 +243,7 @@ def main() -> None:
         teacher_ckpt = teacher_dir / "teacher.pt"
         student_config_path = ROOT / "analysis" / f"{options.tag}_s{seed}_student_config.json"
         result_path = ROOT / "analysis" / f"{options.tag}_s{seed}.json"
-        if options.objective_profile == "ua_dkd":
+        if options.objective_profile in {"ua_dkd", "quality_aware"}:
             arm_specs = [
                 ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
                 ("decoupled", "decoupled", "mean_normalized", float(base_student["alpha_kd"])),
@@ -250,6 +254,13 @@ def main() -> None:
                     float(base_student["alpha_kd"]),
                 ),
             ]
+            if options.objective_profile == "quality_aware":
+                arm_specs[-1] = (
+                    "quality_aware",
+                    "quality_aware",
+                    "mean_normalized",
+                    float(base_student["alpha_kd"]),
+                )
         elif options.objective_profile == "ce_only":
             if options.include_no_kd:
                 raise ValueError("--include-no-kd is only valid for current_auxiliary")
@@ -465,6 +476,7 @@ def main() -> None:
                 ],
                 "feature_kd_loss_by_epoch": [stats.get("feat_kd") for stats in train_stats],
                 "kd_weight_applied_by_epoch": [stats.get("kd_uncertainty_weight_applied") for stats in train_stats],
+                "kd_quality_weight_applied_by_epoch": [stats.get("kd_quality_weight_applied") for stats in train_stats],
                 "kd_weight_std_by_epoch": [stats.get("kd_weight_std") for stats in train_stats],
                 "kd_weight_ess_fraction_by_epoch": [stats.get("kd_weight_ess_fraction") for stats in train_stats],
                 "kd_gradient_norm_by_epoch": [
@@ -528,18 +540,25 @@ def main() -> None:
         standard_arm = "standard" if "standard" in arms else "no_kd"
         if any(arms[standard_arm]["kd_weight_applied_by_epoch"]):
             raise RuntimeError(f"standard-KD arm unexpectedly applied uncertainty weights for seed {seed}")
-        uncertainty_arm = (
+        weighted_arm = (
             "uncertainty_decoupled"
             if options.objective_profile == "ua_dkd"
+            else "quality_aware"
+            if options.objective_profile == "quality_aware"
             else "uncertainty"
         )
-        if not all(arms[uncertainty_arm]["kd_weight_applied_by_epoch"]):
-            raise RuntimeError(f"uncertainty-KD arm did not apply weights in every epoch for seed {seed}")
-        if any(value is None or value <= 1e-8 for value in arms[uncertainty_arm]["kd_weight_std_by_epoch"]):
-            raise RuntimeError(f"uncertainty-KD weights have no measurable spread for seed {seed}")
-        if any(value is None or value <= 0.0 for value in arms[uncertainty_arm]["kd_loss_by_epoch"]):
-            raise RuntimeError(f"uncertainty-KD loss path was not active for seed {seed}")
-        if options.objective_profile == "ua_dkd":
+        weighted_flag = (
+            "kd_quality_weight_applied_by_epoch"
+            if options.objective_profile == "quality_aware"
+            else "kd_weight_applied_by_epoch"
+        )
+        if not all(arms[weighted_arm][weighted_flag]):
+            raise RuntimeError(f"weighted KD arm did not apply weights in every epoch for seed {seed}")
+        if any(value is None or value <= 1e-8 for value in arms[weighted_arm]["kd_weight_std_by_epoch"]):
+            raise RuntimeError(f"weighted KD weights have no measurable spread for seed {seed}")
+        if any(value is None or value <= 0.0 for value in arms[weighted_arm]["kd_loss_by_epoch"]):
+            raise RuntimeError(f"weighted KD loss path was not active for seed {seed}")
+        if options.objective_profile in {"ua_dkd", "quality_aware"}:
             for arm in ("decoupled", "uncertainty_decoupled"):
                 for key in (
                     "kd_target_by_epoch",
@@ -569,6 +588,8 @@ def main() -> None:
             "question": (
                 "Does MC-epistemic weighting of logits KD improve semantic-hard novel-class discovery over unweighted KL on the same MC-mean teacher logits?"
                 if options.kd_uncertainty_source == "mc_epistemic"
+                else "Does quality-aware teacher true-class confidence weighting improve semantic-hard novel-class discovery over standard KL?"
+                if options.objective_profile == "quality_aware"
                 else "Does teacher-uncertainty weighting of logits KD improve semantic-hard novel-class discovery over standard KL, conditional on the fixed current training pipeline?"
             ),
             "seed": int(seed),
@@ -580,7 +601,13 @@ def main() -> None:
             "single_changed_factor": (
                 "CE-only vs CE+standard logits KD vs CE+uncertainty-weighted logits KD"
                 if options.objective_profile == "ce_only"
-                else ("alpha_kd=0 vs standard logits KD vs uncertainty-weighted logits KD" if options.include_no_kd else "kd_mode: standard vs uncertainty")
+                else "alpha_kd=0 vs standard logits KD vs uncertainty-weighted logits KD"
+                if options.include_no_kd
+                else "kd_mode: standard vs decoupled vs uncertainty_decoupled"
+                if options.objective_profile == "ua_dkd"
+                else "kd_mode: standard vs decoupled vs quality_aware"
+                if options.objective_profile == "quality_aware"
+                else "kd_mode: standard vs uncertainty"
             ),
             "feature_kd": "disabled in all arms to isolate logits KD",
             "no_kd_control_definition": ("alpha_kd=0; all other supervised and auxiliary objectives remain active" if options.include_no_kd else None),
@@ -621,7 +648,13 @@ def main() -> None:
         "single_changed_factor": (
             "CE-only vs CE+standard logits KD vs CE+uncertainty-weighted logits KD"
             if options.objective_profile == "ce_only"
-            else ("alpha_kd and kd_mode" if options.include_no_kd else "kd_mode")
+            else "alpha_kd and kd_mode"
+            if options.include_no_kd
+            else "kd_mode: standard vs decoupled vs uncertainty_decoupled"
+            if options.objective_profile == "ua_dkd"
+            else "kd_mode: standard vs decoupled vs quality_aware"
+            if options.objective_profile == "quality_aware"
+            else "kd_mode"
         ),
         "status": status,
     })
