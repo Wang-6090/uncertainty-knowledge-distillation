@@ -9287,3 +9287,13 @@ student feature 上计算固定 `k=10` 的邻域风险均值，使用 `0.75 * po
 新增默认关闭的 `kd_mode=selective`：只在教师 top-1 预测与已知训练标签一致的样本上计算 standard logits-KD，未被选中的样本仍保留普通分类 CE。它使用已知训练标签进行训练门控，不读取未知标签、mixed pool、测试标签、学生不确定性头或最终拒识分数。runner 的新 profile 为 `ce_selective_kd`，三臂为 `standard`、`selective` 和既有 `uncertainty`，固定 seed `2138`、四个 epoch、known-validation checkpoint selection、max-softmax、95% known coverage 和自动 K。协议、机制门禁和停止条件见 `docs/team_a_representation/selective_kd_protocol.md`。
 
 代码预检已通过：selective loss 的正确样本选择、教师无梯度、无正确样本时有限零损失的单测 `22 passed`，Python 编译通过；2138 fresh split 的 runner dry-run 通过，三臂配置和标签隔离条件符合要求。正式性能结论等待三臂训练、发现、聚类及机制门禁全部完成后再记录。
+
+### 2026-11-22：teacher-correct selective logits KD pilot 完成
+
+seed `2138` 的三臂正式运行已完成且进程正常退出：standard logits-KD、teacher-correct selective logits-KD 和既有 uncertainty-KD。三臂共用 semantic-hard CIFAR-100 60/40 split、split-matched teacher、学生初始化、4 epoch 预算、known-validation checkpoint selection、max-softmax、known-validation 95% coverage calibration、matched discovery pool、Auto-K 和聚类流程；feature KD、rejection-branch KD 和 discovery/PU 训练目标均关闭。结果文件为 `analysis/team_a_selective_kd_20261122_s2138.json`，汇总为 `analysis/team_a_selective_kd_20261122_summary.json`，详细报告为 `analysis/team_a_selective_kd_20261122.md`。
+
+机制门禁通过。selective arm 四个 epoch 的 teacher-correct active fraction 为 `0.578287/0.576435/0.579630/0.578241`；KD loss、KD gradient norm 和 student classifier update norm 均为非零。standard arm 的 selective activity 始终为 `false/0`。uncertainty arm 四个 epoch 均应用独立的 uncertainty KD weight，末 epoch 权重标准差为 `0.185878`、ESS fraction 为 `0.966473`。教师输出保持无梯度，权重与学生不确定性头、分类熵和最终拒识分数分离。
+
+相对同 seed 的 standard-KD，selective arm 的 AUROC/AUPR 变化为 `+0.002764/+0.009023`，unknown rejection `+1.700` 个百分点，candidate purity `+3.589` 个百分点，known accuracy `+1.683` 个百分点，Cluster ACC/ARI 变化为 `+0.472/+1.591` 个百分点，但 Cluster NMI `-1.175` 个百分点；FPR95 上升 `1.900` 个百分点。验证集表征几何中 feature within mean 从 `0.227453` 降到 `0.215512`，center margin 从 `-0.067853` 改善到 `-0.056426`。uncertainty arm 相对 standard 的 AUROC `-0.001877`、Cluster NMI `-3.701` 个百分点，未显示额外稳定收益。
+
+按预先固定的 promotion rule，selective pilot 因同时改善排序指标和 candidate purity、且机制真实接入，进入两个全新 semantic-hard seed 的确认阶段；但单 seed 的 NMI 下降和 uncertainty-KD 的负向结果都不支持修改默认 `kd_mode=standard`。下一阶段固定 selective gate 和其余协议，不扫描门控比例、蒸馏系数、温度或拒识评分规则；若确认阶段不能复现检测加下游收益，则冻结为 opt-in 诊断机制，不重复 2138 训练。

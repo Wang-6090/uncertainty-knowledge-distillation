@@ -58,3 +58,16 @@ The pilot is promoted only if selective KD improves a detection metric and a
 downstream candidate or clustering metric without material known-accuracy or
 candidate-purity loss. Otherwise it is frozen as an opt-in diagnostic and no
 gate threshold, coefficient, or additional seed is scanned.
+
+## Pilot decision (seed 2138)
+
+The mechanism gates passed and the pilot improved AUROC, AUPR, unknown
+rejection, candidate purity, known accuracy, cluster ACC and ARI relative to
+standard KD. Cluster NMI decreased, so this is evidence for promotion to a
+fixed confirmation stage rather than evidence for changing the default. The
+existing uncertainty-KD arm did not show an additional stable gain in this
+pilot. The detailed result is recorded in
+[`selective_kd_pilot_20261122.md`](selective_kd_pilot_20261122.md).
+
+The fixed confirmation seeds are `2163` and `2164`. No gate threshold, loss
+coefficient, temperature, or score rule may be scanned in that stage.
