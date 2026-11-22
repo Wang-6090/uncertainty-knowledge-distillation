@@ -1,0 +1,992 @@
+{
+  "s42_A_ce": {
+    "protocol": {
+      "seed": 42,
+      "split_path": "./splits/cifar100_60_40.json",
+      "checkpoint": "./runs/revised_ms_s42_A_ce/student.pt",
+      "deterministic_eval": true,
+      "evaluation_split": "val",
+      "comparison_split": null,
+      "open_val_ratio": 0.0,
+      "independent_rejection_encoder": false,
+      "independent_rejection_encoder_init": "shared_backbone",
+      "independent_rejection_input_norm": "none",
+      "unknown_labels_used_only_for_posthoc_diagnostics": false,
+      "known_class_labels_used_only_for_posthoc_diagnostics": true
+    },
+    "shapes": {
+      "shared": [
+        3000,
+        512
+      ],
+      "rejection_raw_input": [
+        3000,
+        512
+      ],
+      "rejection_input": [
+        3000,
+        512
+      ],
+      "rejection": [
+        3000,
+        512
+      ]
+    },
+    "effective_rank": {
+      "shared_participation": 25.727201461791992,
+      "shared_rank95": 104.0,
+      "rejection_participation": 25.727201461791992,
+      "rejection_rank95": 104.0
+    },
+    "geometry": {
+      "neighbor_jaccard_at_10": 1.0,
+      "shared_to_rejection_cross_r2": 0.9992955923080444,
+      "rejection_to_shared_cross_r2": 0.9992955923080444
+    },
+    "known_only": {
+      "shared_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 24.516403292570825,
+        "norm_std": 7.631976693119405,
+        "norm_q05": 16.205776610720115,
+        "norm_q95": 40.30181868671403,
+        "total_variance": 395.2424111890273,
+        "within_class_variance": 214.02350122605912,
+        "between_class_variance": 181.21890996296816,
+        "between_to_total_ratio": 0.4585006690395354,
+        "class_count": 60
+      },
+      "rejection_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 24.516403292570825,
+        "norm_std": 7.631976693119405,
+        "norm_q05": 16.205776610720115,
+        "norm_q95": 40.30181868671403,
+        "total_variance": 395.2424111890273,
+        "within_class_variance": 214.02350122605912,
+        "between_class_variance": 181.21890996296816,
+        "between_to_total_ratio": 0.4585006690395354,
+        "class_count": 60
+      },
+      "rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 24.516403292570825,
+        "norm_std": 7.631976693119405,
+        "norm_q05": 16.205776610720115,
+        "norm_q95": 40.30181868671403,
+        "total_variance": 395.2424111890273,
+        "within_class_variance": 214.02350122605912,
+        "between_class_variance": 181.21890996296816,
+        "between_to_total_ratio": 0.4585006690395354,
+        "class_count": 60
+      },
+      "processed_rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 24.516403292570825,
+        "norm_std": 7.631976693119405,
+        "norm_q05": 16.205776610720115,
+        "norm_q95": 40.30181868671403,
+        "total_variance": 395.2424111890273,
+        "within_class_variance": 214.02350122605912,
+        "between_class_variance": 181.21890996296816,
+        "between_to_total_ratio": 0.4585006690395354,
+        "class_count": 60
+      },
+      "within_split_multiclass_probe_accuracy": {
+        "shared_features": 0.6277777777777778,
+        "rejection_features": 0.6277777777777778,
+        "rejection_input": 0.6277777777777778,
+        "processed_rejection_input": 0.6277777777777778
+      },
+      "cross_split_multiclass_probe_accuracy": {}
+    },
+    "posthoc_binary_probe_auc": {},
+    "posthoc_binary_probe_note": "not_applicable_on_known_only_split",
+    "score_correlations": {},
+    "cohort_sizes": {
+      "known": 3000,
+      "unknown": 0
+    },
+    "comparison_cohort_sizes": null
+  },
+  "s42_B_standard": {
+    "protocol": {
+      "seed": 42,
+      "split_path": "./splits/cifar100_60_40.json",
+      "checkpoint": "./runs/revised_ms_s42_B_standard_kd/student.pt",
+      "deterministic_eval": true,
+      "evaluation_split": "val",
+      "comparison_split": null,
+      "open_val_ratio": 0.0,
+      "independent_rejection_encoder": false,
+      "independent_rejection_encoder_init": "shared_backbone",
+      "independent_rejection_input_norm": "none",
+      "unknown_labels_used_only_for_posthoc_diagnostics": false,
+      "known_class_labels_used_only_for_posthoc_diagnostics": true
+    },
+    "shapes": {
+      "shared": [
+        3000,
+        512
+      ],
+      "rejection_raw_input": [
+        3000,
+        512
+      ],
+      "rejection_input": [
+        3000,
+        512
+      ],
+      "rejection": [
+        3000,
+        512
+      ]
+    },
+    "effective_rank": {
+      "shared_participation": 24.632112503051758,
+      "shared_rank95": 92.0,
+      "rejection_participation": 24.632112503051758,
+      "rejection_rank95": 92.0
+    },
+    "geometry": {
+      "neighbor_jaccard_at_10": 1.0,
+      "shared_to_rejection_cross_r2": 0.9991862177848816,
+      "rejection_to_shared_cross_r2": 0.9991862177848816
+    },
+    "known_only": {
+      "shared_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 29.25517611125136,
+        "norm_std": 5.800302313689985,
+        "norm_q05": 21.53007991792514,
+        "norm_q95": 39.784573976396665,
+        "total_variance": 501.2384152543304,
+        "within_class_variance": 263.9105937424142,
+        "between_class_variance": 237.32782151191617,
+        "between_to_total_ratio": 0.4734829061166333,
+        "class_count": 60
+      },
+      "rejection_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 29.25517611125136,
+        "norm_std": 5.800302313689985,
+        "norm_q05": 21.53007991792514,
+        "norm_q95": 39.784573976396665,
+        "total_variance": 501.2384152543304,
+        "within_class_variance": 263.9105937424142,
+        "between_class_variance": 237.32782151191617,
+        "between_to_total_ratio": 0.4734829061166333,
+        "class_count": 60
+      },
+      "rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 29.25517611125136,
+        "norm_std": 5.800302313689985,
+        "norm_q05": 21.53007991792514,
+        "norm_q95": 39.784573976396665,
+        "total_variance": 501.2384152543304,
+        "within_class_variance": 263.9105937424142,
+        "between_class_variance": 237.32782151191617,
+        "between_to_total_ratio": 0.4734829061166333,
+        "class_count": 60
+      },
+      "processed_rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 29.25517611125136,
+        "norm_std": 5.800302313689985,
+        "norm_q05": 21.53007991792514,
+        "norm_q95": 39.784573976396665,
+        "total_variance": 501.2384152543304,
+        "within_class_variance": 263.9105937424142,
+        "between_class_variance": 237.32782151191617,
+        "between_to_total_ratio": 0.4734829061166333,
+        "class_count": 60
+      },
+      "within_split_multiclass_probe_accuracy": {
+        "shared_features": 0.6155555555555555,
+        "rejection_features": 0.6155555555555555,
+        "rejection_input": 0.6155555555555555,
+        "processed_rejection_input": 0.6155555555555555
+      },
+      "cross_split_multiclass_probe_accuracy": {}
+    },
+    "posthoc_binary_probe_auc": {},
+    "posthoc_binary_probe_note": "not_applicable_on_known_only_split",
+    "score_correlations": {},
+    "cohort_sizes": {
+      "known": 3000,
+      "unknown": 0
+    },
+    "comparison_cohort_sizes": null
+  },
+  "s42_C_uncertainty": {
+    "protocol": {
+      "seed": 42,
+      "split_path": "./splits/cifar100_60_40.json",
+      "checkpoint": "./runs/revised_ms_s42_C_uncertainty_kd/student.pt",
+      "deterministic_eval": true,
+      "evaluation_split": "val",
+      "comparison_split": null,
+      "open_val_ratio": 0.0,
+      "independent_rejection_encoder": false,
+      "independent_rejection_encoder_init": "shared_backbone",
+      "independent_rejection_input_norm": "none",
+      "unknown_labels_used_only_for_posthoc_diagnostics": false,
+      "known_class_labels_used_only_for_posthoc_diagnostics": true
+    },
+    "shapes": {
+      "shared": [
+        3000,
+        512
+      ],
+      "rejection_raw_input": [
+        3000,
+        512
+      ],
+      "rejection_input": [
+        3000,
+        512
+      ],
+      "rejection": [
+        3000,
+        512
+      ]
+    },
+    "effective_rank": {
+      "shared_participation": 29.309045791625977,
+      "shared_rank95": 117.0,
+      "rejection_participation": 29.309045791625977,
+      "rejection_rank95": 117.0
+    },
+    "geometry": {
+      "neighbor_jaccard_at_10": 1.0,
+      "shared_to_rejection_cross_r2": 0.9993227124214172,
+      "rejection_to_shared_cross_r2": 0.9993227124214172
+    },
+    "known_only": {
+      "shared_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.46322974699947,
+        "norm_std": 4.356612404380568,
+        "norm_q05": 17.85669109949218,
+        "norm_q95": 31.85456998535097,
+        "total_variance": 313.7380566445515,
+        "within_class_variance": 176.54209177422834,
+        "between_class_variance": 137.19596487032314,
+        "between_to_total_ratio": 0.43729462194558966,
+        "class_count": 60
+      },
+      "rejection_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.46322974699947,
+        "norm_std": 4.356612404380568,
+        "norm_q05": 17.85669109949218,
+        "norm_q95": 31.85456998535097,
+        "total_variance": 313.7380566445515,
+        "within_class_variance": 176.54209177422834,
+        "between_class_variance": 137.19596487032314,
+        "between_to_total_ratio": 0.43729462194558966,
+        "class_count": 60
+      },
+      "rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.46322974699947,
+        "norm_std": 4.356612404380568,
+        "norm_q05": 17.85669109949218,
+        "norm_q95": 31.85456998535097,
+        "total_variance": 313.7380566445515,
+        "within_class_variance": 176.54209177422834,
+        "between_class_variance": 137.19596487032314,
+        "between_to_total_ratio": 0.43729462194558966,
+        "class_count": 60
+      },
+      "processed_rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.46322974699947,
+        "norm_std": 4.356612404380568,
+        "norm_q05": 17.85669109949218,
+        "norm_q95": 31.85456998535097,
+        "total_variance": 313.7380566445515,
+        "within_class_variance": 176.54209177422834,
+        "between_class_variance": 137.19596487032314,
+        "between_to_total_ratio": 0.43729462194558966,
+        "class_count": 60
+      },
+      "within_split_multiclass_probe_accuracy": {
+        "shared_features": 0.6233333333333333,
+        "rejection_features": 0.6233333333333333,
+        "rejection_input": 0.6233333333333333,
+        "processed_rejection_input": 0.6233333333333333
+      },
+      "cross_split_multiclass_probe_accuracy": {}
+    },
+    "posthoc_binary_probe_auc": {},
+    "posthoc_binary_probe_note": "not_applicable_on_known_only_split",
+    "score_correlations": {},
+    "cohort_sizes": {
+      "known": 3000,
+      "unknown": 0
+    },
+    "comparison_cohort_sizes": null
+  },
+  "s123_A_ce": {
+    "protocol": {
+      "seed": 123,
+      "split_path": "./splits/cifar100_60_40.json",
+      "checkpoint": "./runs/revised_ms_s123_A_ce/student.pt",
+      "deterministic_eval": true,
+      "evaluation_split": "val",
+      "comparison_split": null,
+      "open_val_ratio": 0.0,
+      "independent_rejection_encoder": false,
+      "independent_rejection_encoder_init": "shared_backbone",
+      "independent_rejection_input_norm": "none",
+      "unknown_labels_used_only_for_posthoc_diagnostics": false,
+      "known_class_labels_used_only_for_posthoc_diagnostics": true
+    },
+    "shapes": {
+      "shared": [
+        3000,
+        512
+      ],
+      "rejection_raw_input": [
+        3000,
+        512
+      ],
+      "rejection_input": [
+        3000,
+        512
+      ],
+      "rejection": [
+        3000,
+        512
+      ]
+    },
+    "effective_rank": {
+      "shared_participation": 18.35711669921875,
+      "shared_rank95": 92.0,
+      "rejection_participation": 18.35711669921875,
+      "rejection_rank95": 92.0
+    },
+    "geometry": {
+      "neighbor_jaccard_at_10": 1.0,
+      "shared_to_rejection_cross_r2": 0.999151885509491,
+      "rejection_to_shared_cross_r2": 0.999151885509491
+    },
+    "known_only": {
+      "shared_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 24.277616973853583,
+        "norm_std": 8.32107637960903,
+        "norm_q05": 16.261042392866834,
+        "norm_q95": 40.462782993690126,
+        "total_variance": 389.0999885428371,
+        "within_class_variance": 203.2113872148916,
+        "between_class_variance": 185.88860132794548,
+        "between_to_total_ratio": 0.4777399300989198,
+        "class_count": 60
+      },
+      "rejection_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 24.277616973853583,
+        "norm_std": 8.32107637960903,
+        "norm_q05": 16.261042392866834,
+        "norm_q95": 40.462782993690126,
+        "total_variance": 389.0999885428371,
+        "within_class_variance": 203.2113872148916,
+        "between_class_variance": 185.88860132794548,
+        "between_to_total_ratio": 0.4777399300989198,
+        "class_count": 60
+      },
+      "rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 24.277616973853583,
+        "norm_std": 8.32107637960903,
+        "norm_q05": 16.261042392866834,
+        "norm_q95": 40.462782993690126,
+        "total_variance": 389.0999885428371,
+        "within_class_variance": 203.2113872148916,
+        "between_class_variance": 185.88860132794548,
+        "between_to_total_ratio": 0.4777399300989198,
+        "class_count": 60
+      },
+      "processed_rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 24.277616973853583,
+        "norm_std": 8.32107637960903,
+        "norm_q05": 16.261042392866834,
+        "norm_q95": 40.462782993690126,
+        "total_variance": 389.0999885428371,
+        "within_class_variance": 203.2113872148916,
+        "between_class_variance": 185.88860132794548,
+        "between_to_total_ratio": 0.4777399300989198,
+        "class_count": 60
+      },
+      "within_split_multiclass_probe_accuracy": {
+        "shared_features": 0.6155555555555555,
+        "rejection_features": 0.6155555555555555,
+        "rejection_input": 0.6155555555555555,
+        "processed_rejection_input": 0.6155555555555555
+      },
+      "cross_split_multiclass_probe_accuracy": {}
+    },
+    "posthoc_binary_probe_auc": {},
+    "posthoc_binary_probe_note": "not_applicable_on_known_only_split",
+    "score_correlations": {},
+    "cohort_sizes": {
+      "known": 3000,
+      "unknown": 0
+    },
+    "comparison_cohort_sizes": null
+  },
+  "s123_B_standard": {
+    "protocol": {
+      "seed": 123,
+      "split_path": "./splits/cifar100_60_40.json",
+      "checkpoint": "./runs/revised_ms_s123_B_standard_kd/student.pt",
+      "deterministic_eval": true,
+      "evaluation_split": "val",
+      "comparison_split": null,
+      "open_val_ratio": 0.0,
+      "independent_rejection_encoder": false,
+      "independent_rejection_encoder_init": "shared_backbone",
+      "independent_rejection_input_norm": "none",
+      "unknown_labels_used_only_for_posthoc_diagnostics": false,
+      "known_class_labels_used_only_for_posthoc_diagnostics": true
+    },
+    "shapes": {
+      "shared": [
+        3000,
+        512
+      ],
+      "rejection_raw_input": [
+        3000,
+        512
+      ],
+      "rejection_input": [
+        3000,
+        512
+      ],
+      "rejection": [
+        3000,
+        512
+      ]
+    },
+    "effective_rank": {
+      "shared_participation": 24.319612503051758,
+      "shared_rank95": 98.0,
+      "rejection_participation": 24.319612503051758,
+      "rejection_rank95": 98.0
+    },
+    "geometry": {
+      "neighbor_jaccard_at_10": 1.0,
+      "shared_to_rejection_cross_r2": 0.9992749094963074,
+      "rejection_to_shared_cross_r2": 0.9992749094963074
+    },
+    "known_only": {
+      "shared_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 22.677216693842077,
+        "norm_std": 4.140340577637111,
+        "norm_q05": 17.297231424219063,
+        "norm_q95": 30.57238571608129,
+        "total_variance": 280.1849982625125,
+        "within_class_variance": 149.07173236615975,
+        "between_class_variance": 131.11326589635277,
+        "between_to_total_ratio": 0.4679524839281701,
+        "class_count": 60
+      },
+      "rejection_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 22.677216693842077,
+        "norm_std": 4.140340577637111,
+        "norm_q05": 17.297231424219063,
+        "norm_q95": 30.57238571608129,
+        "total_variance": 280.1849982625125,
+        "within_class_variance": 149.07173236615975,
+        "between_class_variance": 131.11326589635277,
+        "between_to_total_ratio": 0.4679524839281701,
+        "class_count": 60
+      },
+      "rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 22.677216693842077,
+        "norm_std": 4.140340577637111,
+        "norm_q05": 17.297231424219063,
+        "norm_q95": 30.57238571608129,
+        "total_variance": 280.1849982625125,
+        "within_class_variance": 149.07173236615975,
+        "between_class_variance": 131.11326589635277,
+        "between_to_total_ratio": 0.4679524839281701,
+        "class_count": 60
+      },
+      "processed_rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 22.677216693842077,
+        "norm_std": 4.140340577637111,
+        "norm_q05": 17.297231424219063,
+        "norm_q95": 30.57238571608129,
+        "total_variance": 280.1849982625125,
+        "within_class_variance": 149.07173236615975,
+        "between_class_variance": 131.11326589635277,
+        "between_to_total_ratio": 0.4679524839281701,
+        "class_count": 60
+      },
+      "within_split_multiclass_probe_accuracy": {
+        "shared_features": 0.63,
+        "rejection_features": 0.63,
+        "rejection_input": 0.63,
+        "processed_rejection_input": 0.63
+      },
+      "cross_split_multiclass_probe_accuracy": {}
+    },
+    "posthoc_binary_probe_auc": {},
+    "posthoc_binary_probe_note": "not_applicable_on_known_only_split",
+    "score_correlations": {},
+    "cohort_sizes": {
+      "known": 3000,
+      "unknown": 0
+    },
+    "comparison_cohort_sizes": null
+  },
+  "s123_C_uncertainty": {
+    "protocol": {
+      "seed": 123,
+      "split_path": "./splits/cifar100_60_40.json",
+      "checkpoint": "./runs/revised_ms_s123_C_uncertainty_kd/student.pt",
+      "deterministic_eval": true,
+      "evaluation_split": "val",
+      "comparison_split": null,
+      "open_val_ratio": 0.0,
+      "independent_rejection_encoder": false,
+      "independent_rejection_encoder_init": "shared_backbone",
+      "independent_rejection_input_norm": "none",
+      "unknown_labels_used_only_for_posthoc_diagnostics": false,
+      "known_class_labels_used_only_for_posthoc_diagnostics": true
+    },
+    "shapes": {
+      "shared": [
+        3000,
+        512
+      ],
+      "rejection_raw_input": [
+        3000,
+        512
+      ],
+      "rejection_input": [
+        3000,
+        512
+      ],
+      "rejection": [
+        3000,
+        512
+      ]
+    },
+    "effective_rank": {
+      "shared_participation": 24.683488845825195,
+      "shared_rank95": 102.0,
+      "rejection_participation": 24.683488845825195,
+      "rejection_rank95": 102.0
+    },
+    "geometry": {
+      "neighbor_jaccard_at_10": 1.0,
+      "shared_to_rejection_cross_r2": 0.9992724657058716,
+      "rejection_to_shared_cross_r2": 0.9992724657058716
+    },
+    "known_only": {
+      "shared_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 22.795747789510273,
+        "norm_std": 4.174563345456908,
+        "norm_q05": 17.368117747379788,
+        "norm_q95": 30.918049204333393,
+        "total_variance": 292.03487202602753,
+        "within_class_variance": 153.66913015839842,
+        "between_class_variance": 138.3657418676291,
+        "between_to_total_ratio": 0.4737986970792218,
+        "class_count": 60
+      },
+      "rejection_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 22.795747789510273,
+        "norm_std": 4.174563345456908,
+        "norm_q05": 17.368117747379788,
+        "norm_q95": 30.918049204333393,
+        "total_variance": 292.03487202602753,
+        "within_class_variance": 153.66913015839842,
+        "between_class_variance": 138.3657418676291,
+        "between_to_total_ratio": 0.4737986970792218,
+        "class_count": 60
+      },
+      "rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 22.795747789510273,
+        "norm_std": 4.174563345456908,
+        "norm_q05": 17.368117747379788,
+        "norm_q95": 30.918049204333393,
+        "total_variance": 292.03487202602753,
+        "within_class_variance": 153.66913015839842,
+        "between_class_variance": 138.3657418676291,
+        "between_to_total_ratio": 0.4737986970792218,
+        "class_count": 60
+      },
+      "processed_rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 22.795747789510273,
+        "norm_std": 4.174563345456908,
+        "norm_q05": 17.368117747379788,
+        "norm_q95": 30.918049204333393,
+        "total_variance": 292.03487202602753,
+        "within_class_variance": 153.66913015839842,
+        "between_class_variance": 138.3657418676291,
+        "between_to_total_ratio": 0.4737986970792218,
+        "class_count": 60
+      },
+      "within_split_multiclass_probe_accuracy": {
+        "shared_features": 0.6333333333333333,
+        "rejection_features": 0.6333333333333333,
+        "rejection_input": 0.6333333333333333,
+        "processed_rejection_input": 0.6333333333333333
+      },
+      "cross_split_multiclass_probe_accuracy": {}
+    },
+    "posthoc_binary_probe_auc": {},
+    "posthoc_binary_probe_note": "not_applicable_on_known_only_split",
+    "score_correlations": {},
+    "cohort_sizes": {
+      "known": 3000,
+      "unknown": 0
+    },
+    "comparison_cohort_sizes": null
+  },
+  "s3407_A_ce": {
+    "protocol": {
+      "seed": 3407,
+      "split_path": "./splits/cifar100_60_40.json",
+      "checkpoint": "./runs/revised_ms_s3407_A_ce/student.pt",
+      "deterministic_eval": true,
+      "evaluation_split": "val",
+      "comparison_split": null,
+      "open_val_ratio": 0.0,
+      "independent_rejection_encoder": false,
+      "independent_rejection_encoder_init": "shared_backbone",
+      "independent_rejection_input_norm": "none",
+      "unknown_labels_used_only_for_posthoc_diagnostics": false,
+      "known_class_labels_used_only_for_posthoc_diagnostics": true
+    },
+    "shapes": {
+      "shared": [
+        3000,
+        512
+      ],
+      "rejection_raw_input": [
+        3000,
+        512
+      ],
+      "rejection_input": [
+        3000,
+        512
+      ],
+      "rejection": [
+        3000,
+        512
+      ]
+    },
+    "effective_rank": {
+      "shared_participation": 24.203325271606445,
+      "shared_rank95": 104.0,
+      "rejection_participation": 24.203325271606445,
+      "rejection_rank95": 104.0
+    },
+    "geometry": {
+      "neighbor_jaccard_at_10": 1.0,
+      "shared_to_rejection_cross_r2": 0.9992455840110779,
+      "rejection_to_shared_cross_r2": 0.9992455840110779
+    },
+    "known_only": {
+      "shared_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 27.136187646590216,
+        "norm_std": 8.624424873595107,
+        "norm_q05": 17.82853511364511,
+        "norm_q95": 44.736665092942225,
+        "total_variance": 491.8756442736183,
+        "within_class_variance": 260.769483304947,
+        "between_class_variance": 231.1061609686713,
+        "between_to_total_ratio": 0.46984672581208886,
+        "class_count": 60
+      },
+      "rejection_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 27.136187646590216,
+        "norm_std": 8.624424873595107,
+        "norm_q05": 17.82853511364511,
+        "norm_q95": 44.736665092942225,
+        "total_variance": 491.8756442736183,
+        "within_class_variance": 260.769483304947,
+        "between_class_variance": 231.1061609686713,
+        "between_to_total_ratio": 0.46984672581208886,
+        "class_count": 60
+      },
+      "rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 27.136187646590216,
+        "norm_std": 8.624424873595107,
+        "norm_q05": 17.82853511364511,
+        "norm_q95": 44.736665092942225,
+        "total_variance": 491.8756442736183,
+        "within_class_variance": 260.769483304947,
+        "between_class_variance": 231.1061609686713,
+        "between_to_total_ratio": 0.46984672581208886,
+        "class_count": 60
+      },
+      "processed_rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 27.136187646590216,
+        "norm_std": 8.624424873595107,
+        "norm_q05": 17.82853511364511,
+        "norm_q95": 44.736665092942225,
+        "total_variance": 491.8756442736183,
+        "within_class_variance": 260.769483304947,
+        "between_class_variance": 231.1061609686713,
+        "between_to_total_ratio": 0.46984672581208886,
+        "class_count": 60
+      },
+      "within_split_multiclass_probe_accuracy": {
+        "shared_features": 0.6211111111111111,
+        "rejection_features": 0.6211111111111111,
+        "rejection_input": 0.6211111111111111,
+        "processed_rejection_input": 0.6211111111111111
+      },
+      "cross_split_multiclass_probe_accuracy": {}
+    },
+    "posthoc_binary_probe_auc": {},
+    "posthoc_binary_probe_note": "not_applicable_on_known_only_split",
+    "score_correlations": {},
+    "cohort_sizes": {
+      "known": 3000,
+      "unknown": 0
+    },
+    "comparison_cohort_sizes": null
+  },
+  "s3407_B_standard": {
+    "protocol": {
+      "seed": 3407,
+      "split_path": "./splits/cifar100_60_40.json",
+      "checkpoint": "./runs/revised_ms_s3407_B_standard_kd/student.pt",
+      "deterministic_eval": true,
+      "evaluation_split": "val",
+      "comparison_split": null,
+      "open_val_ratio": 0.0,
+      "independent_rejection_encoder": false,
+      "independent_rejection_encoder_init": "shared_backbone",
+      "independent_rejection_input_norm": "none",
+      "unknown_labels_used_only_for_posthoc_diagnostics": false,
+      "known_class_labels_used_only_for_posthoc_diagnostics": true
+    },
+    "shapes": {
+      "shared": [
+        3000,
+        512
+      ],
+      "rejection_raw_input": [
+        3000,
+        512
+      ],
+      "rejection_input": [
+        3000,
+        512
+      ],
+      "rejection": [
+        3000,
+        512
+      ]
+    },
+    "effective_rank": {
+      "shared_participation": 28.053144454956055,
+      "shared_rank95": 105.0,
+      "rejection_participation": 28.053144454956055,
+      "rejection_rank95": 105.0
+    },
+    "geometry": {
+      "neighbor_jaccard_at_10": 1.0,
+      "shared_to_rejection_cross_r2": 0.9992804527282715,
+      "rejection_to_shared_cross_r2": 0.9992804527282715
+    },
+    "known_only": {
+      "shared_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.289226703088953,
+        "norm_std": 4.579044341439138,
+        "norm_q05": 17.598301873168687,
+        "norm_q95": 32.1274307583104,
+        "total_variance": 303.5001551747104,
+        "within_class_variance": 158.32389038290174,
+        "between_class_variance": 145.17626479180868,
+        "between_to_total_ratio": 0.4783400018633852,
+        "class_count": 60
+      },
+      "rejection_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.289226703088953,
+        "norm_std": 4.579044341439138,
+        "norm_q05": 17.598301873168687,
+        "norm_q95": 32.1274307583104,
+        "total_variance": 303.5001551747104,
+        "within_class_variance": 158.32389038290174,
+        "between_class_variance": 145.17626479180868,
+        "between_to_total_ratio": 0.4783400018633852,
+        "class_count": 60
+      },
+      "rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.289226703088953,
+        "norm_std": 4.579044341439138,
+        "norm_q05": 17.598301873168687,
+        "norm_q95": 32.1274307583104,
+        "total_variance": 303.5001551747104,
+        "within_class_variance": 158.32389038290174,
+        "between_class_variance": 145.17626479180868,
+        "between_to_total_ratio": 0.4783400018633852,
+        "class_count": 60
+      },
+      "processed_rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.289226703088953,
+        "norm_std": 4.579044341439138,
+        "norm_q05": 17.598301873168687,
+        "norm_q95": 32.1274307583104,
+        "total_variance": 303.5001551747104,
+        "within_class_variance": 158.32389038290174,
+        "between_class_variance": 145.17626479180868,
+        "between_to_total_ratio": 0.4783400018633852,
+        "class_count": 60
+      },
+      "within_split_multiclass_probe_accuracy": {
+        "shared_features": 0.6344444444444445,
+        "rejection_features": 0.6344444444444445,
+        "rejection_input": 0.6344444444444445,
+        "processed_rejection_input": 0.6344444444444445
+      },
+      "cross_split_multiclass_probe_accuracy": {}
+    },
+    "posthoc_binary_probe_auc": {},
+    "posthoc_binary_probe_note": "not_applicable_on_known_only_split",
+    "score_correlations": {},
+    "cohort_sizes": {
+      "known": 3000,
+      "unknown": 0
+    },
+    "comparison_cohort_sizes": null
+  },
+  "s3407_C_uncertainty": {
+    "protocol": {
+      "seed": 3407,
+      "split_path": "./splits/cifar100_60_40.json",
+      "checkpoint": "./runs/revised_ms_s3407_C_uncertainty_kd/student.pt",
+      "deterministic_eval": true,
+      "evaluation_split": "val",
+      "comparison_split": null,
+      "open_val_ratio": 0.0,
+      "independent_rejection_encoder": false,
+      "independent_rejection_encoder_init": "shared_backbone",
+      "independent_rejection_input_norm": "none",
+      "unknown_labels_used_only_for_posthoc_diagnostics": false,
+      "known_class_labels_used_only_for_posthoc_diagnostics": true
+    },
+    "shapes": {
+      "shared": [
+        3000,
+        512
+      ],
+      "rejection_raw_input": [
+        3000,
+        512
+      ],
+      "rejection_input": [
+        3000,
+        512
+      ],
+      "rejection": [
+        3000,
+        512
+      ]
+    },
+    "effective_rank": {
+      "shared_participation": 29.880544662475586,
+      "shared_rank95": 111.0,
+      "rejection_participation": 29.880544662475586,
+      "rejection_rank95": 111.0
+    },
+    "geometry": {
+      "neighbor_jaccard_at_10": 1.0,
+      "shared_to_rejection_cross_r2": 0.9993240237236023,
+      "rejection_to_shared_cross_r2": 0.9993240237236023
+    },
+    "known_only": {
+      "shared_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.93002289107147,
+        "norm_std": 4.3220251768849485,
+        "norm_q05": 18.424935564250347,
+        "norm_q95": 32.50374264730795,
+        "total_variance": 325.16379333825085,
+        "within_class_variance": 174.51702098322824,
+        "between_class_variance": 150.64677235502262,
+        "between_to_total_ratio": 0.46329503911990805,
+        "class_count": 60
+      },
+      "rejection_feature_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.93002289107147,
+        "norm_std": 4.3220251768849485,
+        "norm_q05": 18.424935564250347,
+        "norm_q95": 32.50374264730795,
+        "total_variance": 325.16379333825085,
+        "within_class_variance": 174.51702098322824,
+        "between_class_variance": 150.64677235502262,
+        "between_to_total_ratio": 0.46329503911990805,
+        "class_count": 60
+      },
+      "rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.93002289107147,
+        "norm_std": 4.3220251768849485,
+        "norm_q05": 18.424935564250347,
+        "norm_q95": 32.50374264730795,
+        "total_variance": 325.16379333825085,
+        "within_class_variance": 174.51702098322824,
+        "between_class_variance": 150.64677235502262,
+        "between_to_total_ratio": 0.46329503911990805,
+        "class_count": 60
+      },
+      "processed_rejection_input_statistics": {
+        "sample_count": 3000,
+        "norm_mean": 23.93002289107147,
+        "norm_std": 4.3220251768849485,
+        "norm_q05": 18.424935564250347,
+        "norm_q95": 32.50374264730795,
+        "total_variance": 325.16379333825085,
+        "within_class_variance": 174.51702098322824,
+        "between_class_variance": 150.64677235502262,
+        "between_to_total_ratio": 0.46329503911990805,
+        "class_count": 60
+      },
+      "within_split_multiclass_probe_accuracy": {
+        "shared_features": 0.6466666666666666,
+        "rejection_features": 0.6466666666666666,
+        "rejection_input": 0.6466666666666666,
+        "processed_rejection_input": 0.6466666666666666
+      },
+      "cross_split_multiclass_probe_accuracy": {}
+    },
+    "posthoc_binary_probe_auc": {},
+    "posthoc_binary_probe_note": "not_applicable_on_known_only_split",
+    "score_correlations": {},
+    "cohort_sizes": {
+      "known": 3000,
+      "unknown": 0
+    },
+    "comparison_cohort_sizes": null
+  }
+}

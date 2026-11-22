@@ -9208,3 +9208,16 @@ student feature 上计算固定 `k=10` 的邻域风险均值，使用 `0.75 * po
 `KeyboardInterrupt` 中断，尚未生成完整 student checkpoint、discovery report 或性能汇总。因此本轮没有
 可报告的检测、候选池或聚类结果，也不把中间 loss 当作证据。seed split、教师 checkpoint 和未完成目录均保留，
 下次应先检查是否实现了断点续跑；若不能可靠续跑，应使用新输出目录并复用已验证教师，而不是把部分学生产物当作正式结果。
+### 2026-11-22：王笑颜负责方向的 A/B/C 兼容性与表征审计
+
+本轮严格限定在分类表征与不确定性知识蒸馏：standard-KD 是否改善学生表征、uncertainty-KD 是否有额外稳定收益、权重是否进入 KD 并更新学生，以及收益是否传递到未知检测和新类发现。没有继续修改拒识器、风险加权、候选筛选、评分融合或聚类算法。
+
+先审计 `42/123/3407` 的 A/B/C checkpoint。`42/123` 已保存训练配置主要只改变 `alpha_kd/kd_mode`，但历史检测口径较旧；`3407` 的 A checkpoint 是近期完整配置，而 B/C 是较早兼容配置，字段和 discovery pool 语义不一致。因此旧结果保留为历史证据，不合并成当前正式三种子主结果，也没有覆盖任何 checkpoint 或报告。
+
+随后对现有 A/B/C checkpoint 做 known-validation-only 的共享分类表征审计。每个 seed 使用 3000 个已知验证样本，未知标签不参与分析。shared feature 的 between/total 均值为 CE-only `0.468696`、standard-KD `0.473258`、uncertainty-KD `0.458129`；已知类线性 probe 均值为 `0.621481/0.626667/0.634444`。standard-KD 相对 CE-only 的 probe 平均变化 `+0.005185`，但三 seed 方向不一致；uncertainty-KD 相对 standard-KD 的 probe 三 seed 均上升，但 between/total 两个 seed 下降。该结果支持“表征存在局部信号”，不支持“稳定改善”的强结论。详细结果见 `analysis/team_a_representation/formal_shared_features_20261122.json` 和 `analysis/team_a_kd_scope_audit_20261122.md`。
+
+严格 CE-only 三臂的现有结果仍只有 seed 2079：standard-KD 相对 CE-only 的 AUROC/AUPR/Auto-NMI 有局部提升，但 unknown rejection 下降 `4.25` 个百分点；uncertainty-KD 相对 standard-KD 的 AUROC 仅 `+0.000851`、unknown rejection `+1.90` 个百分点，而 Auto-NMI 下降 `0.021331`。2074–2076 的 no-KD 臂保留辅助目标，不能当作纯 CE 对照；该协议下 uncertainty-KD 相对 standard-KD 的 AUROC、AUPR 和 unknown rejection 均值分别下降 `0.004897/0.008241/2.208` 个百分点。
+
+代码审计确认教师输出在 no-grad 上下文中生成，uncertainty 权重 detached 后乘逐样本 logits KL 并进入总损失，未与学生不确定性头或最终拒识分数混用。针对性测试 `78 passed, 260 deselected`，编译和 diff 检查通过。历史 2071–2079 JSON 保存了非均匀权重和非零 KD loss，但没有逐 epoch KD 梯度及学生更新范数；该缺口已记录，不能补写成“运行级梯度已验证”。
+
+当前阶段不修改默认配置，也不继续扫描旧 split 的 weighting function。下一步只在新 tag 和新输出目录中，用当前 `ce_only` runner 对 `42/123/3407` 做严格 A/B/C，并补齐运行级权重、KD 梯度、学生分类头更新和教师冻结日志；三种子结果仍不支持联合改善时，停止该方向的继续搜索。
