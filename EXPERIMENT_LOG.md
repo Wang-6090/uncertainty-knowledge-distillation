@@ -9221,3 +9221,17 @@ student feature 上计算固定 `k=10` 的邻域风险均值，使用 `0.75 * po
 代码审计确认教师输出在 no-grad 上下文中生成，uncertainty 权重 detached 后乘逐样本 logits KL 并进入总损失，未与学生不确定性头或最终拒识分数混用。针对性测试 `78 passed, 260 deselected`，编译和 diff 检查通过。历史 2071–2079 JSON 保存了非均匀权重和非零 KD loss，但没有逐 epoch KD 梯度及学生更新范数；该缺口已记录，不能补写成“运行级梯度已验证”。
 
 当前阶段不修改默认配置，也不继续扫描旧 split 的 weighting function。下一步只在新 tag 和新输出目录中，用当前 `ce_only` runner 对 `42/123/3407` 做严格 A/B/C，并补齐运行级权重、KD 梯度、学生分类头更新和教师冻结日志；三种子结果仍不支持联合改善时，停止该方向的继续搜索。
+
+### 2026-11-22：正式 CE-only A/B/C 三种子复核完成
+
+按照上一条记录的计划，使用新 tag `team_a_formal_ce_kd_20261122` 完成 semantic-hard CIFAR-100 60/40、seed `42/123/3407` 的严格三臂复核：CE-only、CE+standard-KD、CE+uncertainty-KD。每个 seed 共享 split-matched teacher、训练预算、known-validation checkpoint selection 和发现评测流程；feature KD、rejection-branch KD、discovery、outlier、PU 目标关闭。测试标签只用于最终检测和聚类评价。
+
+运行过程中修复了 runner 的一处汇总门禁 bug：CE-only 的 `alpha_kd=0` 相对 standard-KD 的 `alpha_kd=1` 是预定义处理差异，旧门禁误报为意外配置差异。修复只对白名单中的 CE-only `alpha_kd` 生效，其他配置差异仍会阻止汇总。修复后 seed 42 产物复用成功，seed 123/3407 重新生成完整 teacher、student 和 discovery 报告，汇总状态为 completed；全套测试为 `385 passed, 1 warning`，Python 编译检查通过。
+
+冻结表征审计使用 9 个正式 checkpoint 的 test known-class probe 和方差分解，test labels 只用于事后描述。standard-KD 相对 CE-only 的 between/total 均值变化为 `+0.012289`，probe 均值变化为 `+0.003333`，但 probe 只有 `2/3` 个 seed 上升；uncertainty-KD 相对 standard-KD 的 between/total 和 probe 变化分别为 `-0.003001/-0.006667`，三组 probe 均下降。因此没有证据支持稳定表征改善或 uncertainty-KD 的额外稳定表征收益。
+
+正式三种子检测均值为：CE-only 的 AUROC/AUPR/unknown rejection 为 `0.693465/0.551462/11.675%`，standard-KD 为 `0.685469/0.542830/10.517%`，uncertainty-KD 为 `0.690256/0.548927/10.275%`。standard-KD 相对 CE-only 的 AUROC、AUPR 和 unknown rejection 分别变化 `-0.007996/-0.008632/-1.158` 个百分点；uncertainty-KD 相对 standard-KD 的 AUROC/AUPR 小幅变化 `+0.004787/+0.006098`，但 unknown rejection 变化 `-0.242` 个百分点。聚类 ACC/NMI/ARI 均值分别为 CE-only `0.169319/0.437508/0.047261`、standard-KD `0.176173/0.440403/0.044854`、uncertainty-KD `0.166327/0.433850/0.047904`，没有形成一致端到端收益。
+
+机制审计得到运行级证据：uncertainty 臂 12/12 个 epoch 应用 detached 教师不确定性权重，batch 权重均值约 `1.0`，标准差跨 epoch/seed 均值 `0.200781`，最小 ESS fraction `0.953333`；KD loss、KD encoder gradient norm、学生分类头 update norm 的最小值分别为 `0.981682`、`10.606258`、`0.025887`。教师在 no-grad 上下文生成，optimizer 只包含学生参数；权重、学生 uncertainty head、分类熵和最终拒识分数保持分离。
+
+阶段结论：standard-KD 保留为对照基线，uncertainty-KD 保留为机制已验证但性能未确认的显式消融；不修改默认配置，不继续在同一协议上扫描 weighting function、阈值、拒识器或聚类组件。详细报告见 `analysis/team_a_formal_ce_kd_20261122.md`，正式原始 JSON 和表征审计 JSON 按仓库忽略规则保留在本地输出目录。

@@ -501,9 +501,16 @@ def main() -> None:
             arm_diff = config_differences(
                 arms["standard"]["train_config"], arms[arm]["train_config"]
             )
+            allowed_differences = set(ignored_differences)
+            # In the isolated CE/KD-only profile, the control arm is defined
+            # by alpha_kd=0 while the two KD arms use the common positive
+            # coefficient.  This is an intentional treatment difference,
+            # not evidence that the remaining training conditions diverged.
+            if options.objective_profile == "ce_only" and arm == "ce_only":
+                allowed_differences.add("alpha_kd")
             algorithm_diffs = {
                 key: values for key, values in arm_diff.items()
-                if key not in ignored_differences
+                if key not in allowed_differences
             }
             if algorithm_diffs:
                 raise RuntimeError(
