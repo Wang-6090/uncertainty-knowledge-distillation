@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from novel_discovery.losses import (
+    centered_feature_distillation_loss,
     distillation_loss,
     feature_distillation_loss,
     quality_aware_distillation_loss,
@@ -26,9 +27,59 @@ from novel_discovery.uncertainty_kd import (
     uncertainty_calibration_loss,
     uncertainty_weights,
 )
+from scripts.run_uncertainty_kd_core_pair import discovery_score_mode_for_profile
 
 
 class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
+    def test_isolated_centered_feature_profile_uses_max_softmax_discovery(self):
+        self.assertEqual(
+            discovery_score_mode_for_profile("ce_centered_feature_kd"),
+            "max_softmax",
+        )
+        self.assertEqual(
+            discovery_score_mode_for_profile("ce_only"),
+            "max_softmax",
+        )
+        self.assertEqual(
+            discovery_score_mode_for_profile("current_auxiliary"),
+            "feature_rejector",
+        )
+
+    def test_centered_feature_kd_matches_within_class_geometry_and_updates_student_only(self):
+        student = torch.tensor(
+            [[1.0, 0.0], [0.2, 0.9], [0.0, 1.0], [0.8, 0.3]],
+            requires_grad=True,
+        )
+        teacher = torch.tensor(
+            [[0.9, 0.1], [0.1, 0.9], [0.1, 0.9], [0.9, 0.1]],
+            requires_grad=True,
+        )
+        labels = torch.tensor([0, 0, 1, 1])
+        loss = centered_feature_distillation_loss(student, teacher, labels)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreater(loss.item(), 0.0)
+        loss.backward()
+        self.assertIsNotNone(student.grad)
+        self.assertGreater(student.grad.abs().sum().item(), 0.0)
+        self.assertIsNone(teacher.grad)
+
+    def test_centered_feature_kd_skips_singletons_and_invalid_rows(self):
+        student = torch.randn(3, 4, requires_grad=True)
+        teacher = torch.randn(3, 4, requires_grad=True)
+        labels = torch.tensor([0, 1, -1])
+        loss = centered_feature_distillation_loss(student, teacher, labels)
+        self.assertEqual(loss.item(), 0.0)
+        loss.backward()
+        self.assertIsNotNone(student.grad)
+        self.assertEqual(student.grad.abs().sum().item(), 0.0)
+        self.assertIsNone(teacher.grad)
+
+    def test_centered_feature_kd_rejects_shape_mismatch(self):
+        with self.assertRaises(ValueError):
+            centered_feature_distillation_loss(
+                torch.zeros(2, 3), torch.zeros(2, 4), torch.tensor([0, 0])
+            )
+
     def test_quality_weights_use_true_class_confidence_and_are_detached(self):
         teacher_logits = torch.tensor(
             [[4.0, 0.0, 0.0], [0.0, 2.0, 0.0]], requires_grad=True

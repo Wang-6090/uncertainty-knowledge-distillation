@@ -2547,6 +2547,58 @@ class CommandLineTest(unittest.TestCase):
             places=7,
         )
 
+    def test_centered_feature_kd_enters_student_objective_and_records_gradient(self):
+        class TinyFeatureKDModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = torch.nn.Linear(3, 5)
+                self.classifier = torch.nn.Linear(5, 3)
+                self.projector = torch.nn.Linear(5, 4)
+                self.uncertainty_head = torch.nn.Linear(5, 1)
+                self.dropout_p = 0.0
+
+            def forward(self, images, stochastic=False):
+                features = self.encoder(images.mean(dim=(2, 3)))
+                return {
+                    "logits": self.classifier(features),
+                    "features": features,
+                    "proj": F.normalize(self.projector(features), dim=-1),
+                    "uncertainty": torch.sigmoid(
+                        self.uncertainty_head(features)
+                    ).squeeze(-1),
+                }
+
+        torch.manual_seed(822)
+        student = TinyFeatureKDModel()
+        teacher = TinyFeatureKDModel()
+        images = torch.rand(8, 3, 8, 8)
+        labels = torch.tensor([0, 0, 1, 1, 2, 2, 0, 1])
+        loader = [
+            (images, labels, labels, torch.ones(8, dtype=torch.bool), torch.arange(8))
+        ]
+        optimizer = torch.optim.SGD(student.parameters(), lr=0.05)
+        stats = train_one_epoch_student(
+            student,
+            teacher,
+            loader,
+            optimizer,
+            torch.device("cpu"),
+            kd_mode="standard",
+            alpha_kd=1.0,
+            alpha_unc=0.0,
+            alpha_feat_kd=0.0,
+            alpha_centered_feat_kd=0.1,
+            alpha_supcon=0.0,
+            alpha_proto=0.0,
+            audit_loss_gradients=True,
+        )
+        self.assertGreater(stats["centered_feat_kd"], 0.0)
+        self.assertGreater(stats["centered_feat_kd_active_fraction"], 0.0)
+        self.assertGreater(
+            stats["gradient_audit_grad_norm_centered_feat_kd_term"], 0.0
+        )
+        self.assertGreater(stats["student_classifier_update_norm"], 0.0)
+
     def test_bundle_builder_forwards_calibration_overlap_control(self):
         args = parse_args([
             "train_student",

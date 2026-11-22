@@ -1167,6 +1167,15 @@ def build_parser():
     p.add_argument("--alpha-kd", type=float, default=1.0)
     p.add_argument("--alpha-feat-kd", type=float, default=0.0)
     p.add_argument(
+        "--alpha-centered-feat-kd",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight class-centered feature KD on known labelled batches; "
+            "disabled by default and separate from ordinary projection KD."
+        ),
+    )
+    p.add_argument(
         "--alpha-relational-kd",
         type=float,
         default=0.0,
@@ -4793,6 +4802,7 @@ def fit_student(args):
             ),
             alpha_kd=args.alpha_kd,
             alpha_feat_kd=args.alpha_feat_kd,
+            alpha_centered_feat_kd=args.alpha_centered_feat_kd,
             alpha_relational_kd=args.alpha_relational_kd,
             alpha_supcon=args.alpha_supcon,
             alpha_raw_supcon=args.alpha_raw_supcon,

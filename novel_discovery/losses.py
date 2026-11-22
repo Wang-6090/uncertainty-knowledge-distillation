@@ -788,6 +788,56 @@ def unknown_feature_margin_loss(
     return (per_sample * weight).sum() / denominator
 
 
+def centered_feature_distillation_loss(
+    student_features: torch.Tensor,
+    teacher_features: torch.Tensor,
+    labels: torch.Tensor,
+) -> torch.Tensor:
+    """Match within-class feature directions after removing batch class centers.
+
+    The ordinary feature KD term aligns each example to the teacher in the
+    absolute feature space.  This variant transfers only the labelled
+    within-class geometry: for every class represented at least twice in the
+    batch, subtract that class's batch mean from both teacher and student
+    features and minimize the cosine distance of the centered vectors.  The
+    teacher path is fully detached.  Singleton classes are skipped because a
+    one-sample batch cannot define a within-class direction.
+
+    This is an opt-in classification-representation objective.  It does not
+    consume discovery-pool or unknown labels and is intentionally separate
+    from uncertainty weighting, rejection losses, and downstream clustering.
+    """
+    if student_features.ndim != 2 or teacher_features.ndim != 2:
+        raise ValueError("student and teacher features must be 2-D")
+    if student_features.shape != teacher_features.shape:
+        raise ValueError("student and teacher features must have matching shapes")
+    if labels.shape != (student_features.size(0),):
+        raise ValueError("labels must have shape [batch_size]")
+    if student_features.size(0) == 0:
+        return student_features.sum() * 0.0
+
+    labels = labels.to(device=student_features.device, dtype=torch.long)
+    valid = labels >= 0
+    losses = []
+    teacher = teacher_features.detach()
+    for class_label in torch.unique(labels[valid], sorted=True):
+        mask = valid & labels.eq(class_label)
+        if int(mask.sum().item()) < 2:
+            continue
+        student_centered = student_features[mask] - student_features[mask].mean(
+            dim=0, keepdim=True
+        )
+        teacher_centered = teacher[mask] - teacher[mask].mean(
+            dim=0, keepdim=True
+        )
+        student_centered = F.normalize(student_centered, dim=-1)
+        teacher_centered = F.normalize(teacher_centered, dim=-1)
+        losses.append(1.0 - F.cosine_similarity(student_centered, teacher_centered, dim=-1))
+    if not losses:
+        return student_features.sum() * 0.0
+    return torch.cat(losses, dim=0).mean()
+
+
 def pu_unknown_feature_margin_loss(
     known_features: torch.Tensor,
     unlabeled_features: torch.Tensor,

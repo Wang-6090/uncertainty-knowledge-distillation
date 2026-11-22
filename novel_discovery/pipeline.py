@@ -43,6 +43,7 @@ from .losses import (
     pu_unknown_energy_margin_loss,
     angular_margin_loss,
     feature_distillation_loss,
+    centered_feature_distillation_loss,
     relational_distance_distillation_loss,
     confidence_gated_relational_distance_distillation_loss,
     hard_proxy_margin_loss,
@@ -1809,6 +1810,7 @@ def train_one_epoch_student(
     alpha_discovery_rejection_boundary: float = 0.0,
     alpha_kd: float = 1.0,
     alpha_feat_kd: float = 0.0,
+    alpha_centered_feat_kd: float = 0.0,
     alpha_relational_kd: float = 0.0,
     alpha_supcon: float = 0.1,
     alpha_raw_supcon: float = 0.0,
@@ -2063,6 +2065,8 @@ def train_one_epoch_student(
     kd_weight_std_meter = AverageMeter()
     kd_weight_ess_meter = AverageMeter()
     feat_kd_meter = AverageMeter()
+    centered_feat_kd_meter = AverageMeter()
+    centered_feat_kd_active_fraction_meter = AverageMeter()
     relational_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
     rejection_ce_meter = AverageMeter()
@@ -2469,6 +2473,25 @@ def train_one_epoch_student(
             uncertainty_weight_min=uncertainty_weight_min,
             uncertainty_weight_max=uncertainty_weight_max,
         )
+        if alpha_centered_feat_kd > 0.0:
+            loss_centered_feat_kd = centered_feature_distillation_loss(
+                s_out["features"], t_out["features"], labels
+            )
+            centered_labels = labels >= 0
+            centered_active_count = 0
+            if centered_labels.any():
+                for class_label in torch.unique(labels[centered_labels], sorted=True):
+                    class_count = int(
+                        (centered_labels & labels.eq(class_label)).sum().item()
+                    )
+                    if class_count >= 2:
+                        centered_active_count += class_count
+            centered_feat_kd_active_fraction = centered_active_count / max(
+                int(labels.numel()), 1
+            )
+        else:
+            loss_centered_feat_kd = s_out["logits"].new_tensor(0.0)
+            centered_feat_kd_active_fraction = 0.0
         loss_relational_kd = s_out["logits"].new_tensor(0.0)
         if alpha_relational_kd > 0.0:
             loss_relational_kd = relational_distance_distillation_loss(
@@ -4698,6 +4721,7 @@ def train_one_epoch_student(
             + alpha_rejection_variance_floor * loss_rejection_variance_floor
             + alpha_kd * loss_kd
             + alpha_feat_kd * loss_feat_kd
+            + alpha_centered_feat_kd * loss_centered_feat_kd
             + alpha_relational_kd * loss_relational_kd
             + alpha_rejection_kd * loss_rejection_kd
             + alpha_rejection_feat_kd * loss_rejection_feat_kd
@@ -4853,6 +4877,9 @@ def train_one_epoch_student(
                 {
                     "ce": loss_ce,
                     "kd": loss_kd,
+                    "centered_feat_kd_term": (
+                        alpha_centered_feat_kd * loss_centered_feat_kd
+                    ),
                     # Record the coefficient-scaled relation term so the
                     # audit reflects the gradient that actually contributes
                     # to the optimizer objective, not only its raw loss.
@@ -5184,6 +5211,10 @@ def train_one_epoch_student(
         )
         kd_weight_ess_meter.update(kd_weight_ess_fraction.item(), images.size(0))
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
+        centered_feat_kd_meter.update(loss_centered_feat_kd.item(), images.size(0))
+        centered_feat_kd_active_fraction_meter.update(
+            centered_feat_kd_active_fraction, images.size(0)
+        )
         relational_kd_meter.update(loss_relational_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
@@ -5402,6 +5433,8 @@ def train_one_epoch_student(
         "kd_weight_std": kd_weight_std_meter.avg,
         "kd_weight_ess_fraction": kd_weight_ess_meter.avg,
         "feat_kd": feat_kd_meter.avg,
+        "centered_feat_kd": centered_feat_kd_meter.avg,
+        "centered_feat_kd_active_fraction": centered_feat_kd_active_fraction_meter.avg,
         "relational_kd": relational_kd_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,

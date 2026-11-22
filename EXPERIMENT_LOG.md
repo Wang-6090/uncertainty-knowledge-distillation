@@ -1,5 +1,27 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 2026-11-22：分类表征新机制阶段启动（类内中心化 feature KD）
+
+王笑颜负责的 formal CE-only / standard-KD / uncertainty-KD 三种子审计已经
+完成：standard-KD 的表征改善较弱且受 seed 影响，uncertainty-KD 没有稳定的
+额外检测或新类发现收益。因此本阶段不再扫描 uncertainty 权重、拒识分数、候选
+规则或聚类参数，也不重复历史的普通 feature KD、relational KD、SupCon 和
+prototype 试验。
+
+为继续研究学生表征本身，新增一个默认关闭的类内中心化 feature KD：仅对已知
+训练批次中同类样本数至少为 2 的样本，分别减去教师和学生的批内类中心，再对齐
+中心化特征方向；教师路径 detached，单样本类别跳过。该损失通过
+`alpha_centered_feat_kd` 加入总损失，默认系数为 `0`，候选 pilot 固定为 `0.1`。
+它只使用已知训练标签，不读取未知标签、discovery-pool 身份或测试标签，也不改
+拒识器、候选筛选和聚类算法。
+
+实现阶段已完成：新增损失、训练接线、逐 epoch loss/重复类比例/梯度审计字段和
+三项单测；针对性测试 `18 passed`，Python 编译和 `git diff --check` 通过。下一步
+先做 fresh semantic-hard seed `2135` 的 dry-run 和一批真实训练 smoke，确认
+centered KD 非零进入总损失、产生 encoder 梯度且学生更新，再决定是否启动完整
+三臂 pilot。协议见
+[`docs/team_a_representation/centered_feature_kd_protocol.md`](docs/team_a_representation/centered_feature_kd_protocol.md)。
+
 ## 最新研究结果：late rejection-CE decay 新 split 复核（2026-11-21，seed=2160）
 
 为检验“后期降低拒识头已知类 CE 压力”是否能同时改善检测与新类发现，
@@ -9235,3 +9257,15 @@ student feature 上计算固定 `k=10` 的邻域风险均值，使用 `0.75 * po
 机制审计得到运行级证据：uncertainty 臂 12/12 个 epoch 应用 detached 教师不确定性权重，batch 权重均值约 `1.0`，标准差跨 epoch/seed 均值 `0.200781`，最小 ESS fraction `0.953333`；KD loss、KD encoder gradient norm、学生分类头 update norm 的最小值分别为 `0.981682`、`10.606258`、`0.025887`。教师在 no-grad 上下文生成，optimizer 只包含学生参数；权重、学生 uncertainty head、分类熵和最终拒识分数保持分离。
 
 阶段结论：standard-KD 保留为对照基线，uncertainty-KD 保留为机制已验证但性能未确认的显式消融；不修改默认配置，不继续在同一协议上扫描 weighting function、阈值、拒识器或聚类组件。详细报告见 `analysis/team_a_formal_ce_kd_20261122.md`，正式原始 JSON 和表征审计 JSON 按仓库忽略规则保留在本地输出目录。
+
+### 2026-11-22：类内中心化 feature KD pilot 完成并冻结
+
+为直接验证“logits-KD 没有稳定改善表征”这一问题，新增一个只作用于已知训练批次的类内中心化 feature KD：对每个批内重复类别减去类别中心，再对齐教师与学生的中心化特征方向；singleton 类别跳过，教师特征 detached。三臂为 `standard`、`centered_feature`（固定 `alpha_centered_feat_kd=0.1`）和现有 `uncertainty`，使用全新 semantic-hard seed `2135`，CE/KD-only 训练，所有 discovery/rejection 辅助损失关闭。
+
+首次运行在 discovery 初始化阶段暴露了 runner 协议 bug：CE/KD-only profile 的训练 checkpoint 不含 rejection encoder，但 discovery 配置仍请求该模块。该次产物没有作为结果使用；原始报告和 discovery 目录已移入 `runs/archive_invalid_discovery/` 与 `analysis/archive_invalid_discovery/` 供追溯。随后修复 runner，使 `ce_centered_feature_kd` 与 `ce_only` 一样使用无 rejection encoder 的 `max_softmax` 评测，并复用已完成的三份 student checkpoint 重新生成 discovery。回归测试、编译和完整流程均通过，最终三臂报告的 `feature_rejector_active` 均为 `false`。
+
+机制门禁通过：centered arm 四个 epoch 的 centered KD loss 为 `0.976781/0.968026/0.961273/0.954542`，重复类别行比例为 `0.6561/0.6507/0.6533/0.6507`，对应 encoder gradient norm 为 `0.098509/0.088617/0.086119/0.084853`，说明新损失确实进入总损失并更新学生；standard 和 uncertainty 臂的 centered KD 均为零。训练完成四个 epoch，三臂 calibration acceptance 均为 `0.948966`，测试标签未参与训练或校准。
+
+相对 standard-KD，centered arm 的检测与聚类均退化：AUROC/AUPR/FPR95 分别变化 `-0.008495/-0.010817/+0.002833`，unknown rejection `-2.700` 个百分点，candidate purity `-2.798` 个百分点，Cluster ACC/NMI/ARI 分别变化 `-1.122/-1.612/-0.228` 个百分点，Auto-K absolute error `-2`（单项变化不能抵消整体退化）。known-only validation geometry 也没有改善：末 epoch feature within mean `0.213106` 对 standard `0.213759` 略低，但 nearest-center distance `0.172413` 对 `0.176464` 下降，center margin `-0.040693` 对 `-0.037295` 变差；known accuracy `0.697333` 对 `0.700000` 下降。
+
+同一新 split 上 uncertainty-KD 相对 standard-KD 的 AUROC/AUPR/unknown rejection 变化为 `-0.006549/-0.004570/-1.125` 个百分点，而 Cluster ACC/NMI/ARI 变化为 `+0.541/+1.689/+1.352` 个百分点，仍不足以说明稳定端到端收益。按预设 pilot gate，类内中心化 feature KD 没有同时改善已知表征和下游指标，因此冻结为 opt-in 研究候选，不扫描其权重、不复用 seed2135 做确认，也不修改默认 standard-KD 或 uncertainty-KD。协议见 `docs/team_a_representation/centered_feature_kd_protocol.md`，机器结果见 `analysis/team_a_centered_feature_kd_20261122_s2135.json`。
