@@ -9333,3 +9333,21 @@ epoch 均有非零 selective KD loss、KD gradient 和 student classifier update
 仍为 `kd_mode=standard`；uncertainty-KD 也没有显示额外稳定收益。详细逐 seed 原始指标和机制字段见
 `docs/team_a_representation/selective_kd_confirmation_20261122.md` 及对应 JSON，后续不重复训练 `2138/2163/2164`，
 也不继续扫描 selective gate 或 uncertainty weighting。
+
+**审计更正（2026-11-23）：**上面的 feature-overlap 数字来自错误的默认 ImageNet transform，而正式 CIFAR-100
+实验配置要求 `transform_profile=cifar`。因此该轮四个 JSON 与据此写入的 AUROC 差值、几何解释全部作废，不得用于
+方法判断；原始文件保留作审计痕迹，不覆盖。对应报告已撤下，待修正脚本以显式 CIFAR transform 重跑后再记录有效结果。
+后续 teacher/student geometry 检查也将逐项校验 teacher、student、discovery 的数据协议与完整样本数。
+
+修正后用显式 CIFAR transform 重跑冻结 checkpoint，不涉及训练。脚本与协议检查确认两个 seed 均使用 27,000 known
+train、6,000 known test、4,000 unknown test，teacher/student/discovery split 与 transform 一致。selective 相对
+standard 的 classifier-prototype、经验类中心、最近 known-train 距离 AUROC 在 seed2163 分别 `+0.000918 / +0.003257 /
++0.002489`，seed2164 分别 `+0.019160 / +0.004402 / +0.006106`；uncertainty-KD 分别为
+`-0.000112 / +0.008686 / +0.010429` 与 `+0.006348 / +0.009257 / +0.009092`。这表明冻结学生的部分支持几何
+在两 seed 有改善，但只是诊断性距离排序，不能当作部署检测指标。正确 transform 下 teacher 的 prototype/centroid
+距离 AUROC 为 seed2163 `0.613330/0.626661`、seed2164 `0.626217/0.609799`，均低于 standard student 的
+`0.673140/0.662513` 与 `0.679708/0.676212`。因此 teacher 不具备支持几何优势，不开展拟议的 support-distance
+transfer loss pilot；修正分析本身也没有改变默认 KD。正式 max-softmax 和下游指标仍按
+[`docs/team_a_representation/selective_kd_confirmation_20261122.md`](docs/team_a_representation/selective_kd_confirmation_20261122.md)
+单独判断：selective/uncertainty 的下游收益仍不足以证明稳定新类发现增益。细节、逐 seed 表和原始文件清单见
+[`docs/team_a_representation/selective_kd_feature_overlap_20261123.md`](docs/team_a_representation/selective_kd_feature_overlap_20261123.md)。

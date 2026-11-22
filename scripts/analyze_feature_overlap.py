@@ -136,6 +136,8 @@ def _diagnose_one(model, train_data, evaluation_data, device):
 
 
 def analyze(args):
+    if Path(args.output).exists():
+        raise FileExistsError(f"Refusing to overwrite existing output: {args.output}")
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -155,6 +157,7 @@ def analyze(args):
         limit_test=args.limit_test,
         limit_discovery=args.limit_discovery,
         discovery_pool_mode="unknown",
+        transform_profile=args.transform_profile,
     )
     # The training dataset normally has random augmentation. For a stable
     # support bank, use the same deterministic evaluation transform as test.
@@ -163,7 +166,9 @@ def analyze(args):
         train_subset = train_subset.dataset
     if not hasattr(train_subset, "base"):
         raise TypeError("Expected a CIFAR-style wrapped dataset with a base dataset")
-    train_subset.base.transform = build_transforms(args.image_size, train=False)
+    train_subset.base.transform = build_transforms(
+        args.image_size, train=False, profile=args.transform_profile
+    )
 
     train_features_loader = build_loader(
         bundle.train, args.batch_size, False, args.num_workers
@@ -177,6 +182,7 @@ def analyze(args):
         "seed": int(args.seed),
         "num_known": int(args.num_known),
         "image_size": int(args.image_size),
+        "transform_profile": args.transform_profile,
         "limit_train": int(args.limit_train),
         "limit_val": int(args.limit_val),
         "limit_test": int(args.limit_test),
@@ -214,6 +220,7 @@ def parse_args(argv=None):
     parser.add_argument("--num-known", type=int, default=60)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--image-size", type=int, default=64)
+    parser.add_argument("--transform-profile", choices=["cifar", "imagenet"], default="cifar")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=0)
     # Full-data is the safe default for a post-hoc diagnostic. Use explicit
