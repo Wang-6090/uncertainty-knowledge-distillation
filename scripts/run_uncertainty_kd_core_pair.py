@@ -108,6 +108,7 @@ def discovery_score_mode_for_profile(objective_profile: str) -> str:
         "ce_only",
         "ce_centered_feature_kd",
         "ce_class_center_feature_kd",
+        "ce_selective_kd",
     }:
         return "max_softmax"
     return "feature_rejector"
@@ -169,6 +170,7 @@ def main() -> None:
             "ce_only",
             "ua_dkd",
             "quality_aware",
+            "ce_selective_kd",
             "ce_centered_feature_kd",
             "ce_class_center_feature_kd",
         ],
@@ -178,6 +180,7 @@ def main() -> None:
             "ce_only compares CE-only, CE+standard-KD, and CE+uncertainty-KD; "
             "ua_dkd compares standard KL, unweighted DKD, and uncertainty-gated DKD; "
             "quality_aware compares standard KL, unweighted DKD, and quality-aware KL"
+            "; ce_selective_kd compares standard KL, teacher-correct selective KL, and uncertainty-KD"
         ),
     )
     parser.add_argument(
@@ -201,7 +204,7 @@ def main() -> None:
 
     if options.kd_uncertainty_source != "head" and options.kd_mc_samples < 2:
         raise ValueError("--kd-mc-samples must be at least 2 for MC uncertainty")
-    if options.objective_profile in {"ua_dkd", "quality_aware"} and options.include_no_kd:
+    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd"} and options.include_no_kd:
         raise ValueError(
             f"{options.objective_profile} already defines a three-arm comparison; "
             "no-KD is not supported"
@@ -238,7 +241,7 @@ def main() -> None:
     base_student["kd_mode"] = "standard"
     base_student["kd_uncertainty_source"] = options.kd_uncertainty_source
     base_student["kd_mc_samples"] = int(options.kd_mc_samples)
-    if options.objective_profile in {"ua_dkd", "quality_aware"}:
+    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd"}:
         base_student["audit_loss_gradients"] = True
     base_student["open_val_ratio"] = 0.0
     base_discover = read_json(discover_source)
@@ -303,6 +306,12 @@ def main() -> None:
             arm_specs = [
                 ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
                 ("class_center_feature", "standard", "mean_normalized", float(base_student["alpha_kd"])),
+                ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
+            ]
+        elif options.objective_profile == "ce_selective_kd":
+            arm_specs = [
+                ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
+                ("selective", "selective", "mean_normalized", float(base_student["alpha_kd"])),
                 ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
             ]
         else:
@@ -501,6 +510,7 @@ def main() -> None:
                 "ce_only",
                 "ce_centered_feature_kd",
                 "ce_class_center_feature_kd",
+                "ce_selective_kd",
             }:
                 # These isolated representation/KD evaluations deliberately
                 # do not fit or use a rejector.  Clear the inherited rejector
@@ -574,6 +584,8 @@ def main() -> None:
                 "kd_quality_weight_applied_by_epoch": [stats.get("kd_quality_weight_applied") for stats in train_stats],
                 "kd_weight_std_by_epoch": [stats.get("kd_weight_std") for stats in train_stats],
                 "kd_weight_ess_fraction_by_epoch": [stats.get("kd_weight_ess_fraction") for stats in train_stats],
+                "kd_selective_applied_by_epoch": [stats.get("kd_selective_applied") for stats in train_stats],
+                "kd_selective_active_fraction_by_epoch": [stats.get("kd_selective_active_fraction") for stats in train_stats],
                 "kd_gradient_norm_by_epoch": [
                     stats.get("gradient_audit_grad_norm_kd")
                     for stats in train_stats
@@ -707,6 +719,17 @@ def main() -> None:
                 raise RuntimeError(f"class-center feature KD had no labelled rows in seed {seed}")
             if any(value is None or value <= 0.0 for value in class_center_gradients):
                 raise RuntimeError(f"class-center feature KD produced no audited gradient in seed {seed}")
+        if options.objective_profile == "ce_selective_kd":
+            selective_active = arms["selective"]["kd_selective_active_fraction_by_epoch"]
+            selective_applied = arms["selective"]["kd_selective_applied_by_epoch"]
+            if any(value is None or value <= 0.0 for value in selective_active):
+                raise RuntimeError(f"selective KD had no teacher-correct samples in seed {seed}")
+            if not all(selective_applied):
+                raise RuntimeError(f"selective KD was not applied in every epoch for seed {seed}")
+            for key in ("kd_gradient_norm_by_epoch", "student_classifier_update_norm_by_epoch"):
+                values = arms["selective"][key]
+                if any(value is None or value <= 0.0 for value in values):
+                    raise RuntimeError(f"selective KD missing effective {key} in seed {seed}")
         for arm in arm_names:
             report = arms[arm]["metrics"]
             if report.get("cluster_k") is None or report.get("clustering_skipped"):
@@ -725,6 +748,8 @@ def main() -> None:
                 if options.objective_profile == "ce_centered_feature_kd"
                 else "Does class-center feature KD improve between-class student representation and novel-class discovery over standard logits KD, with uncertainty-KD retained as the existing comparison?"
                 if options.objective_profile == "ce_class_center_feature_kd"
+                else "Does teacher-correct selective logits KD improve student representation and novel-class discovery over standard logits KD, with uncertainty-KD retained as the existing comparison?"
+                if options.objective_profile == "ce_selective_kd"
                 else "Does teacher-uncertainty weighting of logits KD improve semantic-hard novel-class discovery over standard KL, conditional on the fixed current training pipeline?"
             ),
             "seed": int(seed),
@@ -740,6 +765,8 @@ def main() -> None:
                 if options.objective_profile == "ce_centered_feature_kd"
                 else "standard logits KD vs standard logits KD + class-center feature KD vs uncertainty-KD"
                 if options.objective_profile == "ce_class_center_feature_kd"
+                else "standard logits KD vs teacher-correct selective logits KD vs uncertainty-KD"
+                if options.objective_profile == "ce_selective_kd"
                 else "alpha_kd=0 vs standard logits KD vs uncertainty-weighted logits KD"
                 if options.include_no_kd
                 else "kd_mode: standard vs decoupled vs uncertainty_decoupled"
@@ -757,9 +784,13 @@ def main() -> None:
                 "0.1 in class_center_feature arm only; known-label class-center backbone geometry"
                 if options.objective_profile == "ce_class_center_feature_kd" else "disabled"
             ),
+            "selective_kd": (
+                "teacher-prediction-correct samples only in selective arm"
+                if options.objective_profile == "ce_selective_kd" else "disabled"
+            ),
             "no_kd_control_definition": ("alpha_kd=0; all other supervised and auxiliary objectives remain active" if options.include_no_kd else None),
             "ce_only_control_definition": ("all numeric alpha_* coefficients are zero, discovery/outlier training is disabled, and evaluation uses max_softmax" if options.objective_profile == "ce_only" else None),
-            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd", "ce_class_center_feature_kd"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
+            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd", "ce_class_center_feature_kd", "ce_selective_kd"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
             "checkpoint_selection": "known validation accuracy only",
             "threshold_calibration": "known validation only, target 95% coverage",
             "clustering": "automatic K; K selected from unlabeled candidate geometry; oracle-K metrics are separate upper-bound diagnostics",
@@ -799,6 +830,8 @@ def main() -> None:
             if options.objective_profile == "ce_centered_feature_kd"
             else "standard logits KD vs standard logits KD + class-center feature KD vs uncertainty-KD"
             if options.objective_profile == "ce_class_center_feature_kd"
+            else "standard logits KD vs teacher-correct selective logits KD vs uncertainty-KD"
+            if options.objective_profile == "ce_selective_kd"
             else "alpha_kd and kd_mode"
             if options.include_no_kd
             else "kd_mode: standard vs decoupled vs uncertainty_decoupled"

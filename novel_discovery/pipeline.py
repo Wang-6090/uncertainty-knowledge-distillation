@@ -37,6 +37,7 @@ from .losses import (
     discovery_view_loss,
     distillation_loss,
     quality_aware_distillation_loss,
+    selective_distillation_loss,
     teacher_quality_weights,
     uncertainty_decoupled_distillation_loss,
     energy_margin_loss,
@@ -2066,6 +2067,7 @@ def train_one_epoch_student(
     kd_weight_mean_meter = AverageMeter()
     kd_weight_std_meter = AverageMeter()
     kd_weight_ess_meter = AverageMeter()
+    kd_selective_active_fraction_meter = AverageMeter()
     feat_kd_meter = AverageMeter()
     centered_feat_kd_meter = AverageMeter()
     centered_feat_kd_active_fraction_meter = AverageMeter()
@@ -2241,6 +2243,8 @@ def train_one_epoch_student(
                 power=kd_quality_power,
                 mode=kd_quality_weight_mode,
             )
+        elif kd_mode == "selective":
+            diagnostic_kd_weights = teacher_kd_logits.detach().argmax(dim=1).eq(labels).float()
         else:
             diagnostic_kd_weights = uncertainty_weights(
                 teacher_kd_uncertainty_value,
@@ -2455,6 +2459,10 @@ def train_one_epoch_student(
                 quality_power=kd_quality_power,
                 quality_weight_mode=kd_quality_weight_mode,
             )
+        elif kd_mode == "selective":
+            loss_kd, selective_active_fraction = selective_distillation_loss(
+                s_out["logits"], teacher_kd_logits, labels, temperature=temperature
+            )
         else:
             loss_kd = distillation_loss(
                 s_out["logits"],
@@ -2466,6 +2474,9 @@ def train_one_epoch_student(
                 uncertainty_weight_min=uncertainty_weight_min,
                 uncertainty_weight_max=uncertainty_weight_max,
             )
+            selective_active_fraction = s_out["logits"].new_tensor(0.0)
+        if kd_mode != "selective":
+            selective_active_fraction = s_out["logits"].new_tensor(0.0)
         feature_teacher_uncertainty = (
             teacher_kd_uncertainty_value if kd_mode == "uncertainty" else None
         )
@@ -5230,6 +5241,9 @@ def train_one_epoch_student(
             diagnostic_kd_weights.std(unbiased=False).item(), images.size(0)
         )
         kd_weight_ess_meter.update(kd_weight_ess_fraction.item(), images.size(0))
+        kd_selective_active_fraction_meter.update(
+            selective_active_fraction.item(), images.size(0)
+        )
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
         centered_feat_kd_meter.update(loss_centered_feat_kd.item(), images.size(0))
         centered_feat_kd_active_fraction_meter.update(
@@ -5452,6 +5466,8 @@ def train_one_epoch_student(
             kd_mode in {"uncertainty", "uncertainty_decoupled"}
         ),
         "kd_quality_weight_applied": bool(kd_mode == "quality_aware"),
+        "kd_selective_applied": bool(kd_mode == "selective"),
+        "kd_selective_active_fraction": kd_selective_active_fraction_meter.avg,
         "kd_quality_floor": float(kd_quality_floor),
         "kd_quality_power": float(kd_quality_power),
         "kd_quality_weight_mode": str(kd_quality_weight_mode),

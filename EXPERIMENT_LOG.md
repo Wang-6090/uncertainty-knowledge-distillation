@@ -9279,3 +9279,11 @@ student feature 上计算固定 `k=10` 的邻域风险均值，使用 `0.75 * po
 相对 standard-KD，class-center arm 的 AUROC/AUPR/FPR95 变化为 `-0.005571/-0.007130/-0.000833`，已知接受率变化 `-2.017` 个百分点，accepted-known accuracy 变化 `+1.351` 个百分点，未知拒识率变化 `+3.250` 个百分点，候选池纯度变化 `-1.741` 个百分点，Auto-K 绝对误差从 `4` 增加到 `8`，Cluster ACC/NMI/ARI 变化为 `-0.361/-3.580/+1.585` 个百分点。known-validation 末 epoch 的 feature within mean `0.226133→0.219553`、nearest-center distance `0.171792→0.162457` 略有变化，但 center margin `-0.054341→-0.057095`，known accuracy 仅 `0.705667→0.706000`，没有形成一致的表征几何改善。
 
 阶段结论：类中心 feature KD 的实现和梯度路径真实有效，但在一个 fresh split 上没有同时改善已知表征、未知检测、候选纯度和新类聚类，冻结为 opt-in 候选；不扫描权重、不复用 seed2137 做确认、不修改默认 standard-KD 或 uncertainty-KD。详细报告见 `analysis/team_a_class_center_feature_kd_20261122.md`，协议见 `docs/team_a_representation/class_center_feature_kd_protocol.md`，机器结果见 `analysis/team_a_class_center_feature_kd_20261122_s2137.json`。
+
+### 2026-11-22：teacher-correct selective logits KD 阶段启动
+
+前面的 formal CE-only A/B/C、类内中心化 feature KD 和类中心 feature KD 均没有证明 standard-KD 或 uncertainty-KD 能稳定改善学生表征及新类发现；quality-aware KD 也已作为连续教师质量权重完成确认。因此本阶段不再重复权重函数或 feature geometry 扫描，转而检验一个不同的失败原因：教师预测错误的样本，其 soft target 可能把学生表征带偏。
+
+新增默认关闭的 `kd_mode=selective`：只在教师 top-1 预测与已知训练标签一致的样本上计算 standard logits-KD，未被选中的样本仍保留普通分类 CE。它使用已知训练标签进行训练门控，不读取未知标签、mixed pool、测试标签、学生不确定性头或最终拒识分数。runner 的新 profile 为 `ce_selective_kd`，三臂为 `standard`、`selective` 和既有 `uncertainty`，固定 seed `2138`、四个 epoch、known-validation checkpoint selection、max-softmax、95% known coverage 和自动 K。协议、机制门禁和停止条件见 `docs/team_a_representation/selective_kd_protocol.md`。
+
+代码预检已通过：selective loss 的正确样本选择、教师无梯度、无正确样本时有限零损失的单测 `22 passed`，Python 编译通过；2138 fresh split 的 runner dry-run 通过，三臂配置和标签隔离条件符合要求。正式性能结论等待三臂训练、发现、聚类及机制门禁全部完成后再记录。

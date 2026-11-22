@@ -1312,6 +1312,7 @@ def build_parser():
             "decoupled",
             "uncertainty_decoupled",
             "quality_aware",
+            "selective",
         ],
         default="standard",
         help=(
@@ -1320,7 +1321,8 @@ def build_parser():
             "a validated core method; decoupled separates target and non-target "
             "relations, and uncertainty_decoupled gates only non-target relations."
             " quality_aware uses the labelled teacher true-class confidence to "
-            "downweight unreliable soft targets."
+            "downweight unreliable soft targets; selective keeps only teacher-"
+            "correct soft targets."
         ),
     )
     p.add_argument("--alpha-supcon", type=float, default=0.1)

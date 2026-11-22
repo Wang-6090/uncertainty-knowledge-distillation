@@ -130,6 +130,39 @@ def quality_aware_kl_loss(
     return (per_sample * weights).mean()
 
 
+def selective_kl_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    temperature: float = 2.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Distill only samples the teacher classifies correctly.
+
+    The known training label is used only to decide whether the detached
+    teacher soft target is admissible.  Returning the selected fraction keeps
+    the hard gate auditable and avoids conflating it with uncertainty weights.
+    A batch with no correct teacher prediction contributes a finite zero loss.
+    """
+    if student_logits.shape != teacher_logits.shape or student_logits.ndim != 2:
+        raise ValueError("student and teacher logits must have matching [batch, classes] shapes")
+    if labels.shape != (student_logits.size(0),):
+        raise ValueError("labels must have shape [batch_size]")
+    if student_logits.size(0) == 0:
+        return _zero_loss(student_logits), student_logits.new_tensor(0.0)
+    if bool(((labels < 0) | (labels >= student_logits.size(1))).any()):
+        raise ValueError("labels must index the logits class dimension")
+    teacher_prediction = teacher_logits.detach().argmax(dim=1)
+    selected = teacher_prediction.eq(labels)
+    active_fraction = selected.float().mean()
+    if not bool(selected.any()):
+        return _zero_loss(student_logits), active_fraction
+    per_sample = per_sample_kl_distillation_loss(
+        student_logits[selected], teacher_logits[selected], temperature=temperature
+    )
+    return per_sample.mean(), active_fraction
+
+
 def uncertainty_decoupled_kl_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,

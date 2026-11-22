@@ -16,6 +16,7 @@ from novel_discovery.losses import (
     distillation_loss,
     feature_distillation_loss,
     quality_aware_distillation_loss,
+    selective_distillation_loss,
     teacher_quality_weights,
     uncertainty_decoupled_distillation_loss,
 )
@@ -32,6 +33,33 @@ from scripts.run_uncertainty_kd_core_pair import discovery_score_mode_for_profil
 
 
 class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
+    def test_selective_kd_keeps_only_teacher_correct_rows(self):
+        student = torch.tensor(
+            [[1.0, 0.0, 0.0], [0.2, 0.8, 0.0]], requires_grad=True
+        )
+        teacher = torch.tensor(
+            [[3.0, 0.0, 0.0], [0.0, 3.0, 0.0]], requires_grad=True
+        )
+        labels = torch.tensor([0, 2])
+        loss, fraction = selective_distillation_loss(student, teacher, labels)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertAlmostEqual(fraction.item(), 0.5)
+        loss.backward()
+        self.assertGreater(student.grad.abs().sum().item(), 0.0)
+        self.assertIsNone(teacher.grad)
+
+    def test_selective_kd_returns_finite_zero_when_teacher_is_always_wrong(self):
+        student = torch.randn(2, 3, requires_grad=True)
+        teacher = torch.tensor([[0.0, 2.0, 0.0], [0.0, 0.0, 2.0]], requires_grad=True)
+        loss, fraction = selective_distillation_loss(
+            student, teacher, torch.tensor([0, 0])
+        )
+        self.assertEqual(loss.item(), 0.0)
+        self.assertEqual(fraction.item(), 0.0)
+        loss.backward()
+        self.assertEqual(student.grad.abs().sum().item(), 0.0)
+        self.assertIsNone(teacher.grad)
+
     def test_isolated_centered_feature_profile_uses_max_softmax_discovery(self):
         self.assertEqual(
             discovery_score_mode_for_profile("ce_centered_feature_kd"),
