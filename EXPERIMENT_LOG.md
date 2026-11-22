@@ -9297,3 +9297,39 @@ seed `2138` 的三臂正式运行已完成且进程正常退出：standard logit
 相对同 seed 的 standard-KD，selective arm 的 AUROC/AUPR 变化为 `+0.002764/+0.009023`，unknown rejection `+1.700` 个百分点，candidate purity `+3.589` 个百分点，known accuracy `+1.683` 个百分点，Cluster ACC/ARI 变化为 `+0.472/+1.591` 个百分点，但 Cluster NMI `-1.175` 个百分点；FPR95 上升 `1.900` 个百分点。验证集表征几何中 feature within mean 从 `0.227453` 降到 `0.215512`，center margin 从 `-0.067853` 改善到 `-0.056426`。uncertainty arm 相对 standard 的 AUROC `-0.001877`、Cluster NMI `-3.701` 个百分点，未显示额外稳定收益。
 
 按预先固定的 promotion rule，selective pilot 因同时改善排序指标和 candidate purity、且机制真实接入，进入两个全新 semantic-hard seed 的确认阶段；但单 seed 的 NMI 下降和 uncertainty-KD 的负向结果都不支持修改默认 `kd_mode=standard`。下一阶段固定 selective gate 和其余协议，不扫描门控比例、蒸馏系数、温度或拒识评分规则；若确认阶段不能复现检测加下游收益，则冻结为 opt-in 诊断机制，不重复 2138 训练。
+
+### 2026-11-22：teacher-correct selective logits KD 确认完成
+
+按 pilot 阶段预先固定的协议，在全新 semantic-hard CIFAR-100 60/40 seed `2163/2164` 上完成了
+standard logits-KD、teacher-correct selective logits-KD 和既有 uncertainty-KD 三臂确认。每个 seed
+共享 split-matched teacher、学生初始化、四个 epoch、known-validation checkpoint selection、
+max-softmax、known-validation 95% coverage、matched mixed discovery pool、Auto-K 和聚类流程；
+feature KD、拒识分支 KD、discovery/PU 训练目标和 rejector training 均关闭。没有扫描门控比例、
+蒸馏系数、温度或评分规则，未知/测试标签只用于最终评价。
+
+机制审计全部通过。selective arm 的 teacher-correct active fraction：`2163` 为
+`0.6494/0.6475/0.6509/0.6475`，`2164` 为 `0.6386/0.6344/0.6403/0.6358`；两个 seed 的四个
+epoch 均有非零 selective KD loss、KD gradient 和 student classifier update。standard arm 两个 seed
+均未应用 uncertainty weight；uncertainty arm 两个 seed 均四个 epoch 应用独立非均匀权重，权重标准差
+约为 `0.1814–0.2024`，ESS fraction 约为 `0.9605–0.9680`。教师输出 detached，优化器只更新学生，
+没有混入学生 uncertainty head、分类熵或最终拒识分数。
+
+相对同 seed 的 standard-KD，selective arm 的变化如下：
+
+| 指标 | seed 2163 | seed 2164 | 均值 ± 样本标准差 |
+|---|---:|---:|---:|
+| AUROC | -0.002593 | +0.020465 | +0.008936 ± 0.016305 |
+| AUPR | -0.006328 | +0.009173 | +0.001423 ± 0.010961 |
+| FPR95 | -0.433 pp | -4.067 pp | -2.250 ± 2.569 pp |
+| 已知准确率 | +0.717 pp | +3.667 pp | +2.192 ± 2.086 pp |
+| 未知拒识率 | -1.275 pp | -0.225 pp | -0.750 ± 0.742 pp |
+| 候选池纯度 | -1.599 pp | -0.580 pp | -1.089 ± 0.721 pp |
+| Cluster ACC/NMI/ARI | +3.789/+6.603/+0.672 pp | +1.011/+1.011/+0.690 pp | +2.400/+3.807/+0.681 pp |
+| Auto-K 绝对误差 | -6 | -6 | -6 ± 0 |
+
+因此，selective KD 的机制真实有效，也在两个 seed 上改善了已知准确率、聚类指标和 Auto-K 误差；但两个 seed
+的 unknown rejection 与 candidate purity 都下降，AUROC/AUPR 方向也不一致，没有形成“表征改善传递到
+未知检测和新类发现”的端到端稳定证据。按预先固定的晋级规则，selective KD 冻结为 opt-in 诊断机制，默认
+仍为 `kd_mode=standard`；uncertainty-KD 也没有显示额外稳定收益。详细逐 seed 原始指标和机制字段见
+`docs/team_a_representation/selective_kd_confirmation_20261122.md` 及对应 JSON，后续不重复训练 `2138/2163/2164`，
+也不继续扫描 selective gate 或 uncertainty weighting。

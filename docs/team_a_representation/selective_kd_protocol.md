@@ -71,3 +71,18 @@ pilot. The detailed result is recorded in
 
 The fixed confirmation seeds are `2163` and `2164`. No gate threshold, loss
 coefficient, temperature, or score rule may be scanned in that stage.
+
+## Confirmation decision (seeds 2163 and 2164)
+
+The mechanism gates passed on both fresh splits: teacher-correct selective KD
+was active in every epoch, produced nonzero KD gradients, and updated the
+student classifier. Standard-KD never applied uncertainty weights, while the
+uncertainty arm applied its separate nonuniform weights in every epoch.
+
+The performance gate did not pass. Selective KD improved known accuracy,
+Cluster ACC/NMI/ARI, and Auto-K error on both seeds, but both seeds lost
+unknown rejection and candidate purity. AUROC and AUPR changed in opposite
+directions across seeds. The method is therefore frozen as an opt-in
+diagnostic and does not change the default `kd_mode=standard`. The detailed
+per-seed report is in
+[`selective_kd_confirmation_20261122.md`](selective_kd_confirmation_20261122.md).

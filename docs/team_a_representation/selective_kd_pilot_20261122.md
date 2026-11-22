@@ -61,3 +61,13 @@ thresholds, loss coefficients, temperatures, or score rules. If the
 confirmation does not reproduce detection plus a candidate or clustering gain
 without a material trade-off, selective KD will be frozen as a diagnostic
 variant.
+
+## Confirmation outcome
+
+The fixed confirmation completed successfully on seeds `2163` and `2164`.
+The mechanism audit passed, but the performance promotion rule did not:
+selective KD improved known accuracy and clustering metrics on both seeds,
+while unknown rejection and candidate purity decreased on both seeds. AUROC
+and AUPR were seed-sensitive. The result is recorded in
+[`selective_kd_confirmation_20261122.md`](selective_kd_confirmation_20261122.md);
+selective KD remains opt-in and the default remains standard logits KD.
