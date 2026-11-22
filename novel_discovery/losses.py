@@ -838,6 +838,47 @@ def centered_feature_distillation_loss(
     return torch.cat(losses, dim=0).mean()
 
 
+def class_center_feature_distillation_loss(
+    student_features: torch.Tensor,
+    teacher_features: torch.Tensor,
+    labels: torch.Tensor,
+) -> torch.Tensor:
+    """Align labelled class-center directions between student and teacher.
+
+    This transfers between-class geometry without forcing each student sample
+    to reproduce teacher-specific within-class variation.  Only valid known
+    labels are used; teacher features and class means are detached.
+    """
+    if student_features.ndim != 2 or teacher_features.ndim != 2:
+        raise ValueError("student_features and teacher_features must be 2-D")
+    if student_features.shape != teacher_features.shape:
+        raise ValueError("student_features and teacher_features must match")
+    if labels.shape != (student_features.size(0),):
+        raise ValueError("labels must have shape [batch_size]")
+    if student_features.size(0) == 0:
+        return student_features.sum() * 0.0
+
+    labels = labels.to(device=student_features.device, dtype=torch.long)
+    valid = labels >= 0
+    teacher = teacher_features.detach()
+    losses = []
+    for class_label in torch.unique(labels[valid], sorted=True):
+        mask = valid & labels.eq(class_label)
+        student_center = student_features[mask].mean(dim=0)
+        teacher_center = teacher[mask].mean(dim=0)
+        losses.append(
+            1.0
+            - F.cosine_similarity(
+                student_center.unsqueeze(0),
+                teacher_center.unsqueeze(0),
+                dim=-1,
+            ).squeeze(0)
+        )
+    if not losses:
+        return student_features.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
 def pu_unknown_feature_margin_loss(
     known_features: torch.Tensor,
     unlabeled_features: torch.Tensor,

@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from novel_discovery.losses import (
+    class_center_feature_distillation_loss,
     centered_feature_distillation_loss,
     distillation_loss,
     feature_distillation_loss,
@@ -79,6 +80,25 @@ class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
             centered_feature_distillation_loss(
                 torch.zeros(2, 3), torch.zeros(2, 4), torch.tensor([0, 0])
             )
+
+    def test_class_center_feature_kd_updates_student_only(self):
+        student = torch.tensor(
+            [[1.0, 0.0], [0.2, 0.9], [0.0, 1.0], [0.8, 0.3]],
+            requires_grad=True,
+        )
+        teacher = torch.tensor(
+            [[0.9, 0.1], [0.1, 0.9], [0.1, 0.9], [0.9, 0.1]],
+            requires_grad=True,
+        )
+        loss = class_center_feature_distillation_loss(
+            student, teacher, torch.tensor([0, 0, 1, 1])
+        )
+        self.assertTrue(torch.isfinite(loss))
+        self.assertGreater(loss.item(), 0.0)
+        loss.backward()
+        self.assertIsNotNone(student.grad)
+        self.assertGreater(student.grad.abs().sum().item(), 0.0)
+        self.assertIsNone(teacher.grad)
 
     def test_quality_weights_use_true_class_confidence_and_are_detached(self):
         teacher_logits = torch.tensor(

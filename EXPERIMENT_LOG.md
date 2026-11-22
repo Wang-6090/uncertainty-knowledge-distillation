@@ -9269,3 +9269,13 @@ student feature 上计算固定 `k=10` 的邻域风险均值，使用 `0.75 * po
 相对 standard-KD，centered arm 的检测与聚类均退化：AUROC/AUPR/FPR95 分别变化 `-0.008495/-0.010817/+0.002833`，unknown rejection `-2.700` 个百分点，candidate purity `-2.798` 个百分点，Cluster ACC/NMI/ARI 分别变化 `-1.122/-1.612/-0.228` 个百分点，Auto-K absolute error `-2`（单项变化不能抵消整体退化）。known-only validation geometry 也没有改善：末 epoch feature within mean `0.213106` 对 standard `0.213759` 略低，但 nearest-center distance `0.172413` 对 `0.176464` 下降，center margin `-0.040693` 对 `-0.037295` 变差；known accuracy `0.697333` 对 `0.700000` 下降。
 
 同一新 split 上 uncertainty-KD 相对 standard-KD 的 AUROC/AUPR/unknown rejection 变化为 `-0.006549/-0.004570/-1.125` 个百分点，而 Cluster ACC/NMI/ARI 变化为 `+0.541/+1.689/+1.352` 个百分点，仍不足以说明稳定端到端收益。按预设 pilot gate，类内中心化 feature KD 没有同时改善已知表征和下游指标，因此冻结为 opt-in 研究候选，不扫描其权重、不复用 seed2135 做确认，也不修改默认 standard-KD 或 uncertainty-KD。协议见 `docs/team_a_representation/centered_feature_kd_protocol.md`，机器结果见 `analysis/team_a_centered_feature_kd_20261122_s2135.json`。
+
+### 2026-11-22：类中心 feature KD pilot 完成并冻结
+
+为继续针对“logits-KD 是否改善学生表征”这一负责范围内的问题，新增了与前一轮类内中心化 feature KD 不同的候选：只对已知训练批次按类别计算教师与学生 backbone 的批内类中心，并对齐类中心方向，避免强制学生复制教师的样本级类内变化。三臂为 `standard`、`class_center_feature`（CE + standard logits-KD + 固定 `alpha_class_center_feat_kd=0.1`）和 `uncertainty`；使用全新 semantic-hard CIFAR-100 60/40 seed `2137`。三臂共享 teacher、学生初始化、四个 epoch、known-validation checkpoint selection、max-softmax 评测、known-validation 95% coverage 校准和自动 K；未知标签只用于最终评价。该方法没有修改拒识器、候选筛选或聚类流程。
+
+机制门禁通过：class-center KD loss 四个 epoch 为 `0.655439/0.650050/0.648794/0.645664`，有效已知样本比例均为 `1.0`，对应 encoder gradient norm 为 `0.082992/0.064009/0.062849/0.062762`；standard 与 uncertainty 臂的该损失和梯度均为零。教师特征与类中心 detached，单测验证学生获得梯度且教师无梯度，说明该项确实进入总损失并更新学生。
+
+相对 standard-KD，class-center arm 的 AUROC/AUPR/FPR95 变化为 `-0.005571/-0.007130/-0.000833`，已知接受率变化 `-2.017` 个百分点，accepted-known accuracy 变化 `+1.351` 个百分点，未知拒识率变化 `+3.250` 个百分点，候选池纯度变化 `-1.741` 个百分点，Auto-K 绝对误差从 `4` 增加到 `8`，Cluster ACC/NMI/ARI 变化为 `-0.361/-3.580/+1.585` 个百分点。known-validation 末 epoch 的 feature within mean `0.226133→0.219553`、nearest-center distance `0.171792→0.162457` 略有变化，但 center margin `-0.054341→-0.057095`，known accuracy 仅 `0.705667→0.706000`，没有形成一致的表征几何改善。
+
+阶段结论：类中心 feature KD 的实现和梯度路径真实有效，但在一个 fresh split 上没有同时改善已知表征、未知检测、候选纯度和新类聚类，冻结为 opt-in 候选；不扫描权重、不复用 seed2137 做确认、不修改默认 standard-KD 或 uncertainty-KD。详细报告见 `analysis/team_a_class_center_feature_kd_20261122.md`，协议见 `docs/team_a_representation/class_center_feature_kd_protocol.md`，机器结果见 `analysis/team_a_class_center_feature_kd_20261122_s2137.json`。

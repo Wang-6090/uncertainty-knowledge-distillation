@@ -104,7 +104,11 @@ def config_differences(left: dict[str, Any], right: dict[str, Any]) -> dict[str,
 
 def discovery_score_mode_for_profile(objective_profile: str) -> str:
     """Return the score protocol that belongs to the training profile."""
-    if objective_profile in {"ce_only", "ce_centered_feature_kd"}:
+    if objective_profile in {
+        "ce_only",
+        "ce_centered_feature_kd",
+        "ce_class_center_feature_kd",
+    }:
         return "max_softmax"
     return "feature_rejector"
 
@@ -166,6 +170,7 @@ def main() -> None:
             "ua_dkd",
             "quality_aware",
             "ce_centered_feature_kd",
+            "ce_class_center_feature_kd",
         ],
         default="current_auxiliary",
         help=(
@@ -229,6 +234,7 @@ def main() -> None:
 
     base_student["alpha_feat_kd"] = 0.0
     base_student["alpha_centered_feat_kd"] = 0.0
+    base_student["alpha_class_center_feat_kd"] = 0.0
     base_student["kd_mode"] = "standard"
     base_student["kd_uncertainty_source"] = options.kd_uncertainty_source
     base_student["kd_mc_samples"] = int(options.kd_mc_samples)
@@ -291,6 +297,14 @@ def main() -> None:
                 ("centered_feature", "standard", "mean_normalized", float(base_student["alpha_kd"])),
                 ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
             ]
+        elif options.objective_profile == "ce_class_center_feature_kd":
+            if options.include_no_kd:
+                raise ValueError("--include-no-kd is not supported for ce_class_center_feature_kd")
+            arm_specs = [
+                ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
+                ("class_center_feature", "standard", "mean_normalized", float(base_student["alpha_kd"])),
+                ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
+            ]
         else:
             arm_specs = [("standard", "standard", "mean_normalized", float(base_student["alpha_kd"]))]
             if options.include_no_kd:
@@ -302,6 +316,15 @@ def main() -> None:
                 0.1
                 if options.objective_profile == "ce_centered_feature_kd"
                 and arm == "centered_feature"
+                else 0.0
+            )
+            for arm in arm_names
+        }
+        class_center_alpha_by_arm = {
+            arm: (
+                0.1
+                if options.objective_profile == "ce_class_center_feature_kd"
+                and arm == "class_center_feature"
                 else 0.0
             )
             for arm in arm_names
@@ -335,6 +358,7 @@ def main() -> None:
                                 "kd_mode": mode,
                                 "alpha_kd": alpha,
                                 "alpha_centered_feat_kd": centered_alpha_by_arm[arm],
+                                "alpha_class_center_feat_kd": class_center_alpha_by_arm[arm],
                             }
                             for arm, mode, _weight_mode, alpha in arm_specs
                         ],
@@ -377,11 +401,13 @@ def main() -> None:
                 expected_mode = next(spec[1] for spec in arm_specs if spec[0] == arm)
                 expected_alpha = 0.0 if arm in {"no_kd", "ce_only"} else float(base_student["alpha_kd"])
                 expected_centered_alpha = centered_alpha_by_arm[arm]
+                expected_class_center_alpha = class_center_alpha_by_arm[arm]
                 if (
                     saved_config.get("kd_mode") != expected_mode
                     or float(saved_config.get("alpha_kd", -1)) != expected_alpha
                     or float(saved_config.get("alpha_feat_kd", -1)) != 0.0
                     or float(saved_config.get("alpha_centered_feat_kd", -1)) != expected_centered_alpha
+                    or float(saved_config.get("alpha_class_center_feat_kd", -1)) != expected_class_center_alpha
                     or saved_config.get("kd_uncertainty_source") != options.kd_uncertainty_source
                     or int(saved_config.get("kd_mc_samples", -1)) != int(options.kd_mc_samples)
                 ):
@@ -414,6 +440,7 @@ def main() -> None:
             "seed": int(seed),
             "alpha_feat_kd": 0.0,
             "alpha_centered_feat_kd": 0.0,
+            "alpha_class_center_feat_kd": 0.0,
             "kd_mode": "standard",
             "open_val_ratio": 0.0,
         })
@@ -439,6 +466,7 @@ def main() -> None:
             train_args.kd_mode = kd_mode
             train_args.alpha_kd = alpha_kd
             train_args.alpha_centered_feat_kd = centered_alpha_by_arm[arm]
+            train_args.alpha_class_center_feat_kd = class_center_alpha_by_arm[arm]
             # Match the mean KD scale to standard KL; only redistribute
             # per-example mass according to teacher uncertainty.
             train_args.uncertainty_weight_mode = weight_mode
@@ -453,6 +481,7 @@ def main() -> None:
                     saved_train_config.get("kd_mode") != kd_mode
                     or float(saved_train_config.get("alpha_feat_kd", -1)) != 0.0
                     or float(saved_train_config.get("alpha_centered_feat_kd", -1)) != centered_alpha_by_arm[arm]
+                    or float(saved_train_config.get("alpha_class_center_feat_kd", -1)) != class_center_alpha_by_arm[arm]
                     or saved_train_config.get("uncertainty_weight_mode") != weight_mode
                     or float(saved_train_config.get("alpha_kd", -1)) != alpha_kd
                 ):
@@ -468,7 +497,11 @@ def main() -> None:
             discover_args.score_mode = discovery_score_mode_for_profile(
                 options.objective_profile
             )
-            if options.objective_profile in {"ce_only", "ce_centered_feature_kd"}:
+            if options.objective_profile in {
+                "ce_only",
+                "ce_centered_feature_kd",
+                "ce_class_center_feature_kd",
+            }:
                 # These isolated representation/KD evaluations deliberately
                 # do not fit or use a rejector.  Clear the inherited rejector
                 # feature ablation so validation cannot reject an otherwise
@@ -527,6 +560,16 @@ def main() -> None:
                     stats.get("gradient_audit_grad_norm_centered_feat_kd_term")
                     for stats in train_stats
                 ],
+                "class_center_feature_kd_loss_by_epoch": [
+                    stats.get("class_center_feat_kd") for stats in train_stats
+                ],
+                "class_center_feature_kd_active_fraction_by_epoch": [
+                    stats.get("class_center_feat_kd_active_fraction") for stats in train_stats
+                ],
+                "class_center_feature_kd_gradient_norm_by_epoch": [
+                    stats.get("gradient_audit_grad_norm_class_center_feat_kd_term")
+                    for stats in train_stats
+                ],
                 "kd_weight_applied_by_epoch": [stats.get("kd_uncertainty_weight_applied") for stats in train_stats],
                 "kd_quality_weight_applied_by_epoch": [stats.get("kd_quality_weight_applied") for stats in train_stats],
                 "kd_weight_std_by_epoch": [stats.get("kd_weight_std") for stats in train_stats],
@@ -562,6 +605,8 @@ def main() -> None:
                 allowed_differences.add("alpha_kd")
             if options.objective_profile == "ce_centered_feature_kd":
                 allowed_differences.add("alpha_centered_feat_kd")
+            if options.objective_profile == "ce_class_center_feature_kd":
+                allowed_differences.add("alpha_class_center_feat_kd")
             algorithm_diffs = {
                 key: values for key, values in arm_diff.items()
                 if key not in allowed_differences
@@ -577,7 +622,7 @@ def main() -> None:
             no_kd_diffs = config_differences(arms["standard"]["train_config"], arms[control_arm]["train_config"])
             allowed_no_kd_diffs = {
                 key: values for key, values in no_kd_diffs.items()
-                if key not in {"alpha_kd", "alpha_centered_feat_kd", "work_dir", "student_ckpt", "best_epoch", "best_val_known_acc", "best_checkpoint_selection_score", "best_open_checkpoint_stats", "transform_profile_requested"}
+                if key not in {"alpha_kd", "alpha_centered_feat_kd", "alpha_class_center_feat_kd", "work_dir", "student_ckpt", "best_epoch", "best_val_known_acc", "best_checkpoint_selection_score", "best_open_checkpoint_stats", "transform_profile_requested"}
             }
             if allowed_no_kd_diffs:
                 raise RuntimeError(f"unexpected control config differences for seed {seed}: {allowed_no_kd_diffs}")
@@ -589,6 +634,8 @@ def main() -> None:
         for arm in arm_names:
             if float(arms[arm]["train_config"].get("alpha_centered_feat_kd", -1)) != centered_alpha_by_arm[arm]:
                 raise RuntimeError(f"unexpected centered feature KD coefficient for {arm}, seed {seed}")
+            if float(arms[arm]["train_config"].get("alpha_class_center_feat_kd", -1)) != class_center_alpha_by_arm[arm]:
+                raise RuntimeError(f"unexpected class-center feature KD coefficient for {arm}, seed {seed}")
         if options.include_no_kd or options.objective_profile == "ce_only":
             if float(arms[control_arm]["train_config"].get("alpha_kd", -1)) != 0.0:
                 raise RuntimeError(f"control arm has a nonzero logits KD coefficient for seed {seed}")
@@ -650,6 +697,16 @@ def main() -> None:
                 raise RuntimeError(f"centered feature KD had no repeated-class rows in seed {seed}")
             if any(value is None or value <= 0.0 for value in centered_gradients):
                 raise RuntimeError(f"centered feature KD produced no audited gradient in seed {seed}")
+        if options.objective_profile == "ce_class_center_feature_kd":
+            class_center_losses = arms["class_center_feature"]["class_center_feature_kd_loss_by_epoch"]
+            class_center_fractions = arms["class_center_feature"]["class_center_feature_kd_active_fraction_by_epoch"]
+            class_center_gradients = arms["class_center_feature"]["class_center_feature_kd_gradient_norm_by_epoch"]
+            if any(value is None or value <= 0.0 for value in class_center_losses):
+                raise RuntimeError(f"class-center feature KD loss path was not active in seed {seed}")
+            if any(value is None or value <= 0.0 for value in class_center_fractions):
+                raise RuntimeError(f"class-center feature KD had no labelled rows in seed {seed}")
+            if any(value is None or value <= 0.0 for value in class_center_gradients):
+                raise RuntimeError(f"class-center feature KD produced no audited gradient in seed {seed}")
         for arm in arm_names:
             report = arms[arm]["metrics"]
             if report.get("cluster_k") is None or report.get("clustering_skipped"):
@@ -666,6 +723,8 @@ def main() -> None:
                 if options.objective_profile == "quality_aware"
                 else "Does class-centered feature KD improve student representation and novel-class discovery over standard logits KD, with uncertainty-KD retained as the existing comparison?"
                 if options.objective_profile == "ce_centered_feature_kd"
+                else "Does class-center feature KD improve between-class student representation and novel-class discovery over standard logits KD, with uncertainty-KD retained as the existing comparison?"
+                if options.objective_profile == "ce_class_center_feature_kd"
                 else "Does teacher-uncertainty weighting of logits KD improve semantic-hard novel-class discovery over standard KL, conditional on the fixed current training pipeline?"
             ),
             "seed": int(seed),
@@ -679,6 +738,8 @@ def main() -> None:
                 if options.objective_profile == "ce_only"
                 else "standard logits KD vs standard logits KD + class-centered feature KD vs uncertainty-KD"
                 if options.objective_profile == "ce_centered_feature_kd"
+                else "standard logits KD vs standard logits KD + class-center feature KD vs uncertainty-KD"
+                if options.objective_profile == "ce_class_center_feature_kd"
                 else "alpha_kd=0 vs standard logits KD vs uncertainty-weighted logits KD"
                 if options.include_no_kd
                 else "kd_mode: standard vs decoupled vs uncertainty_decoupled"
@@ -692,9 +753,13 @@ def main() -> None:
                 "0.1 in centered_feature arm only; known-label class-centered backbone feature geometry"
                 if options.objective_profile == "ce_centered_feature_kd" else "disabled"
             ),
+            "class_center_feature_kd": (
+                "0.1 in class_center_feature arm only; known-label class-center backbone geometry"
+                if options.objective_profile == "ce_class_center_feature_kd" else "disabled"
+            ),
             "no_kd_control_definition": ("alpha_kd=0; all other supervised and auxiliary objectives remain active" if options.include_no_kd else None),
             "ce_only_control_definition": ("all numeric alpha_* coefficients are zero, discovery/outlier training is disabled, and evaluation uses max_softmax" if options.objective_profile == "ce_only" else None),
-            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
+            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd", "ce_class_center_feature_kd"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
             "checkpoint_selection": "known validation accuracy only",
             "threshold_calibration": "known validation only, target 95% coverage",
             "clustering": "automatic K; K selected from unlabeled candidate geometry; oracle-K metrics are separate upper-bound diagnostics",
@@ -732,6 +797,8 @@ def main() -> None:
             if options.objective_profile == "ce_only"
             else "standard logits KD vs standard logits KD + class-centered feature KD vs uncertainty-KD"
             if options.objective_profile == "ce_centered_feature_kd"
+            else "standard logits KD vs standard logits KD + class-center feature KD vs uncertainty-KD"
+            if options.objective_profile == "ce_class_center_feature_kd"
             else "alpha_kd and kd_mode"
             if options.include_no_kd
             else "kd_mode: standard vs decoupled vs uncertainty_decoupled"

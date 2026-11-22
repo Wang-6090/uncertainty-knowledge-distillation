@@ -44,6 +44,7 @@ from .losses import (
     angular_margin_loss,
     feature_distillation_loss,
     centered_feature_distillation_loss,
+    class_center_feature_distillation_loss,
     relational_distance_distillation_loss,
     confidence_gated_relational_distance_distillation_loss,
     hard_proxy_margin_loss,
@@ -1811,6 +1812,7 @@ def train_one_epoch_student(
     alpha_kd: float = 1.0,
     alpha_feat_kd: float = 0.0,
     alpha_centered_feat_kd: float = 0.0,
+    alpha_class_center_feat_kd: float = 0.0,
     alpha_relational_kd: float = 0.0,
     alpha_supcon: float = 0.1,
     alpha_raw_supcon: float = 0.0,
@@ -2067,6 +2069,8 @@ def train_one_epoch_student(
     feat_kd_meter = AverageMeter()
     centered_feat_kd_meter = AverageMeter()
     centered_feat_kd_active_fraction_meter = AverageMeter()
+    class_center_feat_kd_meter = AverageMeter()
+    class_center_feat_kd_active_fraction_meter = AverageMeter()
     relational_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
     rejection_ce_meter = AverageMeter()
@@ -2492,6 +2496,18 @@ def train_one_epoch_student(
         else:
             loss_centered_feat_kd = s_out["logits"].new_tensor(0.0)
             centered_feat_kd_active_fraction = 0.0
+        if alpha_class_center_feat_kd > 0.0:
+            loss_class_center_feat_kd = class_center_feature_distillation_loss(
+                s_out["features"], t_out["features"], labels
+            )
+            class_center_labels = labels >= 0
+            class_center_active_count = int(class_center_labels.sum().item())
+            class_center_feat_kd_active_fraction = class_center_active_count / max(
+                int(labels.numel()), 1
+            )
+        else:
+            loss_class_center_feat_kd = s_out["logits"].new_tensor(0.0)
+            class_center_feat_kd_active_fraction = 0.0
         loss_relational_kd = s_out["logits"].new_tensor(0.0)
         if alpha_relational_kd > 0.0:
             loss_relational_kd = relational_distance_distillation_loss(
@@ -4722,6 +4738,7 @@ def train_one_epoch_student(
             + alpha_kd * loss_kd
             + alpha_feat_kd * loss_feat_kd
             + alpha_centered_feat_kd * loss_centered_feat_kd
+            + alpha_class_center_feat_kd * loss_class_center_feat_kd
             + alpha_relational_kd * loss_relational_kd
             + alpha_rejection_kd * loss_rejection_kd
             + alpha_rejection_feat_kd * loss_rejection_feat_kd
@@ -4879,6 +4896,9 @@ def train_one_epoch_student(
                     "kd": loss_kd,
                     "centered_feat_kd_term": (
                         alpha_centered_feat_kd * loss_centered_feat_kd
+                    ),
+                    "class_center_feat_kd_term": (
+                        alpha_class_center_feat_kd * loss_class_center_feat_kd
                     ),
                     # Record the coefficient-scaled relation term so the
                     # audit reflects the gradient that actually contributes
@@ -5215,6 +5235,12 @@ def train_one_epoch_student(
         centered_feat_kd_active_fraction_meter.update(
             centered_feat_kd_active_fraction, images.size(0)
         )
+        class_center_feat_kd_meter.update(
+            loss_class_center_feat_kd.item(), images.size(0)
+        )
+        class_center_feat_kd_active_fraction_meter.update(
+            class_center_feat_kd_active_fraction, images.size(0)
+        )
         relational_kd_meter.update(loss_relational_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
@@ -5435,6 +5461,8 @@ def train_one_epoch_student(
         "feat_kd": feat_kd_meter.avg,
         "centered_feat_kd": centered_feat_kd_meter.avg,
         "centered_feat_kd_active_fraction": centered_feat_kd_active_fraction_meter.avg,
+        "class_center_feat_kd": class_center_feat_kd_meter.avg,
+        "class_center_feat_kd_active_fraction": class_center_feat_kd_active_fraction_meter.avg,
         "relational_kd": relational_kd_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,
