@@ -9351,3 +9351,27 @@ transfer loss pilot；修正分析本身也没有改变默认 KD。正式 max-so
 [`docs/team_a_representation/selective_kd_confirmation_20261122.md`](docs/team_a_representation/selective_kd_confirmation_20261122.md)
 单独判断：selective/uncertainty 的下游收益仍不足以证明稳定新类发现增益。细节、逐 seed 表和原始文件清单见
 [`docs/team_a_representation/selective_kd_feature_overlap_20261123.md`](docs/team_a_representation/selective_kd_feature_overlap_20261123.md)。
+
+### 2026-11-23：SRD cross-network KD pilot 预注册与预检
+
+在 standard/uncertainty-KD、quality-aware、selective-KD 及 feature-geometry 多轮结果仍缺少稳定端到端收益后，本阶段不再重复调整 uncertainty 权重或特征距离；改测语义表示蒸馏（SRD）的不同路径：将学生 backbone feature 输入冻结教师分类器，以教师语义空间的 KL 监督学生表示。固定 seed `2170`、semantic-hard CIFAR-100 60/40、三臂 `standard / srd / uncertainty`、split-matched teacher、4 epoch 学生训练、known-validation checkpoint selection、max-softmax、known-validation 95% coverage、Auto-K 和聚类；CE-only profile 关闭 SupCon、prototype、PU/rejection 及其他辅助目标。三臂之外无超参扫描，未知/测试标签仅用于最终评价。协议见 [`docs/team_a_representation/srd_kd_protocol_20261123.md`](docs/team_a_representation/srd_kd_protocol_20261123.md)。
+
+实现审计确认 SRD 教师 logits 与 teacher classifier 参数均 detach，KD 经 `alpha_kd` 进入总损失，梯度审计统计 student encoder 参数上的 KD 梯度；ResNet-34/18 当前 CIFAR profile pooled feature 均为 512 维。新增公式/梯度/维度单测与 split dry-run 无写入回归测试，`tests/test_uncertainty_kd.py` 为 `25 passed`。预检同时发现原 runner dry-run 在缺失 split 时会写 split，已修正为内存构造，并允许复用已有协议匹配 split；seed `2170` 的 runner dry-run 通过，输出目标为新路径 `team_a_srd_20261123`，本机 CIFAR-100 与 RTX 4060 Laptop GPU 可用。
+
+三臂正式训练、known-only checkpoint 选择、max-softmax 检测、known-validation 95% calibration、candidate pool、Auto-K 与聚类全部完成。标准与 SRD 配置唯一训练差异是 `kd_mode`；standard 与 uncertainty 也仅该字段不同。三臂 calibration acceptance 都为 `0.949176`，rejector inactive。SRD 四 epoch KD loss 为 `2.059221/0.937482/0.760278/0.674810`，student encoder KD gradient norm 为 `14.7992/10.6942/9.2230/8.2236`，分类头更新每 epoch 非零。uncertainty 权重四 epoch 均应用，weight SD `0.22545-0.22596`、ESS fraction `0.95126-0.95149`。
+
+相对 standard-KD，SRD 的 AUROC/AUPR 为 `+0.002328/+0.002088`，FPR95 `-3.467 pp`，unknown rejection `+0.375 pp`，candidate purity `+1.971 pp`；Cluster ACC/ARI `+0.263/+0.823 pp`，NMI `-1.531 pp`，Auto-K error 从 4 降到 2。known-validation within-class cosine distance `0.214449→0.174222`，nearest-center cosine distance `0.176697→0.136102`，center margin `-0.037752→-0.038120` 基本持平且略差；known accuracy `0.705333→0.704667`。因此类内紧致度提升没有伴随局部最近类中心间隔改善。uncertainty-KD 相对 standard 的 AUROC `+0.002022`，但 unknown rejection `-2.775 pp`；NMI `+4.718 pp` 与其余指标未形成足够稳定的联合证据。
+
+随后用新脚本 `scripts/audit_srd_scale_geometry.py` 对 standard/SRD checkpoint 做只读 CIFAR-transform known-validation 审计，3000 个相同验证样本，未使用未知/test 标签。raw feature norm 均值 `30.0581→40.2028`（`+33.7%`），q05/median/q95 均上升；L2 normalized between/total scatter `0.469358→0.492839`（`+0.023481`），与 normalized within-distance 下降同时出现。此结果表明 SRD 的表示信号并非 raw feature norm 缩小，而是 raw magnitude 增长、角向类内紧致度提高、整体 between/total scatter 提高；局部 center margin 仍无改善。该已知验证信号加上 seed2170 多数检测/候选/聚类指标改善、NMI 一项退化，达到“值得确认但不 promotion”的门槛。SRD 不改默认，进入固定 fresh semantic-hard seeds `2171/2172` 确认；规则见 [`srd_kd_protocol_20261123.md`](docs/team_a_representation/srd_kd_protocol_20261123.md)。只确认、不扫描参数；若表示或下游 gate 不通过即冻结。
+
+**跨方法复盘：**近期多种方法的损失确实进入训练并产生 student gradient/update，因此反复无稳定收益主要不是“代码没跑到”。更一致的解释是：这些方法仍在已知类上复制 teacher 预测或改变已知类紧致度，没有直接提供 40 个未知语义类的支持边界/聚类结构；已更正 CIFAR transform 的 teacher 支持几何 AUROC（约 `0.61-0.63`）还低于 student（约 `0.67-0.68`），削弱了 teacher feature geometry 必然可迁移的前提。多个实验呈现排序、固定 coverage 拒识、candidate purity、Auto-K 与 ACC/NMI/ARI 各自变化，说明小的表征位移未必通过整个发现链路。uncertainty 权重有效但 ESS 约 `0.95`，实际重分配温和，而且未被证明与有益 transfer/error 对齐。quality-aware 与 selective confirmation 均体现 seed 敏感；经典 KD 在闭集分类上有效不等于适合 semantic-hard 新类发现。更完整证据、解释边界和下一步建议见 [`kd_method_retrospective_20261123.md`](docs/team_a_representation/kd_method_retrospective_20261123.md)。
+
+按 SRD 固定确认协议，fresh seeds `2171/2172` 的三臂流程已通过 dry-run。运行前核对 output targets 均不存在、CIFAR-100 本地数据可用、GPU 可用、60/40 semantic-hard split 可独立构造；三臂只改变 `kd_mode`，训练预算/known-only checkpoint/calibration/max-softmax/Auto-K/聚类固定，未知标签只用于最终评价。现在启动两 seed 的完整 teacher/student/discovery 运行；不扫描参数，也不覆盖 seed2170 pilot。
+
+### 2026-11-24：SRD cross-network KD 固定确认完成
+
+`2171/2172` 的 standard、SRD、uncertainty 三臂训练、known-only checkpoint、max-softmax 评测、95% known-coverage calibration、候选池、Auto-K 和聚类均正常完成。SRD 机制门通过：两个 seed 每个 epoch 的 KD loss、student encoder KD gradient 和 student update 均为正；教师 logits 与 teacher classifier detach；专项测试 `25 passed`，compileall 通过。逐 seed 原始指标和机器结果见 [`docs/team_a_representation/srd_kd_confirmation_20261124.md`](docs/team_a_representation/srd_kd_confirmation_20261124.md) 与本地 gitignored JSON。
+
+相对同 seed standard-KD，SRD 两 seed 均提升 known-validation normalized between/total scatter（`+0.016440/+0.015459`），表示几何门通过。下游均值差为 AUROC `+0.011523 +/- 0.015905`、unknown rejection `+0.1375 +/- 0.4419 pp`、candidate purity `+0.0251 +/- 0.8087 pp`、Cluster ACC `-0.9304 +/- 1.4824 pp`、NMI `+1.7193 +/- 0.6754 pp`、ARI `-0.6565 +/- 1.3569 pp`；known accuracy 未下降。由于 ACC/NMI/ARI 中只有 NMI 平均非负，未达到预注册的“至少两个聚类指标不下降”确认门。SRD 因此冻结为 opt-in ablation，不改 `kd_mode=standard` 默认，不重复 `2170/2171/2172`，不继续扫 SRD 或 uncertainty 权重。
+
+本阶段结论进一步支持此前复盘：KD 机制可以真实改变学生表示，但已知类紧致度和整体 scatter 的改善并不保证传递到未知候选分区。下一阶段应转向直接约束 known-only 支持边界/分区结构的新假设，并保留 standard-KD、uncertainty-KD 和 SRD 的机制审计边界；未知标签仅用于最终评价。

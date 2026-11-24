@@ -55,6 +55,49 @@ def per_sample_kl_distillation_loss(
     )
 
 
+def semantic_representation_distillation_loss(
+    student_features: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    teacher_classifier_weight: torch.Tensor,
+    teacher_classifier_bias: torch.Tensor | None = None,
+    temperature: float = 2.0,
+) -> torch.Tensor:
+    """Match teacher logits using the frozen teacher classifier as a critic.
+
+    This is the KL instantiation of Semantic Representational Distillation:
+    student features are evaluated by the teacher classifier, then their
+    cross-network logits are matched to the teacher's own logits.
+    """
+    if student_features.ndim != 2 or teacher_logits.ndim != 2:
+        raise ValueError("features and teacher_logits must be rank-2 tensors")
+    if student_features.size(0) != teacher_logits.size(0):
+        raise ValueError("student features and teacher logits must align by batch")
+    if teacher_classifier_weight.ndim != 2:
+        raise ValueError("teacher classifier weight must have shape [classes, features]")
+    if student_features.size(1) != teacher_classifier_weight.size(1):
+        raise ValueError("student and teacher classifier feature dimensions must match")
+    if teacher_logits.size(1) != teacher_classifier_weight.size(0):
+        raise ValueError("teacher logits classes must match teacher classifier outputs")
+    if teacher_classifier_bias is not None and teacher_classifier_bias.shape != (
+        teacher_classifier_weight.size(0),
+    ):
+        raise ValueError("teacher classifier bias must match the class dimension")
+    if student_features.size(0) == 0:
+        return _zero_loss(student_features)
+
+    temperature = max(float(temperature), 1e-6)
+    cross_network_logits = F.linear(
+        student_features,
+        teacher_classifier_weight.detach(),
+        None if teacher_classifier_bias is None else teacher_classifier_bias.detach(),
+    )
+    teacher_prob = F.softmax(teacher_logits.detach() / temperature, dim=-1)
+    student_log_prob = F.log_softmax(cross_network_logits / temperature, dim=-1)
+    return F.kl_div(student_log_prob, teacher_prob, reduction="batchmean") * (
+        temperature**2
+    )
+
+
 def teacher_quality_weights(
     teacher_logits: torch.Tensor,
     labels: torch.Tensor,

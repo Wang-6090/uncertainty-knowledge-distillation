@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 from torch.nn import functional as F
@@ -16,6 +18,7 @@ from novel_discovery.losses import (
     distillation_loss,
     feature_distillation_loss,
     quality_aware_distillation_loss,
+    semantic_representation_distillation,
     selective_distillation_loss,
     teacher_quality_weights,
     uncertainty_decoupled_distillation_loss,
@@ -29,10 +32,83 @@ from novel_discovery.uncertainty_kd import (
     uncertainty_calibration_loss,
     uncertainty_weights,
 )
-from scripts.run_uncertainty_kd_core_pair import discovery_score_mode_for_profile
+from scripts.run_uncertainty_kd_core_pair import (
+    discovery_score_mode_for_profile,
+    make_split,
+)
 
 
 class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
+    def test_dry_run_split_generation_does_not_write_files(self):
+        expected_split = {
+            "protocol": "semantic_hard",
+            "metadata": {"seed": 2170},
+            "known_classes": list(range(60)),
+            "novel_classes": list(range(60, 100)),
+        }
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            split_dir = Path(temporary_dir) / "seed2170"
+            with (
+                patch(
+                    "scripts.run_uncertainty_kd_core_pair.read_cifar100_taxonomy",
+                    return_value=([], [], {}),
+                ),
+                patch(
+                    "scripts.run_uncertainty_kd_core_pair.build_protocols",
+                    return_value={"semantic_hard": expected_split},
+                ),
+            ):
+                split_path, split = make_split(
+                    2170, split_dir, Path(temporary_dir), persist=False
+                )
+            self.assertEqual(split, expected_split)
+            self.assertFalse(split_path.exists())
+            self.assertFalse(split_dir.exists())
+
+    def test_srd_kl_matches_teacher_critic_formula_and_updates_student_only(self):
+        features = torch.tensor(
+            [[0.2, 0.8, -0.1], [0.7, -0.2, 0.3]], requires_grad=True
+        )
+        critic_weight = torch.tensor(
+            [[0.4, -0.1, 0.2], [-0.3, 0.5, 0.1]], requires_grad=True
+        )
+        critic_bias = torch.tensor([0.1, -0.2], requires_grad=True)
+        teacher_logits = torch.tensor(
+            [[1.1, -0.4], [-0.2, 0.9]], requires_grad=True
+        )
+        temperature = 1.7
+        cross_logits = F.linear(features, critic_weight.detach(), critic_bias.detach())
+        expected = F.kl_div(
+            F.log_softmax(cross_logits / temperature, dim=-1),
+            F.softmax(teacher_logits.detach() / temperature, dim=-1),
+            reduction="batchmean",
+        ) * temperature**2
+
+        observed = semantic_representation_distillation(
+            features,
+            teacher_logits,
+            critic_weight,
+            critic_bias,
+            temperature=temperature,
+        )
+        self.assertTrue(torch.allclose(observed, expected))
+        observed.backward()
+        self.assertIsNotNone(features.grad)
+        self.assertGreater(features.grad.abs().sum().item(), 0.0)
+        self.assertIsNone(critic_weight.grad)
+        self.assertIsNone(critic_bias.grad)
+        self.assertIsNone(teacher_logits.grad)
+
+    def test_srd_rejects_incompatible_feature_and_class_dimensions(self):
+        with self.assertRaises(ValueError):
+            semantic_representation_distillation(
+                torch.zeros(2, 4), torch.zeros(2, 3), torch.zeros(3, 5)
+            )
+        with self.assertRaises(ValueError):
+            semantic_representation_distillation(
+                torch.zeros(2, 4), torch.zeros(2, 2), torch.zeros(3, 4)
+            )
+
     def test_selective_kd_keeps_only_teacher_correct_rows(self):
         student = torch.tensor(
             [[1.0, 0.0, 0.0], [0.2, 0.8, 0.0]], requires_grad=True

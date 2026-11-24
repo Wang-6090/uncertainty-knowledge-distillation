@@ -9,6 +9,7 @@ from .uncertainty_kd import (
     feature_distillation_loss as _feature_distillation_loss,
     kl_distillation_loss,
     quality_aware_kl_loss,
+    semantic_representation_distillation_loss,
     selective_kl_loss as _selective_kl_loss,
     teacher_quality_weights as _teacher_quality_weights,
     uncertainty_calibration_loss,
@@ -244,6 +245,22 @@ def distillation_loss(
         uncertainty_weight_mode=uncertainty_weight_mode,
         uncertainty_weight_min=uncertainty_weight_min,
         uncertainty_weight_max=uncertainty_weight_max,
+    )
+
+
+def semantic_representation_distillation(
+    student_features: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    teacher_classifier_weight: torch.Tensor,
+    teacher_classifier_bias: torch.Tensor | None = None,
+    temperature: float = 2.0,
+) -> torch.Tensor:
+    return semantic_representation_distillation_loss(
+        student_features,
+        teacher_logits,
+        teacher_classifier_weight,
+        teacher_classifier_bias,
+        temperature=temperature,
     )
 
 

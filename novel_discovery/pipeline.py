@@ -38,6 +38,7 @@ from .losses import (
     distillation_loss,
     quality_aware_distillation_loss,
     selective_distillation_loss,
+    semantic_representation_distillation,
     teacher_quality_weights,
     uncertainty_decoupled_distillation_loss,
     energy_margin_loss,
@@ -2245,6 +2246,8 @@ def train_one_epoch_student(
             )
         elif kd_mode == "selective":
             diagnostic_kd_weights = teacher_kd_logits.detach().argmax(dim=1).eq(labels).float()
+        elif kd_mode == "srd":
+            diagnostic_kd_weights = torch.ones_like(labels, dtype=torch.float32)
         else:
             diagnostic_kd_weights = uncertainty_weights(
                 teacher_kd_uncertainty_value,
@@ -2462,6 +2465,14 @@ def train_one_epoch_student(
         elif kd_mode == "selective":
             loss_kd, selective_active_fraction = selective_distillation_loss(
                 s_out["logits"], teacher_kd_logits, labels, temperature=temperature
+            )
+        elif kd_mode == "srd":
+            loss_kd = semantic_representation_distillation(
+                s_out["features"],
+                teacher_kd_logits,
+                teacher.classifier.weight,
+                teacher.classifier.bias,
+                temperature=temperature,
             )
         else:
             loss_kd = distillation_loss(

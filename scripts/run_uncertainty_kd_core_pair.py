@@ -79,18 +79,21 @@ def load_args(path: Path, command: str, work_dir: Path, seed: int):
     return args
 
 
-def make_split(seed: int, split_dir: Path, data_root: Path) -> Path:
-    split_dir.mkdir(parents=True, exist_ok=True)
+def make_split(
+    seed: int, split_dir: Path, data_root: Path, *, persist: bool = True
+) -> tuple[Path, dict[str, Any]]:
     split_path = split_dir / "cifar100_60_40_semantic_hard.json"
     if split_path.exists():
         split = read_json(split_path)
         if split.get("metadata", {}).get("seed") != seed or split.get("protocol") != "semantic_hard":
             raise ValueError(f"existing split does not match requested protocol: {split_path}")
-        return split_path
+        return split_path, split
     fine_names, coarse_names, mapping = read_cifar100_taxonomy(data_root)
     split = build_protocols(fine_names, coarse_names, mapping, seed)["semantic_hard"]
-    write_json(split_path, split)
-    return split_path
+    if persist:
+        split_dir.mkdir(parents=True, exist_ok=True)
+        write_json(split_path, split)
+    return split_path, split
 
 
 def config_differences(left: dict[str, Any], right: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
@@ -109,6 +112,7 @@ def discovery_score_mode_for_profile(objective_profile: str) -> str:
         "ce_centered_feature_kd",
         "ce_class_center_feature_kd",
         "ce_selective_kd",
+        "ce_srd",
     }:
         return "max_softmax"
     return "feature_rejector"
@@ -173,6 +177,7 @@ def main() -> None:
             "ce_selective_kd",
             "ce_centered_feature_kd",
             "ce_class_center_feature_kd",
+            "ce_srd",
         ],
         default="current_auxiliary",
         help=(
@@ -204,7 +209,7 @@ def main() -> None:
 
     if options.kd_uncertainty_source != "head" and options.kd_mc_samples < 2:
         raise ValueError("--kd-mc-samples must be at least 2 for MC uncertainty")
-    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd"} and options.include_no_kd:
+    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd"} and options.include_no_kd:
         raise ValueError(
             f"{options.objective_profile} already defines a three-arm comparison; "
             "no-KD is not supported"
@@ -241,7 +246,7 @@ def main() -> None:
     base_student["kd_mode"] = "standard"
     base_student["kd_uncertainty_source"] = options.kd_uncertainty_source
     base_student["kd_mc_samples"] = int(options.kd_mc_samples)
-    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd"}:
+    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd"}:
         base_student["audit_loss_gradients"] = True
     base_student["open_val_ratio"] = 0.0
     base_discover = read_json(discover_source)
@@ -253,12 +258,9 @@ def main() -> None:
     for seed in options.seeds:
         split_dir = ROOT / f"splits/semantic_hard/seed{seed}"
         prospective_split = split_dir / "cifar100_60_40_semantic_hard.json"
-        if options.dry_run and prospective_split.exists():
-            raise FileExistsError(
-                f"dry-run requires a fresh split path: {prospective_split}"
-            )
-        split_path = make_split(seed, split_dir, data_root)
-        split_metadata = read_json(split_path)
+        split_path, split_metadata = make_split(
+            seed, split_dir, data_root, persist=not options.dry_run
+        )
         if len(split_metadata.get("known_classes", [])) != 60 or len(split_metadata.get("novel_classes", [])) != 40:
             raise ValueError("semantic-hard split must have 60 known and 40 novel classes")
 
@@ -312,6 +314,14 @@ def main() -> None:
             arm_specs = [
                 ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
                 ("selective", "selective", "mean_normalized", float(base_student["alpha_kd"])),
+                ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
+            ]
+        elif options.objective_profile == "ce_srd":
+            if options.include_no_kd:
+                raise ValueError("--include-no-kd is not supported for ce_srd")
+            arm_specs = [
+                ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
+                ("srd", "srd", "mean_normalized", float(base_student["alpha_kd"])),
                 ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
             ]
         else:
@@ -511,6 +521,7 @@ def main() -> None:
                 "ce_centered_feature_kd",
                 "ce_class_center_feature_kd",
                 "ce_selective_kd",
+                "ce_srd",
             }:
                 # These isolated representation/KD evaluations deliberately
                 # do not fit or use a rejector.  Clear the inherited rejector
@@ -619,6 +630,8 @@ def main() -> None:
                 allowed_differences.add("alpha_centered_feat_kd")
             if options.objective_profile == "ce_class_center_feature_kd":
                 allowed_differences.add("alpha_class_center_feat_kd")
+            if options.objective_profile == "ce_srd" and arm == "srd":
+                allowed_differences.add("kd_mode")
             algorithm_diffs = {
                 key: values for key, values in arm_diff.items()
                 if key not in allowed_differences
@@ -730,6 +743,13 @@ def main() -> None:
                 values = arms["selective"][key]
                 if any(value is None or value <= 0.0 for value in values):
                     raise RuntimeError(f"selective KD missing effective {key} in seed {seed}")
+        if options.objective_profile == "ce_srd":
+            srd_losses = arms["srd"]["kd_loss_by_epoch"]
+            srd_gradients = arms["srd"]["kd_gradient_norm_by_epoch"]
+            if any(value is None or value <= 0.0 for value in srd_losses):
+                raise RuntimeError(f"SRD loss path was not active in seed {seed}")
+            if any(value is None or value <= 0.0 for value in srd_gradients):
+                raise RuntimeError(f"SRD produced no student-encoder gradient in seed {seed}")
         for arm in arm_names:
             report = arms[arm]["metrics"]
             if report.get("cluster_k") is None or report.get("clustering_skipped"):
@@ -750,6 +770,8 @@ def main() -> None:
                 if options.objective_profile == "ce_class_center_feature_kd"
                 else "Does teacher-correct selective logits KD improve student representation and novel-class discovery over standard logits KD, with uncertainty-KD retained as the existing comparison?"
                 if options.objective_profile == "ce_selective_kd"
+                else "Does semantic representational distillation through the frozen teacher classifier improve student representation and novel-class discovery over standard logits KD?"
+                if options.objective_profile == "ce_srd"
                 else "Does teacher-uncertainty weighting of logits KD improve semantic-hard novel-class discovery over standard KL, conditional on the fixed current training pipeline?"
             ),
             "seed": int(seed),
@@ -767,6 +789,8 @@ def main() -> None:
                 if options.objective_profile == "ce_class_center_feature_kd"
                 else "standard logits KD vs teacher-correct selective logits KD vs uncertainty-KD"
                 if options.objective_profile == "ce_selective_kd"
+                else "standard logits KD vs SRD cross-network KL vs uncertainty-weighted logits KD"
+                if options.objective_profile == "ce_srd"
                 else "alpha_kd=0 vs standard logits KD vs uncertainty-weighted logits KD"
                 if options.include_no_kd
                 else "kd_mode: standard vs decoupled vs uncertainty_decoupled"
@@ -788,9 +812,13 @@ def main() -> None:
                 "teacher-prediction-correct samples only in selective arm"
                 if options.objective_profile == "ce_selective_kd" else "disabled"
             ),
+            "srd": (
+                "alpha_kd * KL(teacher logits || frozen teacher classifier applied to student backbone features); replaces standard logits KD in srd arm"
+                if options.objective_profile == "ce_srd" else "disabled"
+            ),
             "no_kd_control_definition": ("alpha_kd=0; all other supervised and auxiliary objectives remain active" if options.include_no_kd else None),
             "ce_only_control_definition": ("all numeric alpha_* coefficients are zero, discovery/outlier training is disabled, and evaluation uses max_softmax" if options.objective_profile == "ce_only" else None),
-            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd", "ce_class_center_feature_kd", "ce_selective_kd"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
+            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd", "ce_class_center_feature_kd", "ce_selective_kd", "ce_srd"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
             "checkpoint_selection": "known validation accuracy only",
             "threshold_calibration": "known validation only, target 95% coverage",
             "clustering": "automatic K; K selected from unlabeled candidate geometry; oracle-K metrics are separate upper-bound diagnostics",
@@ -832,6 +860,8 @@ def main() -> None:
             if options.objective_profile == "ce_class_center_feature_kd"
             else "standard logits KD vs teacher-correct selective logits KD vs uncertainty-KD"
             if options.objective_profile == "ce_selective_kd"
+            else "standard logits KD vs SRD cross-network KL vs uncertainty-weighted logits KD"
+            if options.objective_profile == "ce_srd"
             else "alpha_kd and kd_mode"
             if options.include_no_kd
             else "kd_mode: standard vs decoupled vs uncertainty_decoupled"
