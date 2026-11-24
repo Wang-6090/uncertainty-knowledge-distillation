@@ -1185,6 +1185,17 @@ def build_parser():
         ),
     )
     p.add_argument(
+        "--alpha-class-holdout-proxy",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-only shared-feature proxy that holds out labelled classes "
+            "from the current support prototypes; disabled by default."
+        ),
+    )
+    p.add_argument("--class-holdout-proxy-fraction", type=float, default=0.25)
+    p.add_argument("--class-holdout-proxy-margin", type=float, default=0.2)
+    p.add_argument(
         "--alpha-relational-kd",
         type=float,
         default=0.0,
@@ -4815,6 +4826,9 @@ def fit_student(args):
             alpha_feat_kd=args.alpha_feat_kd,
             alpha_centered_feat_kd=args.alpha_centered_feat_kd,
             alpha_class_center_feat_kd=args.alpha_class_center_feat_kd,
+            alpha_class_holdout_proxy=args.alpha_class_holdout_proxy,
+            class_holdout_proxy_fraction=args.class_holdout_proxy_fraction,
+            class_holdout_proxy_margin=args.class_holdout_proxy_margin,
             alpha_relational_kd=args.alpha_relational_kd,
             alpha_supcon=args.alpha_supcon,
             alpha_raw_supcon=args.alpha_raw_supcon,

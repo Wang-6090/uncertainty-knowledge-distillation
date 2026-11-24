@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 from torch.nn import functional as F
 
@@ -96,6 +98,61 @@ def semantic_representation_distillation_loss(
     return F.kl_div(student_log_prob, teacher_prob, reduction="batchmean") * (
         temperature**2
     )
+
+
+def class_holdout_support_margin_loss(
+    student_features: torch.Tensor,
+    labels: torch.Tensor,
+    holdout_fraction: float = 0.25,
+    margin: float = 0.2,
+) -> tuple[torch.Tensor, float]:
+    """Push held-out known classes outside the current known support.
+
+    Classes are sampled from the current labelled batch and are treated as
+    pseudo-novel only for this shared-feature proxy. Their features are
+    compared with prototypes built from the other classes in the same batch.
+    The target is detached from the support prototypes; no rejector or
+    discovery-pool signal is involved.
+    """
+    if student_features.ndim != 2:
+        raise ValueError("student_features must have shape [batch_size, features]")
+    if labels.shape != (student_features.size(0),):
+        raise ValueError("labels must have shape [batch_size]")
+    fraction = float(holdout_fraction)
+    if not 0.0 < fraction < 1.0:
+        raise ValueError("holdout_fraction must be in (0, 1)")
+    if float(margin) < 0.0:
+        raise ValueError("margin must be non-negative")
+    if student_features.size(0) == 0:
+        return _zero_loss(student_features), 0.0
+
+    valid = labels >= 0
+    classes = torch.unique(labels[valid], sorted=True)
+    if classes.numel() < 3:
+        return _zero_loss(student_features), 0.0
+    holdout_count = min(
+        max(1, int(math.ceil(classes.numel() * fraction))),
+        int(classes.numel()) - 1,
+    )
+    permutation = torch.randperm(classes.numel(), device=classes.device)
+    holdout_classes = classes[permutation[:holdout_count]]
+    holdout_mask = valid & torch.isin(labels, holdout_classes)
+    support_mask = valid & ~holdout_mask
+    support_classes = torch.unique(labels[support_mask], sorted=True)
+    if not holdout_mask.any() or support_classes.numel() == 0:
+        return _zero_loss(student_features), 0.0
+
+    normalized = F.normalize(student_features.float(), dim=-1, eps=1e-6)
+    support_centers = []
+    for class_id in support_classes:
+        center = normalized[support_mask & labels.eq(class_id)].mean(dim=0)
+        support_centers.append(F.normalize(center, dim=0, eps=1e-6))
+    centers = torch.stack(support_centers).detach()
+    query = normalized[holdout_mask]
+    nearest_similarity = query @ centers.T
+    loss = F.relu(nearest_similarity.max(dim=1).values - float(margin)).mean()
+    active_fraction = float(holdout_mask.float().mean().item())
+    return loss, active_fraction
 
 
 def teacher_quality_weights(

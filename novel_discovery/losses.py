@@ -10,6 +10,7 @@ from .uncertainty_kd import (
     kl_distillation_loss,
     quality_aware_kl_loss,
     semantic_representation_distillation_loss,
+    class_holdout_support_margin_loss as _class_holdout_support_margin_loss,
     selective_kl_loss as _selective_kl_loss,
     teacher_quality_weights as _teacher_quality_weights,
     uncertainty_calibration_loss,
@@ -261,6 +262,20 @@ def semantic_representation_distillation(
         teacher_classifier_weight,
         teacher_classifier_bias,
         temperature=temperature,
+    )
+
+
+def class_holdout_support_margin(
+    student_features: torch.Tensor,
+    labels: torch.Tensor,
+    holdout_fraction: float = 0.25,
+    margin: float = 0.2,
+) -> tuple[torch.Tensor, float]:
+    return _class_holdout_support_margin_loss(
+        student_features,
+        labels,
+        holdout_fraction=holdout_fraction,
+        margin=margin,
     )
 
 

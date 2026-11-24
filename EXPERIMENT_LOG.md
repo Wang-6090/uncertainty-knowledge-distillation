@@ -9375,3 +9375,19 @@ transfer loss pilot；修正分析本身也没有改变默认 KD。正式 max-so
 相对同 seed standard-KD，SRD 两 seed 均提升 known-validation normalized between/total scatter（`+0.016440/+0.015459`），表示几何门通过。下游均值差为 AUROC `+0.011523 +/- 0.015905`、unknown rejection `+0.1375 +/- 0.4419 pp`、candidate purity `+0.0251 +/- 0.8087 pp`、Cluster ACC `-0.9304 +/- 1.4824 pp`、NMI `+1.7193 +/- 0.6754 pp`、ARI `-0.6565 +/- 1.3569 pp`；known accuracy 未下降。由于 ACC/NMI/ARI 中只有 NMI 平均非负，未达到预注册的“至少两个聚类指标不下降”确认门。SRD 因此冻结为 opt-in ablation，不改 `kd_mode=standard` 默认，不重复 `2170/2171/2172`，不继续扫 SRD 或 uncertainty 权重。
 
 本阶段结论进一步支持此前复盘：KD 机制可以真实改变学生表示，但已知类紧致度和整体 scatter 的改善并不保证传递到未知候选分区。下一阶段应转向直接约束 known-only 支持边界/分区结构的新假设，并保留 standard-KD、uncertainty-KD 和 SRD 的机制审计边界；未知标签仅用于最终评价。
+
+### 2026-11-24：class-holdout support proxy 预注册与预检
+
+针对近期方法共同的目标错位问题，本阶段尝试把“未知支持边界”转化为 known-only 的训练代理：在每个已知标签 batch 中随机留出 25% 的类别作为 pseudo-novel，仅用其余类别构造 detached cosine support prototypes，并对留出类特征施加 `ReLU(max_similarity - 0.2)` 边界损失。留出类仍由普通 CE 和 standard logits KD 监督；代理只作用于共享 student features，不改 rejector、学生 uncertainty head、最终拒识分数、候选池或聚类算法，也不使用 discovery/test 标签。固定 `alpha_class_holdout_proxy=0.1`、`holdout_fraction=0.25`、`margin=0.2`，不扫描参数。协议见 [`docs/team_a_representation/class_holdout_proxy_protocol_20261124.md`](docs/team_a_representation/class_holdout_proxy_protocol_20261124.md)。
+
+实现新增 shape/比例/边界检查、少于三类时零损失、学生 feature 梯度和 detached support prototype 单测；专项测试 `28 passed`，compileall 通过。runner 新增独立 `ce_class_holdout_proxy` 三臂 profile，并在 dry-run 中核对 standard / class_holdout / uncertainty 只有 treatment coefficient 和 `kd_mode` 发生预期变化。seed `2173` fresh output targets 预检通过，下一步运行单 seed screening pilot；不改默认 `kd_mode=standard`，不覆盖历史实验。
+
+### 2026-11-25：class-holdout support proxy screening pilot 完成
+
+seed `2173` 的 `standard / class_holdout / uncertainty` 三臂已完整完成训练、known-only checkpoint 选择、max-softmax 检测、95% known-coverage calibration、matched candidate pool、Auto-K 和聚类。三臂共用 split-matched teacher、数据划分、训练预算和评测流程；唯一预设训练差异是 `class_holdout` 臂的 `alpha_class_holdout_proxy=0.1`，或 `uncertainty` 臂的 `kd_mode=uncertainty`。未知/test 标签只用于最终评价，未用于训练、checkpoint 选择、阈值校准或参数选择。原始结果保留在 `analysis/team_a_class_holdout_proxy_20261124_s2173.json`，汇总见 [`docs/team_a_representation/class_holdout_proxy_pilot_20261125.md`](docs/team_a_representation/class_holdout_proxy_pilot_20261125.md)。
+
+机制审计通过：standard 与 uncertainty 的 proxy loss、active fraction 和 proxy gradient 全为 0；class-holdout 四个 epoch 的 proxy loss 为 `0.497184/0.430094/0.401969/0.378516`，active fraction 为 `0.2620/0.2579/0.2570/0.2568`，proxy gradient norm 为 `0.173408/0.168570/0.169200/0.168451`，学生更新均非零。因此新增项确实进入共享 student feature objective 并产生梯度，但该事实不等于性能改善。
+
+相对同 seed standard-KD，class-holdout 的 AUROC `+0.000202`、AUPR `-0.000797`、unknown rejection `+0.500 pp`，但 known accuracy `-0.733 pp`、candidate purity `-0.307 pp`，Auto-K 绝对误差 `2→7`；Cluster ACC/NMI/ARI 分别 `+1.600/+0.435/+0.937 pp`，但这组聚类提升伴随候选池纯度下降和错误的 K 估计，不能视为端到端成功。相对 standard，uncertainty 的 AUROC/AUPR `+0.001498/+0.003601`、unknown rejection `+1.025 pp`、candidate purity `+1.029 pp`，但 Cluster ACC/NMI/ARI 为 `-0.476/-2.212/+0.284 pp`，仍未形成稳定新类发现收益。
+
+本轮结论是“机制门通过、效果晋级门未通过”：class-holdout 只在 sampled known support 上施加局部排斥，不能直接定义 40 个未知类的分区，还带来 known accuracy 和 Auto-K 风险；按预注册规则停止参数扫描，不启动 fresh seed `2174`，不改变 `standard-KD` 默认。该方法保留为 opt-in 诊断。下一阶段应研究训练目标与部署 unknown score 的对齐，仍只围绕 standard-KD 表征、uncertainty-KD 额外收益、权重梯度/学生更新和向未知检测/新类发现的传递，不修改其他同学负责的 rejector/聚类算法。

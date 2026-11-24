@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from novel_discovery.losses import (
+    class_holdout_support_margin,
     class_center_feature_distillation_loss,
     centered_feature_distillation_loss,
     distillation_loss,
@@ -39,6 +40,34 @@ from scripts.run_uncertainty_kd_core_pair import (
 
 
 class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
+    def test_class_holdout_support_margin_updates_student_only(self):
+        torch.manual_seed(7)
+        features = torch.randn(12, 5, requires_grad=True)
+        labels = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5])
+        loss, active_fraction = class_holdout_support_margin(
+            features, labels, holdout_fraction=0.25, margin=0.2
+        )
+        self.assertGreater(active_fraction, 0.0)
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        self.assertIsNotNone(features.grad)
+        self.assertGreater(features.grad.abs().sum().item(), 0.0)
+
+    def test_class_holdout_support_margin_is_zero_when_batch_has_too_few_classes(self):
+        features = torch.randn(4, 3, requires_grad=True)
+        labels = torch.tensor([0, 0, 1, 1])
+        loss, active_fraction = class_holdout_support_margin(features, labels)
+        self.assertEqual(active_fraction, 0.0)
+        self.assertEqual(float(loss.detach()), 0.0)
+
+    def test_class_holdout_support_margin_validates_inputs(self):
+        with self.assertRaises(ValueError):
+            class_holdout_support_margin(torch.zeros(2, 3, 1), torch.zeros(2, dtype=torch.long))
+        with self.assertRaises(ValueError):
+            class_holdout_support_margin(torch.zeros(2, 3), torch.zeros(3, dtype=torch.long))
+        with self.assertRaises(ValueError):
+            class_holdout_support_margin(torch.zeros(2, 3), torch.zeros(2, dtype=torch.long), holdout_fraction=1.0)
+
     def test_dry_run_split_generation_does_not_write_files(self):
         expected_split = {
             "protocol": "semantic_hard",

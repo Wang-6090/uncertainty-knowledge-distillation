@@ -47,6 +47,7 @@ from .losses import (
     feature_distillation_loss,
     centered_feature_distillation_loss,
     class_center_feature_distillation_loss,
+    class_holdout_support_margin,
     relational_distance_distillation_loss,
     confidence_gated_relational_distance_distillation_loss,
     hard_proxy_margin_loss,
@@ -1815,6 +1816,9 @@ def train_one_epoch_student(
     alpha_feat_kd: float = 0.0,
     alpha_centered_feat_kd: float = 0.0,
     alpha_class_center_feat_kd: float = 0.0,
+    alpha_class_holdout_proxy: float = 0.0,
+    class_holdout_proxy_fraction: float = 0.25,
+    class_holdout_proxy_margin: float = 0.2,
     alpha_relational_kd: float = 0.0,
     alpha_supcon: float = 0.1,
     alpha_raw_supcon: float = 0.0,
@@ -2074,6 +2078,8 @@ def train_one_epoch_student(
     centered_feat_kd_active_fraction_meter = AverageMeter()
     class_center_feat_kd_meter = AverageMeter()
     class_center_feat_kd_active_fraction_meter = AverageMeter()
+    class_holdout_proxy_meter = AverageMeter()
+    class_holdout_proxy_active_fraction_meter = AverageMeter()
     relational_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
     rejection_ce_meter = AverageMeter()
@@ -2530,6 +2536,18 @@ def train_one_epoch_student(
         else:
             loss_class_center_feat_kd = s_out["logits"].new_tensor(0.0)
             class_center_feat_kd_active_fraction = 0.0
+        if alpha_class_holdout_proxy > 0.0:
+            loss_class_holdout_proxy, class_holdout_proxy_active_fraction = (
+                class_holdout_support_margin(
+                    s_out["features"],
+                    labels,
+                    holdout_fraction=class_holdout_proxy_fraction,
+                    margin=class_holdout_proxy_margin,
+                )
+            )
+        else:
+            loss_class_holdout_proxy = s_out["logits"].new_tensor(0.0)
+            class_holdout_proxy_active_fraction = 0.0
         loss_relational_kd = s_out["logits"].new_tensor(0.0)
         if alpha_relational_kd > 0.0:
             loss_relational_kd = relational_distance_distillation_loss(
@@ -4761,6 +4779,7 @@ def train_one_epoch_student(
             + alpha_feat_kd * loss_feat_kd
             + alpha_centered_feat_kd * loss_centered_feat_kd
             + alpha_class_center_feat_kd * loss_class_center_feat_kd
+            + alpha_class_holdout_proxy * loss_class_holdout_proxy
             + alpha_relational_kd * loss_relational_kd
             + alpha_rejection_kd * loss_rejection_kd
             + alpha_rejection_feat_kd * loss_rejection_feat_kd
@@ -4921,6 +4940,9 @@ def train_one_epoch_student(
                     ),
                     "class_center_feat_kd_term": (
                         alpha_class_center_feat_kd * loss_class_center_feat_kd
+                    ),
+                    "class_holdout_proxy_term": (
+                        alpha_class_holdout_proxy * loss_class_holdout_proxy
                     ),
                     # Record the coefficient-scaled relation term so the
                     # audit reflects the gradient that actually contributes
@@ -5266,6 +5288,10 @@ def train_one_epoch_student(
         class_center_feat_kd_active_fraction_meter.update(
             class_center_feat_kd_active_fraction, images.size(0)
         )
+        class_holdout_proxy_meter.update(loss_class_holdout_proxy.item(), images.size(0))
+        class_holdout_proxy_active_fraction_meter.update(
+            class_holdout_proxy_active_fraction, images.size(0)
+        )
         relational_kd_meter.update(loss_relational_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
@@ -5490,6 +5516,8 @@ def train_one_epoch_student(
         "centered_feat_kd_active_fraction": centered_feat_kd_active_fraction_meter.avg,
         "class_center_feat_kd": class_center_feat_kd_meter.avg,
         "class_center_feat_kd_active_fraction": class_center_feat_kd_active_fraction_meter.avg,
+        "class_holdout_proxy": class_holdout_proxy_meter.avg,
+        "class_holdout_proxy_active_fraction": class_holdout_proxy_active_fraction_meter.avg,
         "relational_kd": relational_kd_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,
