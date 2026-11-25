@@ -116,6 +116,7 @@ def discovery_score_mode_for_profile(objective_profile: str) -> str:
         "ce_srd",
         "ce_uncertainty_target_repair",
         "ce_uncertainty_error_repair",
+        "ce_classification_view_consistency",
     }:
         return "max_softmax"
     return "feature_rejector"
@@ -184,6 +185,7 @@ def main() -> None:
             "ce_srd",
             "ce_uncertainty_target_repair",
             "ce_uncertainty_error_repair",
+            "ce_classification_view_consistency",
         ],
         default="current_auxiliary",
         help=(
@@ -193,7 +195,8 @@ def main() -> None:
             "quality_aware compares standard KL, unweighted DKD, and quality-aware KL"
             "; ce_selective_kd compares standard KL, teacher-correct selective KL, and uncertainty-KD; "
             "ce_uncertainty_target_repair compares standard KL, uncertainty target repair, and uncertainty-KD; "
-            "ce_uncertainty_error_repair compares standard KL, error-only uncertainty target repair, and uncertainty-KD"
+            "ce_uncertainty_error_repair compares standard KL, error-only uncertainty target repair, and uncertainty-KD; "
+            "ce_classification_view_consistency compares paired-view standard KL, fixed view consistency, and uncertainty-KD"
         ),
     )
     parser.add_argument(
@@ -217,7 +220,7 @@ def main() -> None:
 
     if options.kd_uncertainty_source != "head" and options.kd_mc_samples < 2:
         raise ValueError("--kd-mc-samples must be at least 2 for MC uncertainty")
-    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd", "ce_uncertainty_target_repair", "ce_uncertainty_error_repair"} and options.include_no_kd:
+    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd", "ce_uncertainty_target_repair", "ce_uncertainty_error_repair", "ce_classification_view_consistency"} and options.include_no_kd:
         raise ValueError(
             f"{options.objective_profile} already defines a three-arm comparison; "
             "no-KD is not supported"
@@ -255,9 +258,12 @@ def main() -> None:
     base_student["class_holdout_proxy_fraction"] = 0.25
     base_student["class_holdout_proxy_margin"] = 0.2
     base_student["kd_mode"] = "standard"
+    if options.objective_profile == "ce_classification_view_consistency":
+        base_student["paired_classification_views"] = True
+        base_student["alpha_classification_view_consistency"] = 0.0
     base_student["kd_uncertainty_source"] = options.kd_uncertainty_source
     base_student["kd_mc_samples"] = int(options.kd_mc_samples)
-    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd", "ce_class_holdout_proxy", "ce_uncertainty_target_repair", "ce_uncertainty_error_repair"}:
+    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd", "ce_class_holdout_proxy", "ce_uncertainty_target_repair", "ce_uncertainty_error_repair", "ce_classification_view_consistency"}:
         base_student["audit_loss_gradients"] = True
     base_student["open_val_ratio"] = 0.0
     base_discover = read_json(discover_source)
@@ -356,6 +362,14 @@ def main() -> None:
                 ("error_repair", "uncertainty_error_repair", "mean_normalized", float(base_student["alpha_kd"])),
                 ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
             ]
+        elif options.objective_profile == "ce_classification_view_consistency":
+            if options.include_no_kd:
+                raise ValueError("--include-no-kd is not supported for ce_classification_view_consistency")
+            arm_specs = [
+                ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
+                ("view_consistency", "standard", "mean_normalized", float(base_student["alpha_kd"])),
+                ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
+            ]
         else:
             arm_specs = [("standard", "standard", "mean_normalized", float(base_student["alpha_kd"]))]
             if options.include_no_kd:
@@ -385,6 +399,15 @@ def main() -> None:
                 0.1
                 if options.objective_profile == "ce_class_holdout_proxy"
                 and arm == "class_holdout"
+                else 0.0
+            )
+            for arm in arm_names
+        }
+        view_consistency_alpha_by_arm = {
+            arm: (
+                0.1
+                if options.objective_profile == "ce_classification_view_consistency"
+                and arm == "view_consistency"
                 else 0.0
             )
             for arm in arm_names
@@ -420,6 +443,8 @@ def main() -> None:
                                 "alpha_centered_feat_kd": centered_alpha_by_arm[arm],
                                 "alpha_class_center_feat_kd": class_center_alpha_by_arm[arm],
                                 "alpha_class_holdout_proxy": class_holdout_alpha_by_arm[arm],
+                                "alpha_classification_view_consistency": view_consistency_alpha_by_arm[arm],
+                                "paired_classification_views": bool(base_student.get("paired_classification_views", False)),
                                 "class_holdout_proxy_fraction": base_student["class_holdout_proxy_fraction"],
                                 "class_holdout_proxy_margin": base_student["class_holdout_proxy_margin"],
                             }
@@ -466,6 +491,7 @@ def main() -> None:
                 expected_centered_alpha = centered_alpha_by_arm[arm]
                 expected_class_center_alpha = class_center_alpha_by_arm[arm]
                 expected_class_holdout_alpha = class_holdout_alpha_by_arm[arm]
+                expected_view_consistency_alpha = view_consistency_alpha_by_arm[arm]
                 if (
                     saved_config.get("kd_mode") != expected_mode
                     or float(saved_config.get("alpha_kd", -1)) != expected_alpha
@@ -473,6 +499,8 @@ def main() -> None:
                     or float(saved_config.get("alpha_centered_feat_kd", -1)) != expected_centered_alpha
                     or float(saved_config.get("alpha_class_center_feat_kd", -1)) != expected_class_center_alpha
                     or float(saved_config.get("alpha_class_holdout_proxy", -1)) != expected_class_holdout_alpha
+                    or float(saved_config.get("alpha_classification_view_consistency", -1)) != expected_view_consistency_alpha
+                    or bool(saved_config.get("paired_classification_views", False)) != (options.objective_profile == "ce_classification_view_consistency")
                     or float(saved_config.get("class_holdout_proxy_fraction", -1)) != 0.25
                     or float(saved_config.get("class_holdout_proxy_margin", -1)) != 0.2
                     or saved_config.get("kd_uncertainty_source") != options.kd_uncertainty_source
@@ -509,6 +537,8 @@ def main() -> None:
             "alpha_centered_feat_kd": 0.0,
             "alpha_class_center_feat_kd": 0.0,
             "alpha_class_holdout_proxy": 0.0,
+            "alpha_classification_view_consistency": 0.0,
+            "paired_classification_views": options.objective_profile == "ce_classification_view_consistency",
             "kd_mode": "standard",
             "open_val_ratio": 0.0,
         })
@@ -536,6 +566,8 @@ def main() -> None:
             train_args.alpha_centered_feat_kd = centered_alpha_by_arm[arm]
             train_args.alpha_class_center_feat_kd = class_center_alpha_by_arm[arm]
             train_args.alpha_class_holdout_proxy = class_holdout_alpha_by_arm[arm]
+            train_args.alpha_classification_view_consistency = view_consistency_alpha_by_arm[arm]
+            train_args.paired_classification_views = options.objective_profile == "ce_classification_view_consistency"
             train_args.class_holdout_proxy_fraction = 0.25
             train_args.class_holdout_proxy_margin = 0.2
             # Match the mean KD scale to standard KL; only redistribute
@@ -554,6 +586,8 @@ def main() -> None:
                     or float(saved_train_config.get("alpha_centered_feat_kd", -1)) != centered_alpha_by_arm[arm]
                     or float(saved_train_config.get("alpha_class_center_feat_kd", -1)) != class_center_alpha_by_arm[arm]
                     or float(saved_train_config.get("alpha_class_holdout_proxy", -1)) != class_holdout_alpha_by_arm[arm]
+                    or float(saved_train_config.get("alpha_classification_view_consistency", -1)) != view_consistency_alpha_by_arm[arm]
+                    or bool(saved_train_config.get("paired_classification_views", False)) != (options.objective_profile == "ce_classification_view_consistency")
                     or float(saved_train_config.get("class_holdout_proxy_fraction", -1)) != 0.25
                     or float(saved_train_config.get("class_holdout_proxy_margin", -1)) != 0.2
                     or saved_train_config.get("uncertainty_weight_mode") != weight_mode
@@ -579,6 +613,7 @@ def main() -> None:
                 "ce_selective_kd",
                 "ce_srd",
                 "ce_uncertainty_target_repair",
+                "ce_classification_view_consistency",
             }:
                 # These isolated representation/KD evaluations deliberately
                 # do not fit or use a rejector.  Clear the inherited rejector
@@ -658,6 +693,19 @@ def main() -> None:
                     stats.get("gradient_audit_grad_norm_class_holdout_proxy_term")
                     for stats in train_stats
                 ],
+                "classification_view_consistency_loss_by_epoch": [
+                    stats.get("classification_view_consistency") for stats in train_stats
+                ],
+                "classification_view_consistency_gradient_norm_by_epoch": [
+                    stats.get("gradient_audit_grad_norm_classification_view_consistency_term")
+                    for stats in train_stats
+                ],
+                "classification_view_consistency_applied_by_epoch": [
+                    stats.get("classification_view_consistency_applied") for stats in train_stats
+                ],
+                "paired_classification_views_by_epoch": [
+                    stats.get("paired_classification_views") for stats in train_stats
+                ],
                 "kd_weight_applied_by_epoch": [stats.get("kd_uncertainty_weight_applied") for stats in train_stats],
                 "kd_quality_weight_applied_by_epoch": [stats.get("kd_quality_weight_applied") for stats in train_stats],
                 "kd_weight_std_by_epoch": [stats.get("kd_weight_std") for stats in train_stats],
@@ -704,6 +752,8 @@ def main() -> None:
                 allowed_differences.add("alpha_class_center_feat_kd")
             if options.objective_profile == "ce_class_holdout_proxy":
                 allowed_differences.add("alpha_class_holdout_proxy")
+            if options.objective_profile == "ce_classification_view_consistency":
+                allowed_differences.add("alpha_classification_view_consistency")
             if options.objective_profile == "ce_srd" and arm == "srd":
                 allowed_differences.add("kd_mode")
             algorithm_diffs = {
@@ -737,6 +787,10 @@ def main() -> None:
                 raise RuntimeError(f"unexpected class-center feature KD coefficient for {arm}, seed {seed}")
             if float(arms[arm]["train_config"].get("alpha_class_holdout_proxy", -1)) != class_holdout_alpha_by_arm[arm]:
                 raise RuntimeError(f"unexpected class-holdout proxy coefficient for {arm}, seed {seed}")
+            if float(arms[arm]["train_config"].get("alpha_classification_view_consistency", -1)) != view_consistency_alpha_by_arm[arm]:
+                raise RuntimeError(f"unexpected view-consistency coefficient for {arm}, seed {seed}")
+            if bool(arms[arm]["train_config"].get("paired_classification_views", False)) != (options.objective_profile == "ce_classification_view_consistency"):
+                raise RuntimeError(f"unexpected paired-view setting for {arm}, seed {seed}")
         if options.include_no_kd or options.objective_profile == "ce_only":
             if float(arms[control_arm]["train_config"].get("alpha_kd", -1)) != 0.0:
                 raise RuntimeError(f"control arm has a nonzero logits KD coefficient for seed {seed}")
@@ -818,6 +872,22 @@ def main() -> None:
                 raise RuntimeError(f"class-holdout proxy had no held-out rows in seed {seed}")
             if any(value is None or value <= 0.0 for value in holdout_gradients):
                 raise RuntimeError(f"class-holdout proxy produced no audited gradient in seed {seed}")
+        if options.objective_profile == "ce_classification_view_consistency":
+            for arm in arm_names:
+                paired = arms[arm]["paired_classification_views_by_epoch"]
+                if len(paired) != arms[arm]["training_epochs"] or not all(paired):
+                    raise RuntimeError(f"paired view stream was not active for {arm}, seed {seed}")
+            consistency_arm = arms["view_consistency"]
+            losses = consistency_arm["classification_view_consistency_loss_by_epoch"]
+            gradients = consistency_arm["classification_view_consistency_gradient_norm_by_epoch"]
+            applied = consistency_arm["classification_view_consistency_applied_by_epoch"]
+            if any(value is None or value <= 0.0 for value in losses + gradients):
+                raise RuntimeError(f"view-consistency loss or gradient was inactive in seed {seed}")
+            if not all(applied):
+                raise RuntimeError(f"view-consistency treatment was not applied in every epoch in seed {seed}")
+            for arm in ("standard", "uncertainty"):
+                if any(arms[arm]["classification_view_consistency_applied_by_epoch"]):
+                    raise RuntimeError(f"view-consistency leaked into control arm {arm}, seed {seed}")
         if options.objective_profile == "ce_selective_kd":
             selective_active = arms["selective"]["kd_selective_active_fraction_by_epoch"]
             selective_applied = arms["selective"]["kd_selective_applied_by_epoch"]
@@ -889,6 +959,8 @@ def main() -> None:
                 if options.objective_profile == "ce_uncertainty_target_repair"
                 else "Does teacher-error-only uncertainty target repair improve student representation and novel-class discovery over standard logits KD, with uncertainty-KD retained as the existing comparison?"
                 if options.objective_profile == "ce_uncertainty_error_repair"
+                else "Does paired known-label classification view consistency improve student representation and novel-class discovery over standard logits KD?"
+                if options.objective_profile == "ce_classification_view_consistency"
                 else "Does teacher-uncertainty weighting of logits KD improve semantic-hard novel-class discovery over standard KL, conditional on the fixed current training pipeline?"
             ),
             "seed": int(seed),
@@ -914,6 +986,8 @@ def main() -> None:
                 if options.objective_profile == "ce_uncertainty_target_repair"
                 else "standard logits KD vs teacher-error-only uncertainty target repair vs uncertainty-KD"
                 if options.objective_profile == "ce_uncertainty_error_repair"
+                else "paired-view standard logits KD vs paired-view logits KD + fixed classification feature consistency vs paired-view uncertainty-KD"
+                if options.objective_profile == "ce_classification_view_consistency"
                 else "alpha_kd=0 vs standard logits KD vs uncertainty-weighted logits KD"
                 if options.include_no_kd
                 else "kd_mode: standard vs decoupled vs uncertainty_decoupled"
@@ -951,9 +1025,13 @@ def main() -> None:
                 "soft repair uses u; hard_error_repair uses coefficient 1; both only where teacher argmax is wrong"
                 if options.objective_profile == "ce_uncertainty_error_repair" else "disabled"
             ),
+            "classification_view_consistency": (
+                "0.1 in view_consistency arm only; cosine consistency on paired known-label shared student classification features"
+                if options.objective_profile == "ce_classification_view_consistency" else "disabled"
+            ),
             "no_kd_control_definition": ("alpha_kd=0; all other supervised and auxiliary objectives remain active" if options.include_no_kd else None),
             "ce_only_control_definition": ("all numeric alpha_* coefficients are zero, discovery/outlier training is disabled, and evaluation uses max_softmax" if options.objective_profile == "ce_only" else None),
-            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd", "ce_class_center_feature_kd", "ce_class_holdout_proxy", "ce_selective_kd", "ce_srd", "ce_uncertainty_target_repair", "ce_uncertainty_error_repair"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
+            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd", "ce_class_center_feature_kd", "ce_class_holdout_proxy", "ce_selective_kd", "ce_srd", "ce_uncertainty_target_repair", "ce_uncertainty_error_repair", "ce_classification_view_consistency"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
             "checkpoint_selection": "known validation accuracy only",
             "threshold_calibration": "known validation only, target 95% coverage",
             "clustering": "automatic K; K selected from unlabeled candidate geometry; oracle-K metrics are separate upper-bound diagnostics",
@@ -1001,6 +1079,8 @@ def main() -> None:
             if options.objective_profile == "ce_srd"
             else "standard logits KD vs uncertainty target repair vs uncertainty-KD"
             if options.objective_profile == "ce_uncertainty_target_repair"
+            else "paired-view standard logits KD vs paired-view logits KD + fixed classification feature consistency vs paired-view uncertainty-KD"
+            if options.objective_profile == "ce_classification_view_consistency"
             else "alpha_kd and kd_mode"
             if options.include_no_kd
             else "kd_mode: standard vs decoupled vs uncertainty_decoupled"
