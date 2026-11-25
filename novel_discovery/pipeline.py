@@ -37,6 +37,7 @@ from .losses import (
     discovery_view_loss,
     distillation_loss,
     quality_aware_distillation_loss,
+    uncertainty_target_repair_distillation_loss,
     selective_distillation_loss,
     semantic_representation_distillation,
     teacher_quality_weights,
@@ -2073,6 +2074,7 @@ def train_one_epoch_student(
     kd_weight_std_meter = AverageMeter()
     kd_weight_ess_meter = AverageMeter()
     kd_selective_active_fraction_meter = AverageMeter()
+    kd_target_repair_mean_meter = AverageMeter()
     feat_kd_meter = AverageMeter()
     centered_feat_kd_meter = AverageMeter()
     centered_feat_kd_active_fraction_meter = AverageMeter()
@@ -2253,6 +2255,10 @@ def train_one_epoch_student(
         elif kd_mode == "selective":
             diagnostic_kd_weights = teacher_kd_logits.detach().argmax(dim=1).eq(labels).float()
         elif kd_mode == "srd":
+            diagnostic_kd_weights = torch.ones_like(labels, dtype=torch.float32)
+        elif kd_mode == "uncertainty_target_repair":
+            # Target repair changes the detached teacher distribution; it does
+            # not reweight the per-sample KD mass.
             diagnostic_kd_weights = torch.ones_like(labels, dtype=torch.float32)
         else:
             diagnostic_kd_weights = uncertainty_weights(
@@ -2439,6 +2445,7 @@ def train_one_epoch_student(
         loss_kd_target = s_out["logits"].new_tensor(0.0)
         loss_kd_non_target = s_out["logits"].new_tensor(0.0)
         loss_kd_non_target_weighted = s_out["logits"].new_tensor(0.0)
+        kd_target_repair_mean = s_out["logits"].new_tensor(0.0)
         if kd_mode in {"decoupled", "uncertainty_decoupled"}:
             (
                 loss_kd_target,
@@ -2467,6 +2474,14 @@ def train_one_epoch_student(
                 quality_floor=kd_quality_floor,
                 quality_power=kd_quality_power,
                 quality_weight_mode=kd_quality_weight_mode,
+            )
+        elif kd_mode == "uncertainty_target_repair":
+            loss_kd, kd_target_repair_mean = uncertainty_target_repair_distillation_loss(
+                s_out["logits"],
+                teacher_kd_logits,
+                labels,
+                teacher_kd_uncertainty_value,
+                temperature=temperature,
             )
         elif kd_mode == "selective":
             loss_kd, selective_active_fraction = selective_distillation_loss(
@@ -5277,6 +5292,9 @@ def train_one_epoch_student(
         kd_selective_active_fraction_meter.update(
             selective_active_fraction.item(), images.size(0)
         )
+        kd_target_repair_mean_meter.update(
+            kd_target_repair_mean.item(), images.size(0)
+        )
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
         centered_feat_kd_meter.update(loss_centered_feat_kd.item(), images.size(0))
         centered_feat_kd_active_fraction_meter.update(
@@ -5503,8 +5521,10 @@ def train_one_epoch_student(
             kd_mode in {"uncertainty", "uncertainty_decoupled"}
         ),
         "kd_quality_weight_applied": bool(kd_mode == "quality_aware"),
+        "kd_target_repair_applied": bool(kd_mode == "uncertainty_target_repair"),
         "kd_selective_applied": bool(kd_mode == "selective"),
         "kd_selective_active_fraction": kd_selective_active_fraction_meter.avg,
+        "kd_target_repair_mean": kd_target_repair_mean_meter.avg,
         "kd_quality_floor": float(kd_quality_floor),
         "kd_quality_power": float(kd_quality_power),
         "kd_quality_weight_mode": str(kd_quality_weight_mode),

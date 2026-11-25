@@ -29,6 +29,7 @@ from novel_discovery.uncertainty_kd import (
     kl_distillation_loss,
     per_sample_kl_distillation_loss,
     quality_aware_kl_loss,
+    uncertainty_target_repair_kl_loss,
     teacher_quality_weights as module_teacher_quality_weights,
     uncertainty_calibration_loss,
     uncertainty_weights,
@@ -179,6 +180,13 @@ class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
             "feature_rejector",
         )
 
+    def test_target_repair_profile_uses_classifier_score_and_three_arm_protocol(self):
+        self.assertEqual(
+            discovery_score_mode_for_profile("ce_uncertainty_target_repair"),
+            "max_softmax",
+        )
+
+
     def test_centered_feature_kd_matches_within_class_geometry_and_updates_student_only(self):
         student = torch.tensor(
             [[1.0, 0.0], [0.2, 0.9], [0.0, 1.0], [0.8, 0.3]],
@@ -276,6 +284,39 @@ class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
         loss.backward()
         self.assertIsNone(teacher.grad)
         self.assertGreater(student.grad.abs().sum().item(), 0.0)
+
+    def test_uncertainty_target_repair_matches_blended_target_and_updates_student_only(self):
+        student = torch.tensor([[1.0, 0.0, -0.2], [0.1, 0.9, 0.0]], requires_grad=True)
+        teacher = torch.tensor([[0.8, 0.2, -0.1], [0.0, 1.0, 0.2]], requires_grad=True)
+        uncertainty = torch.tensor([0.0, 0.75], requires_grad=True)
+        labels = torch.tensor([0, 2])
+        temperature = 1.7
+
+        observed, repair_mean = uncertainty_target_repair_kl_loss(
+            student, teacher, labels, uncertainty, temperature=temperature
+        )
+        teacher_prob = F.softmax(teacher.detach() / temperature, dim=1)
+        hard_target = F.one_hot(labels, num_classes=3).to(teacher_prob)
+        target = (1.0 - uncertainty.unsqueeze(1)) * teacher_prob + uncertainty.unsqueeze(1) * hard_target
+        expected = F.kl_div(
+            F.log_softmax(student / temperature, dim=1), target, reduction="none"
+        ).sum(dim=1).mean() * temperature**2
+        self.assertTrue(torch.allclose(observed, expected))
+        self.assertAlmostEqual(repair_mean.item(), uncertainty.mean().item())
+        observed.backward()
+        self.assertIsNotNone(student.grad)
+        self.assertIsNone(teacher.grad)
+        self.assertIsNone(uncertainty.grad)
+        self.assertGreater(student.grad.abs().sum().item(), 0.0)
+
+    def test_uncertainty_target_repair_rejects_invalid_labels(self):
+        with self.assertRaises(ValueError):
+            uncertainty_target_repair_kl_loss(
+                torch.zeros(2, 2),
+                torch.zeros(2, 2),
+                torch.tensor([0, 2]),
+                torch.zeros(2),
+            )
 
     def test_standard_kl_only_backpropagates_to_student(self):
         student_logits = torch.tensor([[1.0, 0.0], [0.1, 0.9]], requires_grad=True)

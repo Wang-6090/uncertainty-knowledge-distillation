@@ -230,6 +230,47 @@ def quality_aware_kl_loss(
     return (per_sample * weights).mean()
 
 
+def uncertainty_target_repair_kl_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    teacher_uncertainty: torch.Tensor,
+    *,
+    temperature: float = 2.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Repair uncertain teacher targets toward the known training label.
+
+    Unlike uncertainty weighting, this changes the detached soft target rather
+    than merely changing its per-example mass.  The uncertainty head is used
+    as a bounded interpolation coefficient: confident teacher targets remain
+    mostly unchanged, while uncertain targets move toward the verified label.
+    The returned mean repair coefficient is a detached audit value.
+    """
+    if student_logits.shape != teacher_logits.shape or student_logits.ndim != 2:
+        raise ValueError("student_logits and teacher_logits must have shape [batch_size, classes]")
+    if labels.shape != (student_logits.size(0),):
+        raise ValueError("labels must have shape [batch_size]")
+    if teacher_uncertainty.shape != (student_logits.size(0),):
+        raise ValueError("teacher_uncertainty must have shape [batch_size]")
+    if bool(((labels < 0) | (labels >= student_logits.size(1))).any()):
+        raise ValueError("labels must index the logits class dimension")
+    if student_logits.size(0) == 0:
+        return _zero_loss(student_logits), student_logits.new_tensor(0.0)
+
+    temperature = max(float(temperature), 1e-6)
+    uncertainty = teacher_uncertainty.detach().to(student_logits).clamp(0.0, 1.0)
+    teacher_prob = F.softmax(teacher_logits.detach() / temperature, dim=-1)
+    hard_target = F.one_hot(labels, num_classes=student_logits.size(1)).to(teacher_prob)
+    repaired_target = (
+        (1.0 - uncertainty.unsqueeze(1)) * teacher_prob
+        + uncertainty.unsqueeze(1) * hard_target
+    )
+    student_log_prob = F.log_softmax(student_logits / temperature, dim=-1)
+    loss = F.kl_div(student_log_prob, repaired_target, reduction="none").sum(dim=1)
+    loss = loss.mean() * (temperature**2)
+    return loss, uncertainty.mean().detach()
+
+
 def selective_kl_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,

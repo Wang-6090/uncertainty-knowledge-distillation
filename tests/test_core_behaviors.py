@@ -2482,6 +2482,12 @@ class CommandLineTest(unittest.TestCase):
             ).kd_mode,
             "uncertainty_decoupled",
         )
+        self.assertEqual(
+            parse_args(
+                ["train_student", "--kd-mode", "uncertainty_target_repair"]
+            ).kd_mode,
+            "uncertainty_target_repair",
+        )
 
     def test_decoupled_kd_modes_log_components_gradients_and_parameter_updates(self):
         class TinyKDModel(torch.nn.Module):
