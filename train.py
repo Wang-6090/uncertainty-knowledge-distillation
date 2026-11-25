@@ -1185,6 +1185,23 @@ def build_parser():
         ),
     )
     p.add_argument(
+        "--alpha-classification-view-consistency",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-label two-augmentation consistency weight on shared student "
+            "classification features; disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--paired-classification-views",
+        action="store_true",
+        help=(
+            "Use a paired two-view known-training loader. Set this for both "
+            "control and treatment when auditing classification view consistency."
+        ),
+    )
+    p.add_argument(
         "--alpha-class-holdout-proxy",
         type=float,
         default=0.0,
@@ -4222,7 +4239,17 @@ def fit_student(args):
             )
     device = resolve_device(args.device)
     print(f"device: {device}")
-    train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
+    if args.alpha_classification_view_consistency > 0.0 and not args.paired_classification_views:
+        raise ValueError(
+            "--alpha-classification-view-consistency requires "
+            "--paired-classification-views"
+        )
+    train_dataset = (
+        TwoViewDataset(bundle.train, include_metadata=True)
+        if args.paired_classification_views
+        else bundle.train
+    )
+    train_loader = build_loader(train_dataset, args.batch_size, True, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
     open_checkpoint_loader = (
         build_loader(bundle.open_val, args.batch_size, False, args.num_workers)
@@ -4836,6 +4863,10 @@ def fit_student(args):
             class_holdout_proxy_fraction=args.class_holdout_proxy_fraction,
             class_holdout_proxy_margin=args.class_holdout_proxy_margin,
             alpha_relational_kd=args.alpha_relational_kd,
+            alpha_classification_view_consistency=(
+                args.alpha_classification_view_consistency
+            ),
+            paired_classification_views=args.paired_classification_views,
             alpha_supcon=args.alpha_supcon,
             alpha_raw_supcon=args.alpha_raw_supcon,
             alpha_structure_supcon=args.alpha_structure_supcon,

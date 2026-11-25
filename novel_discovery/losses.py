@@ -1885,6 +1885,22 @@ def discovery_consistency_loss(
     ).mean()
 
 
+def classification_view_consistency_loss(
+    first_features: torch.Tensor,
+    second_features: torch.Tensor,
+) -> torch.Tensor:
+    """Align two known-sample augmentations in the shared feature space."""
+    if first_features.shape != second_features.shape:
+        raise ValueError("classification view features must have the same shape")
+    if first_features.ndim != 2:
+        raise ValueError("classification view features must have shape [batch, dim]")
+    if first_features.numel() == 0:
+        return first_features.sum() * 0.0
+    return 1.0 - F.cosine_similarity(
+        first_features, second_features, dim=-1
+    ).mean()
+
+
 def discovery_scalar_consistency_loss(
     first_score: torch.Tensor,
     second_score: torch.Tensor,

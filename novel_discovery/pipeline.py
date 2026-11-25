@@ -30,6 +30,7 @@ from .losses import (
     sample_episode_pseudo_novel_mask,
     feature_cross_covariance_loss,
     feature_variance_floor_loss,
+    classification_view_consistency_loss,
     discovery_consistency_loss,
     discovery_scalar_consistency_loss,
     discovery_pairwise_rank_consistency_loss,
@@ -1822,6 +1823,8 @@ def train_one_epoch_student(
     class_holdout_proxy_fraction: float = 0.25,
     class_holdout_proxy_margin: float = 0.2,
     alpha_relational_kd: float = 0.0,
+    alpha_classification_view_consistency: float = 0.0,
+    paired_classification_views: bool = False,
     alpha_supcon: float = 0.1,
     alpha_raw_supcon: float = 0.0,
     alpha_structure_supcon: float = 0.0,
@@ -2038,6 +2041,12 @@ def train_one_epoch_student(
     alpha_outlier_rejection_uniform: float = 0.0,
     freeze_bn_stats: bool = False,
 ):
+    if float(alpha_classification_view_consistency) < 0.0:
+        raise ValueError("alpha_classification_view_consistency must be non-negative")
+    if alpha_classification_view_consistency > 0.0 and not paired_classification_views:
+        raise ValueError(
+            "classification view consistency requires paired_classification_views"
+        )
     if rejection_gradient_conflict_mode not in {
         "off",
         "project_auxiliary",
@@ -2085,6 +2094,7 @@ def train_one_epoch_student(
     class_center_feat_kd_active_fraction_meter = AverageMeter()
     class_holdout_proxy_meter = AverageMeter()
     class_holdout_proxy_active_fraction_meter = AverageMeter()
+    classification_view_consistency_meter = AverageMeter()
     relational_kd_meter = AverageMeter()
     unc_meter = AverageMeter()
     rejection_ce_meter = AverageMeter()
@@ -2237,7 +2247,16 @@ def train_one_epoch_student(
     joint_memory_logits = joint_memory_bank.get("logits")
     outlier_iter = iter(outlier_loader) if outlier_loader is not None else None
     for batch in tqdm(loader, desc="student-train", leave=False):
-        images, labels, raw_labels, is_known, _ = batch
+        if paired_classification_views:
+            if len(batch) != 5:
+                raise ValueError(
+                    "paired classification view loader must return two images and "
+                    "three metadata fields"
+                )
+            images, second_images, labels, raw_labels, is_known = batch
+            second_images = second_images.to(device)
+        else:
+            images, labels, raw_labels, is_known, _ = batch
         images = images.to(device)
         labels = labels.to(device)
         with torch.no_grad():
@@ -2279,7 +2298,21 @@ def train_one_epoch_student(
                * max(int(diagnostic_kd_weights.numel()), 1))
         )
         s_out = student(images)
+        if paired_classification_views:
+            second_out = student(second_images)
+        else:
+            second_out = None
         loss_ce = classification_loss(s_out["logits"], labels)
+        if alpha_classification_view_consistency > 0.0:
+            if second_out is None:
+                raise ValueError(
+                    "classification view consistency requires paired_classification_views"
+                )
+            loss_classification_view_consistency = classification_view_consistency_loss(
+                s_out["features"], second_out["features"]
+            )
+        else:
+            loss_classification_view_consistency = s_out["logits"].sum() * 0.0
         episode_pseudo_novel_mask = torch.zeros_like(labels, dtype=torch.bool)
         if alpha_rejection_episode_pseudonovel > 0.0:
             if s_out.get("rejection_logits") is None:
@@ -4821,6 +4854,8 @@ def train_one_epoch_student(
             + alpha_class_center_feat_kd * loss_class_center_feat_kd
             + alpha_class_holdout_proxy * loss_class_holdout_proxy
             + alpha_relational_kd * loss_relational_kd
+            + alpha_classification_view_consistency
+            * loss_classification_view_consistency
             + alpha_rejection_kd * loss_rejection_kd
             + alpha_rejection_feat_kd * loss_rejection_feat_kd
             + alpha_rejection_relational_kd * loss_rejection_relational_kd
@@ -4983,6 +5018,10 @@ def train_one_epoch_student(
                     ),
                     "class_holdout_proxy_term": (
                         alpha_class_holdout_proxy * loss_class_holdout_proxy
+                    ),
+                    "classification_view_consistency_term": (
+                        alpha_classification_view_consistency
+                        * loss_classification_view_consistency
                     ),
                     # Record the coefficient-scaled relation term so the
                     # audit reflects the gradient that actually contributes
@@ -5341,6 +5380,9 @@ def train_one_epoch_student(
         class_holdout_proxy_active_fraction_meter.update(
             class_holdout_proxy_active_fraction, images.size(0)
         )
+        classification_view_consistency_meter.update(
+            loss_classification_view_consistency.item(), images.size(0)
+        )
         relational_kd_meter.update(loss_relational_kd.item(), images.size(0))
         unc_meter.update(loss_unc.item(), images.size(0))
         rejection_ce_meter.update(loss_rejection_ce.item(), images.size(0))
@@ -5572,6 +5614,11 @@ def train_one_epoch_student(
         "class_center_feat_kd_active_fraction": class_center_feat_kd_active_fraction_meter.avg,
         "class_holdout_proxy": class_holdout_proxy_meter.avg,
         "class_holdout_proxy_active_fraction": class_holdout_proxy_active_fraction_meter.avg,
+        "classification_view_consistency": classification_view_consistency_meter.avg,
+        "classification_view_consistency_applied": bool(
+            alpha_classification_view_consistency > 0.0
+        ),
+        "paired_classification_views": bool(paired_classification_views),
         "relational_kd": relational_kd_meter.avg,
         "unc": unc_meter.avg,
         "rejection_ce": rejection_ce_meter.avg,

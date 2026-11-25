@@ -9433,3 +9433,19 @@ target-repair 机制门通过：四 epoch repair mean `0.345782/0.345296/0.34400
 此前冻结 teacher 审计发现 uncertainty 与教师错误在类内也有关联，因此先评估“batch 内按已知类别归一化 `exp(-u)`”是否值得进入训练对照。没有启动新训练：对 seed `2173/2176` 冻结 teacher 的 known train/validation 做确定性前向，并按 batch=64、四轮随机重排，比较当前 batch-mean-normalized 权重与候选 class-balanced 权重；unknown/test 标签未参与。新增诊断脚本与单测，不改训练 loss/default KD、拒识分数或其他同学模块。专项测试 `4 passed`。
 
 两 seed 的 within-class error AUROC 分别为 train/validation `0.701/0.711` 和 `0.673/0.688`，说明 uncertainty 除了类别难度差异外也有类内信号；但类别平均 uncertainty 与类别错误率 Spearman 为 `0.723/0.690`、`0.833/0.844`，且 train-validation 类错误排序稳定（`0.947/0.961`）。模拟中约 `34-35%` 的样本曝光所在 batch 对应类别只有单例。当前权重的 batch SD/ESS 为 `0.225/0.951`、`0.189/0.965`（2173/2176 train）；class-balanced 候选变为 `0.111/0.987`、`0.092/0.991`。验证集方向相同。候选会明显抹平权重差异；而本 CIFAR-100 协议的已知类别均衡，没有需要纠正的类别频数不平衡，类别难度本身又与教师错误相关。故不接入训练、不做性能宣称，停止这一候选；保留现有 uncertainty-KD opt-in 规则不变。逐 seed 数值及限制见 [`docs/team_a_representation/class_balanced_uncertainty_weight_audit_20261125.md`](docs/team_a_representation/class_balanced_uncertainty_weight_audit_20261125.md)，原始逐样本审计 JSON 在本地 gitignored `analysis/` 下。
+
+### 2026-11-25：known-label classification view-stability 审计
+
+为判断下一步是否有必要引入新的分类表征目标，先对已有冻结 student 做只读 known-validation 双增强审计。对同一图像独立采样两次仓库现有 CIFAR train transform，记录 shared classification feature cosine、logit 的对称 JS divergence、预测翻转，并按两视图都正确/至少一视图错误分组；unknown/test 标签未加载，未用于训练、校准、checkpoint 或方法选择。新增脚本与单测，专项测试 `2 passed`，没有启动新训练。
+
+错误相关的不稳定性在两个 seed 重复：standard-KD 的 feature cosine 在“至少一视图错误”组相对“两视图正确”组为 `0.9325 vs 0.9560`（2173）和 `0.9285 vs 0.9567`（2176），logit JS 为 `0.0534 vs 0.0178` 和 `0.0529 vs 0.0171`。uncertainty-KD 没有稳定修复该现象：2173 的全体 cosine `0.9475→0.9488` 但预测翻转 `16.10%→17.57%`，2176 的 cosine `0.9457→0.9450`；两 seed 的 JS 都上升。2176 target-repair 的翻转率降至 `16.57%`，但错误组 feature cosine 降至 `0.9222`、JS 升至 `0.0840`，说明其已知准确率/候选改善不是增强不变性改善。
+
+本阶段只得到机制线索，不作下游性能结论。下一阶段可在 Team A 范围内实现一个 default-off 的 known-label classification-view consistency 候选：standard 与 treatment 必须消费完全相同的双视图增强流，唯一新增项是 shared student classification feature 一致性；CE、standard/uncertainty logits KD、teacher detach、checkpoint、拒识和新类发现评测全部固定。先通过 finite loss、student-only gradient、双视图对齐和 coefficient=0 行为的实现门，再决定是否做一个 fresh semantic-hard pilot；不能直接把已有 discovery/mixed-pool consistency 分支当作本问题的答案。
+
+### 2026-11-25：classification-view consistency 实现门
+
+依据双增强审计，新增 default-off 的 `alpha_classification_view_consistency`，只对 known training 的 shared student classification features 计算两视图 cosine consistency；不使用 teacher uncertainty、student uncertainty、unknown/test 标签或 discovery/mixed-pool 标签。新增 `--paired-classification-views`，要求 control 与 treatment 都使用同一 paired augmentation stream，避免 treatment 单独消耗额外随机增强；系数为 0 时保留 paired forward 但一致性项不产生梯度，默认不开启时历史单视图路径不变。
+
+实现门覆盖有限值、shape、zero-batch、student-only gradient、paired epoch 统计和 coefficient=0 inactive 行为，专项测试 `5 passed`，相关 Python 编译通过。训练统计单独记录 `classification_view_consistency`、`classification_view_consistency_applied` 和 `paired_classification_views`，并将实际加权项纳入 encoder gradient audit。当前只完成实现验证，尚未启动正式训练；协议见 [`docs/team_a_representation/classification_view_consistency_protocol_20261125.md`](docs/team_a_representation/classification_view_consistency_protocol_20261125.md)。
+
+随后用已有 seed `2173` teacher 做独立 1-epoch CUDA fit smoke，输出写入新目录 `runs/team_a_classification_view_consistency_smoke_20261125`，未覆盖正式实验。训练和 checkpoint 保存均成功，history 记录 consistency loss `0.050933`、`applied=true`、`paired=true`，best epoch 为 1；该 smoke 未开启 `--audit-loss-gradients`，因此不从它宣称运行时梯度数值，梯度有效性以专项 paired epoch 测试为准。该结果仅证明真实 fit_student 接线可运行，不是性能证据。
