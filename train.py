@@ -1324,6 +1324,8 @@ def build_parser():
             "uncertainty_decoupled",
             "quality_aware",
             "uncertainty_target_repair",
+            "teacher_error_repair",
+            "uncertainty_error_repair",
             "selective",
         ],
         default="standard",
@@ -1336,6 +1338,8 @@ def build_parser():
             "downweight unreliable soft targets; selective keeps only teacher-"
             "correct soft targets; uncertainty_target_repair moves uncertain "
             "teacher targets toward the verified known label."
+            " uncertainty_error_repair applies that repair only to teacher-"
+            "wrong known samples; teacher_error_repair fully corrects only those rows."
         ),
     )
     p.add_argument("--alpha-supcon", type=float, default=0.1)

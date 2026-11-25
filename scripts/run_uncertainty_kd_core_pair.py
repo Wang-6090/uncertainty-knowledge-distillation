@@ -115,6 +115,7 @@ def discovery_score_mode_for_profile(objective_profile: str) -> str:
         "ce_selective_kd",
         "ce_srd",
         "ce_uncertainty_target_repair",
+        "ce_uncertainty_error_repair",
     }:
         return "max_softmax"
     return "feature_rejector"
@@ -182,6 +183,7 @@ def main() -> None:
             "ce_class_holdout_proxy",
             "ce_srd",
             "ce_uncertainty_target_repair",
+            "ce_uncertainty_error_repair",
         ],
         default="current_auxiliary",
         help=(
@@ -190,7 +192,8 @@ def main() -> None:
             "ua_dkd compares standard KL, unweighted DKD, and uncertainty-gated DKD; "
             "quality_aware compares standard KL, unweighted DKD, and quality-aware KL"
             "; ce_selective_kd compares standard KL, teacher-correct selective KL, and uncertainty-KD; "
-            "ce_uncertainty_target_repair compares standard KL, uncertainty target repair, and uncertainty-KD"
+            "ce_uncertainty_target_repair compares standard KL, uncertainty target repair, and uncertainty-KD; "
+            "ce_uncertainty_error_repair compares standard KL, error-only uncertainty target repair, and uncertainty-KD"
         ),
     )
     parser.add_argument(
@@ -214,7 +217,7 @@ def main() -> None:
 
     if options.kd_uncertainty_source != "head" and options.kd_mc_samples < 2:
         raise ValueError("--kd-mc-samples must be at least 2 for MC uncertainty")
-    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd", "ce_uncertainty_target_repair"} and options.include_no_kd:
+    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd", "ce_uncertainty_target_repair", "ce_uncertainty_error_repair"} and options.include_no_kd:
         raise ValueError(
             f"{options.objective_profile} already defines a three-arm comparison; "
             "no-KD is not supported"
@@ -254,7 +257,7 @@ def main() -> None:
     base_student["kd_mode"] = "standard"
     base_student["kd_uncertainty_source"] = options.kd_uncertainty_source
     base_student["kd_mc_samples"] = int(options.kd_mc_samples)
-    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd", "ce_class_holdout_proxy", "ce_uncertainty_target_repair"}:
+    if options.objective_profile in {"ua_dkd", "quality_aware", "ce_selective_kd", "ce_srd", "ce_class_holdout_proxy", "ce_uncertainty_target_repair", "ce_uncertainty_error_repair"}:
         base_student["audit_loss_gradients"] = True
     base_student["open_val_ratio"] = 0.0
     base_discover = read_json(discover_source)
@@ -344,6 +347,13 @@ def main() -> None:
             arm_specs = [
                 ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
                 ("target_repair", "uncertainty_target_repair", "mean_normalized", float(base_student["alpha_kd"])),
+                ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
+            ]
+        elif options.objective_profile == "ce_uncertainty_error_repair":
+            arm_specs = [
+                ("standard", "standard", "mean_normalized", float(base_student["alpha_kd"])),
+                ("hard_error_repair", "teacher_error_repair", "mean_normalized", float(base_student["alpha_kd"])),
+                ("error_repair", "uncertainty_error_repair", "mean_normalized", float(base_student["alpha_kd"])),
                 ("uncertainty", "uncertainty", "mean_normalized", float(base_student["alpha_kd"])),
             ]
         else:
@@ -656,6 +666,9 @@ def main() -> None:
                 "kd_selective_active_fraction_by_epoch": [stats.get("kd_selective_active_fraction") for stats in train_stats],
                 "kd_target_repair_applied_by_epoch": [stats.get("kd_target_repair_applied") for stats in train_stats],
                 "kd_target_repair_mean_by_epoch": [stats.get("kd_target_repair_mean") for stats in train_stats],
+                "kd_error_repair_applied_by_epoch": [stats.get("kd_error_repair_applied") for stats in train_stats],
+                "kd_error_repair_active_fraction_by_epoch": [stats.get("kd_error_repair_active_fraction") for stats in train_stats],
+                "kd_error_repair_mean_by_epoch": [stats.get("kd_error_repair_mean") for stats in train_stats],
                 "kd_gradient_norm_by_epoch": [
                     stats.get("gradient_audit_grad_norm_kd")
                     for stats in train_stats
@@ -834,6 +847,20 @@ def main() -> None:
                 raise RuntimeError(f"uncertainty target repair had zero strength in seed {seed}")
             if any(value is None or value <= 0.0 for value in repair_gradients + repair_updates):
                 raise RuntimeError(f"uncertainty target repair produced no effective student update in seed {seed}")
+        if options.objective_profile == "ce_uncertainty_error_repair":
+            for arm_name in ("hard_error_repair", "error_repair"):
+                repair = arms[arm_name]
+                applied = repair["kd_error_repair_applied_by_epoch"]
+                active = repair["kd_error_repair_active_fraction_by_epoch"]
+                means = repair["kd_error_repair_mean_by_epoch"]
+                gradients = repair["kd_gradient_norm_by_epoch"]
+                updates = repair["student_classifier_update_norm_by_epoch"]
+                if not all(applied):
+                    raise RuntimeError(f"{arm_name} was not applied in every epoch in seed {seed}")
+                if any(value is None or value <= 0.0 for value in active + means):
+                    raise RuntimeError(f"{arm_name} had no active teacher-error rows in seed {seed}")
+                if any(value is None or value <= 0.0 for value in gradients + updates):
+                    raise RuntimeError(f"{arm_name} produced no effective student update in seed {seed}")
         for arm in arm_names:
             report = arms[arm]["metrics"]
             if report.get("cluster_k") is None or report.get("clustering_skipped"):
@@ -860,6 +887,8 @@ def main() -> None:
                 if options.objective_profile == "ce_srd"
                 else "Does uncertainty target repair improve student representation and novel-class discovery over standard logits KD, with uncertainty-KD retained as the existing comparison?"
                 if options.objective_profile == "ce_uncertainty_target_repair"
+                else "Does teacher-error-only uncertainty target repair improve student representation and novel-class discovery over standard logits KD, with uncertainty-KD retained as the existing comparison?"
+                if options.objective_profile == "ce_uncertainty_error_repair"
                 else "Does teacher-uncertainty weighting of logits KD improve semantic-hard novel-class discovery over standard KL, conditional on the fixed current training pipeline?"
             ),
             "seed": int(seed),
@@ -883,6 +912,8 @@ def main() -> None:
                 if options.objective_profile == "ce_srd"
                 else "standard logits KD vs uncertainty target repair vs uncertainty-KD"
                 if options.objective_profile == "ce_uncertainty_target_repair"
+                else "standard logits KD vs teacher-error-only uncertainty target repair vs uncertainty-KD"
+                if options.objective_profile == "ce_uncertainty_error_repair"
                 else "alpha_kd=0 vs standard logits KD vs uncertainty-weighted logits KD"
                 if options.include_no_kd
                 else "kd_mode: standard vs decoupled vs uncertainty_decoupled"
@@ -916,9 +947,13 @@ def main() -> None:
                 "q=(1-u) teacher_soft_target + u one_hot(known_label) in target_repair arm"
                 if options.objective_profile == "ce_uncertainty_target_repair" else "disabled"
             ),
+            "uncertainty_error_repair": (
+                "soft repair uses u; hard_error_repair uses coefficient 1; both only where teacher argmax is wrong"
+                if options.objective_profile == "ce_uncertainty_error_repair" else "disabled"
+            ),
             "no_kd_control_definition": ("alpha_kd=0; all other supervised and auxiliary objectives remain active" if options.include_no_kd else None),
             "ce_only_control_definition": ("all numeric alpha_* coefficients are zero, discovery/outlier training is disabled, and evaluation uses max_softmax" if options.objective_profile == "ce_only" else None),
-            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd", "ce_class_center_feature_kd", "ce_class_holdout_proxy", "ce_selective_kd", "ce_srd", "ce_uncertainty_target_repair"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
+            "other_training_conditions": ("CE/KD-only known-class training; identical config except declared KD treatment and run/result-derived fields" if options.objective_profile in {"ce_only", "ce_centered_feature_kd", "ce_class_center_feature_kd", "ce_class_holdout_proxy", "ce_selective_kd", "ce_srd", "ce_uncertainty_target_repair", "ce_uncertainty_error_repair"} else "matched mixed-pool uncertainty-PU and rejection feature-margin pipeline; identical config except declared KD treatment and run/result-derived fields"),
             "checkpoint_selection": "known validation accuracy only",
             "threshold_calibration": "known validation only, target 95% coverage",
             "clustering": "automatic K; K selected from unlabeled candidate geometry; oracle-K metrics are separate upper-bound diagnostics",

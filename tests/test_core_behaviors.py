@@ -2488,6 +2488,18 @@ class CommandLineTest(unittest.TestCase):
             ).kd_mode,
             "uncertainty_target_repair",
         )
+        self.assertEqual(
+            parse_args(
+                ["train_student", "--kd-mode", "teacher_error_repair"]
+            ).kd_mode,
+            "teacher_error_repair",
+        )
+        self.assertEqual(
+            parse_args(
+                ["train_student", "--kd-mode", "uncertainty_error_repair"]
+            ).kd_mode,
+            "uncertainty_error_repair",
+        )
 
     def test_decoupled_kd_modes_log_components_gradients_and_parameter_updates(self):
         class TinyKDModel(torch.nn.Module):

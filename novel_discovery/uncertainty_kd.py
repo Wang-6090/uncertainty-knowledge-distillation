@@ -271,6 +271,41 @@ def uncertainty_target_repair_kl_loss(
     return loss, uncertainty.mean().detach()
 
 
+def uncertainty_error_repair_kl_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    teacher_uncertainty: torch.Tensor,
+    *,
+    temperature: float = 2.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Repair only teacher-wrong known samples toward their verified labels."""
+    if student_logits.shape != teacher_logits.shape or student_logits.ndim != 2:
+        raise ValueError("student_logits and teacher_logits must have shape [batch_size, classes]")
+    if labels.shape != (student_logits.size(0),):
+        raise ValueError("labels must have shape [batch_size]")
+    if teacher_uncertainty.shape != (student_logits.size(0),):
+        raise ValueError("teacher_uncertainty must have shape [batch_size]")
+    if bool(((labels < 0) | (labels >= student_logits.size(1))).any()):
+        raise ValueError("labels must index the logits class dimension")
+    if student_logits.size(0) == 0:
+        zero = _zero_loss(student_logits)
+        return zero, student_logits.new_tensor(0.0), student_logits.new_tensor(0.0)
+
+    temperature = max(float(temperature), 1e-6)
+    teacher_detached = teacher_logits.detach()
+    uncertainty = teacher_uncertainty.detach().to(student_logits).clamp(0.0, 1.0)
+    error_mask = teacher_detached.argmax(dim=1).ne(labels)
+    repair = uncertainty * error_mask.to(uncertainty)
+    teacher_prob = F.softmax(teacher_detached / temperature, dim=-1)
+    hard_target = F.one_hot(labels, num_classes=student_logits.size(1)).to(teacher_prob)
+    repaired_target = (1.0 - repair.unsqueeze(1)) * teacher_prob + repair.unsqueeze(1) * hard_target
+    student_log_prob = F.log_softmax(student_logits / temperature, dim=-1)
+    loss = F.kl_div(student_log_prob, repaired_target, reduction="none").sum(dim=1)
+    loss = loss.mean() * (temperature**2)
+    return loss, error_mask.float().mean().detach(), repair.mean().detach()
+
+
 def selective_kl_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
