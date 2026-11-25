@@ -17,6 +17,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from scipy.stats import spearmanr
 from sklearn.metrics import roc_auc_score
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,6 +116,139 @@ def effective_sample_size(weights: np.ndarray) -> float:
     return float(weights.sum() ** 2 / (len(weights) * np.square(weights).sum() + 1e-12))
 
 
+def minibatch_weight_diagnostics(
+    labels: np.ndarray,
+    uncertainty: np.ndarray,
+    batch_size: int,
+    repeats: int = 4,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Estimate the current and class-balanced weights under shuffled batches."""
+    labels = np.asarray(labels, dtype=np.int64)
+    uncertainty = np.asarray(uncertainty, dtype=np.float64)
+    if labels.ndim != 1 or uncertainty.shape != labels.shape or labels.size == 0:
+        raise ValueError("labels and uncertainty must be non-empty aligned vectors")
+    if batch_size < 1 or repeats < 1:
+        raise ValueError("batch_size and repeats must be positive")
+
+    rng = np.random.default_rng(seed)
+    epoch_stats: dict[str, list[dict[str, float]]] = {
+        "global_uncertainty": [],
+        "within_class_uncertainty": [],
+    }
+    singleton_exposures = 0
+    total_exposures = 0
+    for _ in range(repeats):
+        order = rng.permutation(labels.size)
+        for start in range(0, labels.size, batch_size):
+            indices = order[start : start + batch_size]
+            batch_labels = labels[indices]
+            base = np.exp(np.clip(-uncertainty[indices], -60.0, 60.0))
+            global_weights = base / max(float(base.mean()), 1e-12)
+            class_weights = np.empty_like(base)
+            for label in np.unique(batch_labels):
+                mask = batch_labels == label
+                class_weights[mask] = base[mask] / max(float(base[mask].mean()), 1e-12)
+                if int(mask.sum()) == 1:
+                    singleton_exposures += 1
+            class_weights /= max(float(class_weights.mean()), 1e-12)
+            total_exposures += len(indices)
+            for name, weights in (
+                ("global_uncertainty", global_weights),
+                ("within_class_uncertainty", class_weights),
+            ):
+                epoch_stats[name].append(
+                    {
+                        "weight_std": float(weights.std()),
+                        "ess_fraction": effective_sample_size(weights),
+                    }
+                )
+
+    return {
+        "batch_size": int(batch_size),
+        "simulated_epochs": int(repeats),
+        "seed": int(seed),
+        "singleton_class_exposure_fraction": singleton_exposures / max(total_exposures, 1),
+        "global_uncertainty": {
+            "mean_batch_weight_std": float(
+                np.mean([row["weight_std"] for row in epoch_stats["global_uncertainty"]])
+            ),
+            "mean_batch_ess_fraction": float(
+                np.mean([row["ess_fraction"] for row in epoch_stats["global_uncertainty"]])
+            ),
+        },
+        "within_class_uncertainty": {
+            "mean_batch_weight_std": float(
+                np.mean([row["weight_std"] for row in epoch_stats["within_class_uncertainty"]])
+            ),
+            "mean_batch_ess_fraction": float(
+                np.mean([row["ess_fraction"] for row in epoch_stats["within_class_uncertainty"]])
+            ),
+        },
+    }
+
+
+def _spearman(left: np.ndarray, right: np.ndarray) -> float | None:
+    if len(left) < 2 or len(right) != len(left):
+        return None
+    value = float(spearmanr(left, right).statistic)
+    return value if math.isfinite(value) else None
+
+
+def classwise_alignment(
+    values: dict[str, np.ndarray], raw_class_ids: list[int] | None = None
+) -> dict[str, Any]:
+    labels = values["labels"].astype(np.int64)
+    uncertainty = values["uncertainty"].astype(np.float64)
+    confidence = values["confidence"].astype(np.float64)
+    error = values["error"].astype(bool)
+    class_rows = []
+    for label_index in np.unique(labels):
+        mask = labels == label_index
+        class_error = error[mask]
+        class_uncertainty = uncertainty[mask]
+        class_confidence = confidence[mask]
+        class_rows.append(
+            {
+                "label_index": int(label_index),
+                "raw_class_id": int(raw_class_ids[label_index])
+                if raw_class_ids is not None
+                else int(label_index),
+                "samples": int(mask.sum()),
+                "teacher_error_rate": float(class_error.mean()),
+                "mean_uncertainty": float(class_uncertainty.mean()),
+                "mean_confidence": float(class_confidence.mean()),
+                "error_uncertainty_auroc": (
+                    float(roc_auc_score(class_error.astype(np.int64), class_uncertainty))
+                    if len(np.unique(class_error)) == 2
+                    else None
+                ),
+            }
+        )
+    valid_aucs = [
+        row["error_uncertainty_auroc"]
+        for row in class_rows
+        if row["error_uncertainty_auroc"] is not None
+    ]
+    rates = np.asarray([row["teacher_error_rate"] for row in class_rows])
+    mean_uncertainty = np.asarray([row["mean_uncertainty"] for row in class_rows])
+    mean_confidence = np.asarray([row["mean_confidence"] for row in class_rows])
+    return {
+        "class_count": len(class_rows),
+        "within_class_error_uncertainty_macro_auroc": float(np.mean(valid_aucs))
+        if valid_aucs
+        else None,
+        "within_class_error_uncertainty_valid_class_count": len(valid_aucs),
+        "spearman_class_error_rate_vs_mean_uncertainty": _spearman(
+            rates, mean_uncertainty
+        ),
+        "spearman_class_error_rate_vs_mean_confidence": _spearman(
+            rates, mean_confidence
+        ),
+        "classes": class_rows,
+    }
+
+
 def binned_error_rates(uncertainty: np.ndarray, error: np.ndarray, weights: np.ndarray):
     order = np.argsort(uncertainty, kind="stable")
     bins = []
@@ -133,7 +267,12 @@ def binned_error_rates(uncertainty: np.ndarray, error: np.ndarray, weights: np.n
     return bins
 
 
-def audit_split(values: dict[str, np.ndarray]) -> dict[str, Any]:
+def audit_split(
+    values: dict[str, np.ndarray],
+    raw_class_ids: list[int] | None = None,
+    simulation_batch_size: int = 64,
+    simulation_seed: int = 0,
+) -> dict[str, Any]:
     uncertainty = values["uncertainty"].astype(np.float64)
     error = values["error"].astype(bool)
     confidence = values["confidence"].astype(np.float64)
@@ -185,6 +324,14 @@ def audit_split(values: dict[str, np.ndarray]) -> dict[str, Any]:
         },
         "uncertainty_sorted_bins": binned_error_rates(
             uncertainty, error, normalized_weights
+        ),
+        "classwise_alignment": classwise_alignment(values, raw_class_ids),
+        "minibatch_weight_simulation": minibatch_weight_diagnostics(
+            values["labels"],
+            uncertainty,
+            batch_size=simulation_batch_size,
+            repeats=4,
+            seed=simulation_seed,
         ),
     }
     return report
@@ -239,8 +386,56 @@ def audit(args) -> dict[str, Any]:
             "checkpoint_known_classes_match": checkpoint.get("known_classes")
             == read_json(split_path).get("known_classes"),
         },
-        "train": audit_split(train_values),
-        "validation": audit_split(val_values),
+        "train": audit_split(
+            train_values,
+            checkpoint["known_classes"],
+            simulation_batch_size=64,
+            simulation_seed=int(args.seed),
+        ),
+        "validation": audit_split(
+            val_values,
+            checkpoint["known_classes"],
+            simulation_batch_size=64,
+            simulation_seed=int(args.seed) + 1,
+        ),
+        "cross_split_class_rank_stability": {
+            "matched_class_count": int(
+                len(
+                    np.intersect1d(
+                        np.unique(train_values["labels"]),
+                        np.unique(val_values["labels"]),
+                    )
+                )
+            ),
+            "spearman_class_error_rate_train_vs_validation": _spearman(
+                np.asarray(
+                    [
+                        train_values["error"][train_values["labels"] == index].mean()
+                        for index in range(len(checkpoint["known_classes"]))
+                    ]
+                ),
+                np.asarray(
+                    [
+                        val_values["error"][val_values["labels"] == index].mean()
+                        for index in range(len(checkpoint["known_classes"]))
+                    ]
+                ),
+            ),
+            "spearman_class_mean_uncertainty_train_vs_validation": _spearman(
+                np.asarray(
+                    [
+                        train_values["uncertainty"][train_values["labels"] == index].mean()
+                        for index in range(len(checkpoint["known_classes"]))
+                    ]
+                ),
+                np.asarray(
+                    [
+                        val_values["uncertainty"][val_values["labels"] == index].mean()
+                        for index in range(len(checkpoint["known_classes"]))
+                    ]
+                ),
+            ),
+        },
     }
 
 
