@@ -1,0 +1,16 @@
+{
+  "run_dirs": [
+    "runs\\qiyuhan_cifar_seed42",
+    "runs\\qiyuhan_cifar_seed123",
+    "runs\\qiyuhan_cifar_seed3407"
+  ],
+  "required_runs": {
+    "feature_pca_kmeans": "cluster_feature_pca_kmeans",
+    "projection_pca_kmeans": "cluster_projection_pca_kmeans",
+    "feature_kmeans": "cluster_feature_kmeans",
+    "feature_normalized_kmeans": "cluster_feature_normalized_kmeans",
+    "feature_pca_agglomerative": "cluster_feature_pca_agglomerative",
+    "feature_pca_spectral": "cluster_feature_pca_spectral"
+  },
+  "protocol": "frozen_candidate_pool_oracle_k_multiseed"
+}

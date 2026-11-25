@@ -1,0 +1,1650 @@
+{
+  "protocol": "frozen_candidate_pool_oracle_k_multiseed",
+  "seeds": [
+    42,
+    123,
+    3407
+  ],
+  "source_index_sha256": "9e1c19b3fdc185411bd1a987deb6a9fda2531116aac060a84c4d878854d1c099",
+  "per_seed": {
+    "42": {
+      "run_dir": "D:\\wlq-dc\\uncertainty-knowledge-distillation-main\\runs\\qiyuhan_cifar_seed42",
+      "pool": {
+        "candidate_count": 466,
+        "candidate_purity": 0.3562231759656652,
+        "known_contamination": 0.6437768240343348,
+        "candidate_unknown_recall": 0.0415,
+        "unknown_classes_with_zero_candidates": 5,
+        "unknown_class_recall_min": 0.0,
+        "unknown_class_recall_median": 0.03,
+        "unknown_class_recall_max": 0.2,
+        "max_known_class_false_reject_rate": 0.24
+      },
+      "threshold": 2.157341165530777,
+      "student_checkpoint_sha256": "5a75f353e3ce6fb74dfbaa59e4d65e5aed0a55a7ac555d25c553c2343c7cf03e",
+      "all_unknown_oracle": {
+        "evaluation_only": true,
+        "uses_ground_truth_unknown_mask": true,
+        "uses_ground_truth_k": true,
+        "used_for_candidate_selection": false,
+        "used_for_representation_or_method_selection": false,
+        "sample_count": 4000,
+        "oracle_k": 40,
+        "metrics": {
+          "acc": 0.24875,
+          "nmi": 0.33031221734825833,
+          "ari": 0.12230050960790524
+        },
+        "cluster_sizes": {
+          "0": 106,
+          "1": 93,
+          "2": 95,
+          "3": 106,
+          "4": 115,
+          "5": 64,
+          "6": 111,
+          "7": 93,
+          "8": 137,
+          "9": 109,
+          "10": 130,
+          "11": 83,
+          "12": 71,
+          "13": 98,
+          "14": 75,
+          "15": 96,
+          "16": 118,
+          "17": 97,
+          "18": 98,
+          "19": 115,
+          "20": 80,
+          "21": 124,
+          "22": 123,
+          "23": 97,
+          "24": 116,
+          "25": 112,
+          "26": 103,
+          "27": 107,
+          "28": 91,
+          "29": 119,
+          "30": 74,
+          "31": 114,
+          "32": 99,
+          "33": 71,
+          "34": 84,
+          "35": 103,
+          "36": 114,
+          "37": 67,
+          "38": 86,
+          "39": 106
+        },
+        "classwise": [
+          {
+            "raw_label": 0,
+            "sample_count": 100,
+            "occupied_clusters": 12,
+            "dominant_cluster_fraction": 0.41,
+            "hungarian_matched_count": 41,
+            "hungarian_matched_accuracy": 0.41
+          },
+          {
+            "raw_label": 3,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.21,
+            "hungarian_matched_count": 21,
+            "hungarian_matched_accuracy": 0.21
+          },
+          {
+            "raw_label": 4,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.16,
+            "hungarian_matched_count": 16,
+            "hungarian_matched_accuracy": 0.16
+          },
+          {
+            "raw_label": 5,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.13,
+            "hungarian_matched_count": 13,
+            "hungarian_matched_accuracy": 0.13
+          },
+          {
+            "raw_label": 6,
+            "sample_count": 100,
+            "occupied_clusters": 23,
+            "dominant_cluster_fraction": 0.13,
+            "hungarian_matched_count": 13,
+            "hungarian_matched_accuracy": 0.13
+          },
+          {
+            "raw_label": 11,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.57,
+            "hungarian_matched_count": 6,
+            "hungarian_matched_accuracy": 0.06
+          },
+          {
+            "raw_label": 13,
+            "sample_count": 100,
+            "occupied_clusters": 18,
+            "dominant_cluster_fraction": 0.31,
+            "hungarian_matched_count": 31,
+            "hungarian_matched_accuracy": 0.31
+          },
+          {
+            "raw_label": 14,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.2,
+            "hungarian_matched_count": 4,
+            "hungarian_matched_accuracy": 0.04
+          },
+          {
+            "raw_label": 17,
+            "sample_count": 100,
+            "occupied_clusters": 16,
+            "dominant_cluster_fraction": 0.27,
+            "hungarian_matched_count": 27,
+            "hungarian_matched_accuracy": 0.27
+          },
+          {
+            "raw_label": 19,
+            "sample_count": 100,
+            "occupied_clusters": 31,
+            "dominant_cluster_fraction": 0.28,
+            "hungarian_matched_count": 28,
+            "hungarian_matched_accuracy": 0.28
+          },
+          {
+            "raw_label": 20,
+            "sample_count": 100,
+            "occupied_clusters": 27,
+            "dominant_cluster_fraction": 0.2,
+            "hungarian_matched_count": 20,
+            "hungarian_matched_accuracy": 0.2
+          },
+          {
+            "raw_label": 24,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.26,
+            "hungarian_matched_count": 26,
+            "hungarian_matched_accuracy": 0.26
+          },
+          {
+            "raw_label": 25,
+            "sample_count": 100,
+            "occupied_clusters": 28,
+            "dominant_cluster_fraction": 0.14,
+            "hungarian_matched_count": 12,
+            "hungarian_matched_accuracy": 0.12
+          },
+          {
+            "raw_label": 27,
+            "sample_count": 100,
+            "occupied_clusters": 27,
+            "dominant_cluster_fraction": 0.12,
+            "hungarian_matched_count": 12,
+            "hungarian_matched_accuracy": 0.12
+          },
+          {
+            "raw_label": 28,
+            "sample_count": 100,
+            "occupied_clusters": 22,
+            "dominant_cluster_fraction": 0.27,
+            "hungarian_matched_count": 27,
+            "hungarian_matched_accuracy": 0.27
+          },
+          {
+            "raw_label": 29,
+            "sample_count": 100,
+            "occupied_clusters": 27,
+            "dominant_cluster_fraction": 0.2,
+            "hungarian_matched_count": 6,
+            "hungarian_matched_accuracy": 0.06
+          },
+          {
+            "raw_label": 31,
+            "sample_count": 100,
+            "occupied_clusters": 28,
+            "dominant_cluster_fraction": 0.2,
+            "hungarian_matched_count": 3,
+            "hungarian_matched_accuracy": 0.03
+          },
+          {
+            "raw_label": 35,
+            "sample_count": 100,
+            "occupied_clusters": 18,
+            "dominant_cluster_fraction": 0.6,
+            "hungarian_matched_count": 60,
+            "hungarian_matched_accuracy": 0.6
+          },
+          {
+            "raw_label": 43,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.36,
+            "hungarian_matched_count": 36,
+            "hungarian_matched_accuracy": 0.36
+          },
+          {
+            "raw_label": 53,
+            "sample_count": 100,
+            "occupied_clusters": 13,
+            "dominant_cluster_fraction": 0.38,
+            "hungarian_matched_count": 33,
+            "hungarian_matched_accuracy": 0.33
+          },
+          {
+            "raw_label": 54,
+            "sample_count": 100,
+            "occupied_clusters": 22,
+            "dominant_cluster_fraction": 0.46,
+            "hungarian_matched_count": 46,
+            "hungarian_matched_accuracy": 0.46
+          },
+          {
+            "raw_label": 57,
+            "sample_count": 100,
+            "occupied_clusters": 19,
+            "dominant_cluster_fraction": 0.3,
+            "hungarian_matched_count": 12,
+            "hungarian_matched_accuracy": 0.12
+          },
+          {
+            "raw_label": 64,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.23,
+            "hungarian_matched_count": 23,
+            "hungarian_matched_accuracy": 0.23
+          },
+          {
+            "raw_label": 67,
+            "sample_count": 100,
+            "occupied_clusters": 20,
+            "dominant_cluster_fraction": 0.41,
+            "hungarian_matched_count": 41,
+            "hungarian_matched_accuracy": 0.41
+          },
+          {
+            "raw_label": 69,
+            "sample_count": 100,
+            "occupied_clusters": 16,
+            "dominant_cluster_fraction": 0.45,
+            "hungarian_matched_count": 45,
+            "hungarian_matched_accuracy": 0.45
+          },
+          {
+            "raw_label": 71,
+            "sample_count": 100,
+            "occupied_clusters": 11,
+            "dominant_cluster_fraction": 0.65,
+            "hungarian_matched_count": 65,
+            "hungarian_matched_accuracy": 0.65
+          },
+          {
+            "raw_label": 75,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.14,
+            "hungarian_matched_count": 11,
+            "hungarian_matched_accuracy": 0.11
+          },
+          {
+            "raw_label": 77,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.19,
+            "hungarian_matched_count": 19,
+            "hungarian_matched_accuracy": 0.19
+          },
+          {
+            "raw_label": 79,
+            "sample_count": 100,
+            "occupied_clusters": 28,
+            "dominant_cluster_fraction": 0.23,
+            "hungarian_matched_count": 23,
+            "hungarian_matched_accuracy": 0.23
+          },
+          {
+            "raw_label": 81,
+            "sample_count": 100,
+            "occupied_clusters": 17,
+            "dominant_cluster_fraction": 0.31,
+            "hungarian_matched_count": 31,
+            "hungarian_matched_accuracy": 0.31
+          },
+          {
+            "raw_label": 82,
+            "sample_count": 100,
+            "occupied_clusters": 15,
+            "dominant_cluster_fraction": 0.54,
+            "hungarian_matched_count": 54,
+            "hungarian_matched_accuracy": 0.54
+          },
+          {
+            "raw_label": 84,
+            "sample_count": 100,
+            "occupied_clusters": 28,
+            "dominant_cluster_fraction": 0.13,
+            "hungarian_matched_count": 13,
+            "hungarian_matched_accuracy": 0.13
+          },
+          {
+            "raw_label": 86,
+            "sample_count": 100,
+            "occupied_clusters": 21,
+            "dominant_cluster_fraction": 0.28,
+            "hungarian_matched_count": 23,
+            "hungarian_matched_accuracy": 0.23
+          },
+          {
+            "raw_label": 88,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.34,
+            "hungarian_matched_count": 34,
+            "hungarian_matched_accuracy": 0.34
+          },
+          {
+            "raw_label": 89,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.19,
+            "hungarian_matched_count": 13,
+            "hungarian_matched_accuracy": 0.13
+          },
+          {
+            "raw_label": 90,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.12,
+            "hungarian_matched_count": 9,
+            "hungarian_matched_accuracy": 0.09
+          },
+          {
+            "raw_label": 93,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.2,
+            "hungarian_matched_count": 13,
+            "hungarian_matched_accuracy": 0.13
+          },
+          {
+            "raw_label": 94,
+            "sample_count": 100,
+            "occupied_clusters": 15,
+            "dominant_cluster_fraction": 0.33,
+            "hungarian_matched_count": 33,
+            "hungarian_matched_accuracy": 0.33
+          },
+          {
+            "raw_label": 95,
+            "sample_count": 100,
+            "occupied_clusters": 18,
+            "dominant_cluster_fraction": 0.38,
+            "hungarian_matched_count": 33,
+            "hungarian_matched_accuracy": 0.33
+          },
+          {
+            "raw_label": 97,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.26,
+            "hungarian_matched_count": 19,
+            "hungarian_matched_accuracy": 0.19
+          }
+        ],
+        "assignments": "all_unknown_oracle_assignments.npz"
+      }
+    },
+    "123": {
+      "run_dir": "D:\\wlq-dc\\uncertainty-knowledge-distillation-main\\runs\\qiyuhan_cifar_seed123",
+      "pool": {
+        "candidate_count": 432,
+        "candidate_purity": 0.3402777777777778,
+        "known_contamination": 0.6597222222222222,
+        "candidate_unknown_recall": 0.03675,
+        "unknown_classes_with_zero_candidates": 3,
+        "unknown_class_recall_min": 0.0,
+        "unknown_class_recall_median": 0.025,
+        "unknown_class_recall_max": 0.17,
+        "max_known_class_false_reject_rate": 0.16
+      },
+      "threshold": 2.1637827426623644,
+      "student_checkpoint_sha256": "7a47622a30a5d187d4124fba630d5e68235781be980864972fce1a3dc2cff8cb",
+      "all_unknown_oracle": {
+        "evaluation_only": true,
+        "uses_ground_truth_unknown_mask": true,
+        "uses_ground_truth_k": true,
+        "used_for_candidate_selection": false,
+        "used_for_representation_or_method_selection": false,
+        "sample_count": 4000,
+        "oracle_k": 40,
+        "metrics": {
+          "acc": 0.2475,
+          "nmi": 0.340074062341885,
+          "ari": 0.12508971138246813
+        },
+        "cluster_sizes": {
+          "0": 90,
+          "1": 128,
+          "2": 100,
+          "3": 105,
+          "4": 74,
+          "5": 82,
+          "6": 96,
+          "7": 122,
+          "8": 72,
+          "9": 96,
+          "10": 118,
+          "11": 96,
+          "12": 75,
+          "13": 104,
+          "14": 104,
+          "15": 100,
+          "16": 75,
+          "17": 118,
+          "18": 85,
+          "19": 131,
+          "20": 137,
+          "21": 115,
+          "22": 100,
+          "23": 114,
+          "24": 96,
+          "25": 94,
+          "26": 131,
+          "27": 109,
+          "28": 56,
+          "29": 83,
+          "30": 90,
+          "31": 108,
+          "32": 95,
+          "33": 106,
+          "34": 85,
+          "35": 103,
+          "36": 100,
+          "37": 117,
+          "38": 95,
+          "39": 95
+        },
+        "classwise": [
+          {
+            "raw_label": 0,
+            "sample_count": 100,
+            "occupied_clusters": 12,
+            "dominant_cluster_fraction": 0.48,
+            "hungarian_matched_count": 48,
+            "hungarian_matched_accuracy": 0.48
+          },
+          {
+            "raw_label": 3,
+            "sample_count": 100,
+            "occupied_clusters": 23,
+            "dominant_cluster_fraction": 0.19,
+            "hungarian_matched_count": 17,
+            "hungarian_matched_accuracy": 0.17
+          },
+          {
+            "raw_label": 4,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.16,
+            "hungarian_matched_count": 16,
+            "hungarian_matched_accuracy": 0.16
+          },
+          {
+            "raw_label": 5,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.12,
+            "hungarian_matched_count": 12,
+            "hungarian_matched_accuracy": 0.12
+          },
+          {
+            "raw_label": 6,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.13,
+            "hungarian_matched_count": 10,
+            "hungarian_matched_accuracy": 0.1
+          },
+          {
+            "raw_label": 11,
+            "sample_count": 100,
+            "occupied_clusters": 23,
+            "dominant_cluster_fraction": 0.52,
+            "hungarian_matched_count": 3,
+            "hungarian_matched_accuracy": 0.03
+          },
+          {
+            "raw_label": 13,
+            "sample_count": 100,
+            "occupied_clusters": 22,
+            "dominant_cluster_fraction": 0.29,
+            "hungarian_matched_count": 23,
+            "hungarian_matched_accuracy": 0.23
+          },
+          {
+            "raw_label": 14,
+            "sample_count": 100,
+            "occupied_clusters": 27,
+            "dominant_cluster_fraction": 0.17,
+            "hungarian_matched_count": 13,
+            "hungarian_matched_accuracy": 0.13
+          },
+          {
+            "raw_label": 17,
+            "sample_count": 100,
+            "occupied_clusters": 11,
+            "dominant_cluster_fraction": 0.42,
+            "hungarian_matched_count": 33,
+            "hungarian_matched_accuracy": 0.33
+          },
+          {
+            "raw_label": 19,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.26,
+            "hungarian_matched_count": 26,
+            "hungarian_matched_accuracy": 0.26
+          },
+          {
+            "raw_label": 20,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.23,
+            "hungarian_matched_count": 23,
+            "hungarian_matched_accuracy": 0.23
+          },
+          {
+            "raw_label": 24,
+            "sample_count": 100,
+            "occupied_clusters": 19,
+            "dominant_cluster_fraction": 0.44,
+            "hungarian_matched_count": 44,
+            "hungarian_matched_accuracy": 0.44
+          },
+          {
+            "raw_label": 25,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.12,
+            "hungarian_matched_count": 8,
+            "hungarian_matched_accuracy": 0.08
+          },
+          {
+            "raw_label": 27,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.21,
+            "hungarian_matched_count": 21,
+            "hungarian_matched_accuracy": 0.21
+          },
+          {
+            "raw_label": 28,
+            "sample_count": 100,
+            "occupied_clusters": 19,
+            "dominant_cluster_fraction": 0.37,
+            "hungarian_matched_count": 37,
+            "hungarian_matched_accuracy": 0.37
+          },
+          {
+            "raw_label": 29,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.24,
+            "hungarian_matched_count": 14,
+            "hungarian_matched_accuracy": 0.14
+          },
+          {
+            "raw_label": 31,
+            "sample_count": 100,
+            "occupied_clusters": 22,
+            "dominant_cluster_fraction": 0.14,
+            "hungarian_matched_count": 11,
+            "hungarian_matched_accuracy": 0.11
+          },
+          {
+            "raw_label": 35,
+            "sample_count": 100,
+            "occupied_clusters": 18,
+            "dominant_cluster_fraction": 0.56,
+            "hungarian_matched_count": 56,
+            "hungarian_matched_accuracy": 0.56
+          },
+          {
+            "raw_label": 43,
+            "sample_count": 100,
+            "occupied_clusters": 20,
+            "dominant_cluster_fraction": 0.26,
+            "hungarian_matched_count": 6,
+            "hungarian_matched_accuracy": 0.06
+          },
+          {
+            "raw_label": 53,
+            "sample_count": 100,
+            "occupied_clusters": 12,
+            "dominant_cluster_fraction": 0.31,
+            "hungarian_matched_count": 24,
+            "hungarian_matched_accuracy": 0.24
+          },
+          {
+            "raw_label": 54,
+            "sample_count": 100,
+            "occupied_clusters": 17,
+            "dominant_cluster_fraction": 0.39,
+            "hungarian_matched_count": 39,
+            "hungarian_matched_accuracy": 0.39
+          },
+          {
+            "raw_label": 57,
+            "sample_count": 100,
+            "occupied_clusters": 20,
+            "dominant_cluster_fraction": 0.23,
+            "hungarian_matched_count": 18,
+            "hungarian_matched_accuracy": 0.18
+          },
+          {
+            "raw_label": 64,
+            "sample_count": 100,
+            "occupied_clusters": 22,
+            "dominant_cluster_fraction": 0.32,
+            "hungarian_matched_count": 32,
+            "hungarian_matched_accuracy": 0.32
+          },
+          {
+            "raw_label": 67,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.34,
+            "hungarian_matched_count": 3,
+            "hungarian_matched_accuracy": 0.03
+          },
+          {
+            "raw_label": 69,
+            "sample_count": 100,
+            "occupied_clusters": 18,
+            "dominant_cluster_fraction": 0.43,
+            "hungarian_matched_count": 43,
+            "hungarian_matched_accuracy": 0.43
+          },
+          {
+            "raw_label": 71,
+            "sample_count": 100,
+            "occupied_clusters": 13,
+            "dominant_cluster_fraction": 0.5,
+            "hungarian_matched_count": 50,
+            "hungarian_matched_accuracy": 0.5
+          },
+          {
+            "raw_label": 75,
+            "sample_count": 100,
+            "occupied_clusters": 22,
+            "dominant_cluster_fraction": 0.22,
+            "hungarian_matched_count": 22,
+            "hungarian_matched_accuracy": 0.22
+          },
+          {
+            "raw_label": 77,
+            "sample_count": 100,
+            "occupied_clusters": 28,
+            "dominant_cluster_fraction": 0.14,
+            "hungarian_matched_count": 9,
+            "hungarian_matched_accuracy": 0.09
+          },
+          {
+            "raw_label": 79,
+            "sample_count": 100,
+            "occupied_clusters": 22,
+            "dominant_cluster_fraction": 0.32,
+            "hungarian_matched_count": 14,
+            "hungarian_matched_accuracy": 0.14
+          },
+          {
+            "raw_label": 81,
+            "sample_count": 100,
+            "occupied_clusters": 21,
+            "dominant_cluster_fraction": 0.27,
+            "hungarian_matched_count": 27,
+            "hungarian_matched_accuracy": 0.27
+          },
+          {
+            "raw_label": 82,
+            "sample_count": 100,
+            "occupied_clusters": 17,
+            "dominant_cluster_fraction": 0.54,
+            "hungarian_matched_count": 54,
+            "hungarian_matched_accuracy": 0.54
+          },
+          {
+            "raw_label": 84,
+            "sample_count": 100,
+            "occupied_clusters": 32,
+            "dominant_cluster_fraction": 0.12,
+            "hungarian_matched_count": 9,
+            "hungarian_matched_accuracy": 0.09
+          },
+          {
+            "raw_label": 86,
+            "sample_count": 100,
+            "occupied_clusters": 17,
+            "dominant_cluster_fraction": 0.28,
+            "hungarian_matched_count": 28,
+            "hungarian_matched_accuracy": 0.28
+          },
+          {
+            "raw_label": 88,
+            "sample_count": 100,
+            "occupied_clusters": 21,
+            "dominant_cluster_fraction": 0.36,
+            "hungarian_matched_count": 36,
+            "hungarian_matched_accuracy": 0.36
+          },
+          {
+            "raw_label": 89,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.24,
+            "hungarian_matched_count": 24,
+            "hungarian_matched_accuracy": 0.24
+          },
+          {
+            "raw_label": 90,
+            "sample_count": 100,
+            "occupied_clusters": 30,
+            "dominant_cluster_fraction": 0.15,
+            "hungarian_matched_count": 7,
+            "hungarian_matched_accuracy": 0.07
+          },
+          {
+            "raw_label": 93,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.21,
+            "hungarian_matched_count": 7,
+            "hungarian_matched_accuracy": 0.07
+          },
+          {
+            "raw_label": 94,
+            "sample_count": 100,
+            "occupied_clusters": 19,
+            "dominant_cluster_fraction": 0.33,
+            "hungarian_matched_count": 33,
+            "hungarian_matched_accuracy": 0.33
+          },
+          {
+            "raw_label": 95,
+            "sample_count": 100,
+            "occupied_clusters": 18,
+            "dominant_cluster_fraction": 0.61,
+            "hungarian_matched_count": 61,
+            "hungarian_matched_accuracy": 0.61
+          },
+          {
+            "raw_label": 97,
+            "sample_count": 100,
+            "occupied_clusters": 20,
+            "dominant_cluster_fraction": 0.29,
+            "hungarian_matched_count": 29,
+            "hungarian_matched_accuracy": 0.29
+          }
+        ],
+        "assignments": "all_unknown_oracle_assignments.npz"
+      }
+    },
+    "3407": {
+      "run_dir": "D:\\wlq-dc\\uncertainty-knowledge-distillation-main\\runs\\qiyuhan_cifar_seed3407",
+      "pool": {
+        "candidate_count": 494,
+        "candidate_purity": 0.3481781376518219,
+        "known_contamination": 0.6518218623481782,
+        "candidate_unknown_recall": 0.043,
+        "unknown_classes_with_zero_candidates": 3,
+        "unknown_class_recall_min": 0.0,
+        "unknown_class_recall_median": 0.03,
+        "unknown_class_recall_max": 0.13,
+        "max_known_class_false_reject_rate": 0.21
+      },
+      "threshold": 2.0637362448476066,
+      "student_checkpoint_sha256": "44fcde35ed3de9725708b0bb22482722e3d055a3dc11de8b498a0183da075b51",
+      "all_unknown_oracle": {
+        "evaluation_only": true,
+        "uses_ground_truth_unknown_mask": true,
+        "uses_ground_truth_k": true,
+        "used_for_candidate_selection": false,
+        "used_for_representation_or_method_selection": false,
+        "sample_count": 4000,
+        "oracle_k": 40,
+        "metrics": {
+          "acc": 0.2525,
+          "nmi": 0.33042140013170596,
+          "ari": 0.12331651172560296
+        },
+        "cluster_sizes": {
+          "0": 97,
+          "1": 86,
+          "2": 74,
+          "3": 96,
+          "4": 95,
+          "5": 110,
+          "6": 99,
+          "7": 126,
+          "8": 127,
+          "9": 59,
+          "10": 91,
+          "11": 133,
+          "12": 88,
+          "13": 120,
+          "14": 92,
+          "15": 108,
+          "16": 97,
+          "17": 114,
+          "18": 111,
+          "19": 108,
+          "20": 89,
+          "21": 106,
+          "22": 92,
+          "23": 105,
+          "24": 102,
+          "25": 94,
+          "26": 86,
+          "27": 119,
+          "28": 104,
+          "29": 82,
+          "30": 107,
+          "31": 111,
+          "32": 102,
+          "33": 54,
+          "34": 115,
+          "35": 94,
+          "36": 109,
+          "37": 116,
+          "38": 81,
+          "39": 101
+        },
+        "classwise": [
+          {
+            "raw_label": 0,
+            "sample_count": 100,
+            "occupied_clusters": 12,
+            "dominant_cluster_fraction": 0.52,
+            "hungarian_matched_count": 52,
+            "hungarian_matched_accuracy": 0.52
+          },
+          {
+            "raw_label": 3,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.19,
+            "hungarian_matched_count": 19,
+            "hungarian_matched_accuracy": 0.19
+          },
+          {
+            "raw_label": 4,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.13,
+            "hungarian_matched_count": 12,
+            "hungarian_matched_accuracy": 0.12
+          },
+          {
+            "raw_label": 5,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.13,
+            "hungarian_matched_count": 9,
+            "hungarian_matched_accuracy": 0.09
+          },
+          {
+            "raw_label": 6,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.13,
+            "hungarian_matched_count": 3,
+            "hungarian_matched_accuracy": 0.03
+          },
+          {
+            "raw_label": 11,
+            "sample_count": 100,
+            "occupied_clusters": 20,
+            "dominant_cluster_fraction": 0.48,
+            "hungarian_matched_count": 48,
+            "hungarian_matched_accuracy": 0.48
+          },
+          {
+            "raw_label": 13,
+            "sample_count": 100,
+            "occupied_clusters": 21,
+            "dominant_cluster_fraction": 0.44,
+            "hungarian_matched_count": 44,
+            "hungarian_matched_accuracy": 0.44
+          },
+          {
+            "raw_label": 14,
+            "sample_count": 100,
+            "occupied_clusters": 29,
+            "dominant_cluster_fraction": 0.1,
+            "hungarian_matched_count": 8,
+            "hungarian_matched_accuracy": 0.08
+          },
+          {
+            "raw_label": 17,
+            "sample_count": 100,
+            "occupied_clusters": 14,
+            "dominant_cluster_fraction": 0.45,
+            "hungarian_matched_count": 45,
+            "hungarian_matched_accuracy": 0.45
+          },
+          {
+            "raw_label": 19,
+            "sample_count": 100,
+            "occupied_clusters": 27,
+            "dominant_cluster_fraction": 0.22,
+            "hungarian_matched_count": 22,
+            "hungarian_matched_accuracy": 0.22
+          },
+          {
+            "raw_label": 20,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.15,
+            "hungarian_matched_count": 14,
+            "hungarian_matched_accuracy": 0.14
+          },
+          {
+            "raw_label": 24,
+            "sample_count": 100,
+            "occupied_clusters": 21,
+            "dominant_cluster_fraction": 0.37,
+            "hungarian_matched_count": 12,
+            "hungarian_matched_accuracy": 0.12
+          },
+          {
+            "raw_label": 25,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.13,
+            "hungarian_matched_count": 10,
+            "hungarian_matched_accuracy": 0.1
+          },
+          {
+            "raw_label": 27,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.18,
+            "hungarian_matched_count": 12,
+            "hungarian_matched_accuracy": 0.12
+          },
+          {
+            "raw_label": 28,
+            "sample_count": 100,
+            "occupied_clusters": 21,
+            "dominant_cluster_fraction": 0.44,
+            "hungarian_matched_count": 44,
+            "hungarian_matched_accuracy": 0.44
+          },
+          {
+            "raw_label": 29,
+            "sample_count": 100,
+            "occupied_clusters": 26,
+            "dominant_cluster_fraction": 0.14,
+            "hungarian_matched_count": 13,
+            "hungarian_matched_accuracy": 0.13
+          },
+          {
+            "raw_label": 31,
+            "sample_count": 100,
+            "occupied_clusters": 24,
+            "dominant_cluster_fraction": 0.15,
+            "hungarian_matched_count": 15,
+            "hungarian_matched_accuracy": 0.15
+          },
+          {
+            "raw_label": 35,
+            "sample_count": 100,
+            "occupied_clusters": 18,
+            "dominant_cluster_fraction": 0.46,
+            "hungarian_matched_count": 16,
+            "hungarian_matched_accuracy": 0.16
+          },
+          {
+            "raw_label": 43,
+            "sample_count": 100,
+            "occupied_clusters": 23,
+            "dominant_cluster_fraction": 0.29,
+            "hungarian_matched_count": 29,
+            "hungarian_matched_accuracy": 0.29
+          },
+          {
+            "raw_label": 53,
+            "sample_count": 100,
+            "occupied_clusters": 14,
+            "dominant_cluster_fraction": 0.36,
+            "hungarian_matched_count": 36,
+            "hungarian_matched_accuracy": 0.36
+          },
+          {
+            "raw_label": 54,
+            "sample_count": 100,
+            "occupied_clusters": 21,
+            "dominant_cluster_fraction": 0.22,
+            "hungarian_matched_count": 22,
+            "hungarian_matched_accuracy": 0.22
+          },
+          {
+            "raw_label": 57,
+            "sample_count": 100,
+            "occupied_clusters": 19,
+            "dominant_cluster_fraction": 0.16,
+            "hungarian_matched_count": 16,
+            "hungarian_matched_accuracy": 0.16
+          },
+          {
+            "raw_label": 64,
+            "sample_count": 100,
+            "occupied_clusters": 20,
+            "dominant_cluster_fraction": 0.3,
+            "hungarian_matched_count": 30,
+            "hungarian_matched_accuracy": 0.3
+          },
+          {
+            "raw_label": 67,
+            "sample_count": 100,
+            "occupied_clusters": 23,
+            "dominant_cluster_fraction": 0.37,
+            "hungarian_matched_count": 4,
+            "hungarian_matched_accuracy": 0.04
+          },
+          {
+            "raw_label": 69,
+            "sample_count": 100,
+            "occupied_clusters": 18,
+            "dominant_cluster_fraction": 0.53,
+            "hungarian_matched_count": 53,
+            "hungarian_matched_accuracy": 0.53
+          },
+          {
+            "raw_label": 71,
+            "sample_count": 100,
+            "occupied_clusters": 12,
+            "dominant_cluster_fraction": 0.67,
+            "hungarian_matched_count": 67,
+            "hungarian_matched_accuracy": 0.67
+          },
+          {
+            "raw_label": 75,
+            "sample_count": 100,
+            "occupied_clusters": 22,
+            "dominant_cluster_fraction": 0.25,
+            "hungarian_matched_count": 25,
+            "hungarian_matched_accuracy": 0.25
+          },
+          {
+            "raw_label": 77,
+            "sample_count": 100,
+            "occupied_clusters": 28,
+            "dominant_cluster_fraction": 0.1,
+            "hungarian_matched_count": 7,
+            "hungarian_matched_accuracy": 0.07
+          },
+          {
+            "raw_label": 79,
+            "sample_count": 100,
+            "occupied_clusters": 23,
+            "dominant_cluster_fraction": 0.36,
+            "hungarian_matched_count": 36,
+            "hungarian_matched_accuracy": 0.36
+          },
+          {
+            "raw_label": 81,
+            "sample_count": 100,
+            "occupied_clusters": 20,
+            "dominant_cluster_fraction": 0.31,
+            "hungarian_matched_count": 31,
+            "hungarian_matched_accuracy": 0.31
+          },
+          {
+            "raw_label": 82,
+            "sample_count": 100,
+            "occupied_clusters": 21,
+            "dominant_cluster_fraction": 0.48,
+            "hungarian_matched_count": 48,
+            "hungarian_matched_accuracy": 0.48
+          },
+          {
+            "raw_label": 84,
+            "sample_count": 100,
+            "occupied_clusters": 30,
+            "dominant_cluster_fraction": 0.14,
+            "hungarian_matched_count": 10,
+            "hungarian_matched_accuracy": 0.1
+          },
+          {
+            "raw_label": 86,
+            "sample_count": 100,
+            "occupied_clusters": 22,
+            "dominant_cluster_fraction": 0.32,
+            "hungarian_matched_count": 32,
+            "hungarian_matched_accuracy": 0.32
+          },
+          {
+            "raw_label": 88,
+            "sample_count": 100,
+            "occupied_clusters": 27,
+            "dominant_cluster_fraction": 0.32,
+            "hungarian_matched_count": 17,
+            "hungarian_matched_accuracy": 0.17
+          },
+          {
+            "raw_label": 89,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.23,
+            "hungarian_matched_count": 11,
+            "hungarian_matched_accuracy": 0.11
+          },
+          {
+            "raw_label": 90,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.13,
+            "hungarian_matched_count": 8,
+            "hungarian_matched_accuracy": 0.08
+          },
+          {
+            "raw_label": 93,
+            "sample_count": 100,
+            "occupied_clusters": 25,
+            "dominant_cluster_fraction": 0.23,
+            "hungarian_matched_count": 10,
+            "hungarian_matched_accuracy": 0.1
+          },
+          {
+            "raw_label": 94,
+            "sample_count": 100,
+            "occupied_clusters": 11,
+            "dominant_cluster_fraction": 0.48,
+            "hungarian_matched_count": 48,
+            "hungarian_matched_accuracy": 0.48
+          },
+          {
+            "raw_label": 95,
+            "sample_count": 100,
+            "occupied_clusters": 19,
+            "dominant_cluster_fraction": 0.48,
+            "hungarian_matched_count": 48,
+            "hungarian_matched_accuracy": 0.48
+          },
+          {
+            "raw_label": 97,
+            "sample_count": 100,
+            "occupied_clusters": 16,
+            "dominant_cluster_fraction": 0.24,
+            "hungarian_matched_count": 24,
+            "hungarian_matched_accuracy": 0.24
+          }
+        ],
+        "assignments": "all_unknown_oracle_assignments.npz"
+      }
+    }
+  },
+  "pool_aggregate": {
+    "candidate_count": {
+      "mean": 464.0,
+      "std": 31.04834939252005,
+      "min": 432.0,
+      "max": 494.0
+    },
+    "candidate_purity": {
+      "mean": 0.3482263637984216,
+      "std": 0.007972808486567505,
+      "min": 0.3402777777777778,
+      "max": 0.3562231759656652
+    },
+    "known_contamination": {
+      "mean": 0.6517736362015784,
+      "std": 0.007972808486567503,
+      "min": 0.6437768240343348,
+      "max": 0.6597222222222222
+    },
+    "candidate_unknown_recall": {
+      "mean": 0.04041666666666666,
+      "std": 0.0032627953250753154,
+      "min": 0.03675,
+      "max": 0.043
+    },
+    "unknown_classes_with_zero_candidates": {
+      "mean": 3.6666666666666665,
+      "std": 1.1547005383792515,
+      "min": 3.0,
+      "max": 5.0
+    },
+    "unknown_class_recall_min": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "unknown_class_recall_median": {
+      "mean": 0.028333333333333332,
+      "std": 0.0028867513459481273,
+      "min": 0.025,
+      "max": 0.03
+    },
+    "unknown_class_recall_max": {
+      "mean": 0.16666666666666666,
+      "std": 0.035118845842842465,
+      "min": 0.13,
+      "max": 0.2
+    },
+    "max_known_class_false_reject_rate": {
+      "mean": 0.20333333333333334,
+      "std": 0.040414518843273795,
+      "min": 0.16,
+      "max": 0.24
+    }
+  },
+  "all_unknown_oracle_aggregate": {
+    "acc": {
+      "mean": 0.24958333333333335,
+      "std": 0.0026020824993326684,
+      "min": 0.2475,
+      "max": 0.2525
+    },
+    "nmi": {
+      "mean": 0.33360255994061644,
+      "std": 0.005604751351957448,
+      "min": 0.33031221734825833,
+      "max": 0.340074062341885
+    },
+    "ari": {
+      "mean": 0.12356891090532544,
+      "std": 0.0014116269493919538,
+      "min": 0.12230050960790524,
+      "max": 0.12508971138246813
+    }
+  },
+  "experiments": {
+    "feature_pca_kmeans": {
+      "feature": "feature_pca",
+      "normalized": true,
+      "method": "kmeans",
+      "per_seed": [
+        {
+          "seed": 42,
+          "candidate_count": 466,
+          "acc": 0.35542168674698793,
+          "nmi": 0.6414104512044566,
+          "ari": 0.13960743473726112,
+          "cluster_size_min": 5,
+          "cluster_size_max": 20
+        },
+        {
+          "seed": 123,
+          "candidate_count": 432,
+          "acc": 0.3469387755102041,
+          "nmi": 0.6182233398937836,
+          "ari": 0.08975880267589932,
+          "cluster_size_min": 6,
+          "cluster_size_max": 16
+        },
+        {
+          "seed": 3407,
+          "candidate_count": 494,
+          "acc": 0.31976744186046513,
+          "nmi": 0.5857532735228047,
+          "ari": 0.07300432725789918,
+          "cluster_size_min": 7,
+          "cluster_size_max": 20
+        }
+      ],
+      "aggregate": {
+        "acc": {
+          "mean": 0.34070930137255234,
+          "std": 0.018625548465234194,
+          "min": 0.31976744186046513,
+          "max": 0.35542168674698793
+        },
+        "nmi": {
+          "mean": 0.6151290215403483,
+          "std": 0.02795731498957022,
+          "min": 0.5857532735228047,
+          "max": 0.6414104512044566
+        },
+        "ari": {
+          "mean": 0.10079018822368653,
+          "std": 0.03464479876987029,
+          "min": 0.07300432725789918,
+          "max": 0.13960743473726112
+        }
+      }
+    },
+    "projection_pca_kmeans": {
+      "feature": "projection_pca",
+      "normalized": true,
+      "method": "kmeans",
+      "per_seed": [
+        {
+          "seed": 42,
+          "candidate_count": 466,
+          "acc": 0.3313253012048193,
+          "nmi": 0.6157382773367314,
+          "ari": 0.11287177548528259,
+          "cluster_size_min": 6,
+          "cluster_size_max": 21
+        },
+        {
+          "seed": 123,
+          "candidate_count": 432,
+          "acc": 0.3401360544217687,
+          "nmi": 0.6137496311875406,
+          "ari": 0.10504683893264366,
+          "cluster_size_min": 3,
+          "cluster_size_max": 18
+        },
+        {
+          "seed": 3407,
+          "candidate_count": 494,
+          "acc": 0.3023255813953488,
+          "nmi": 0.5930309627394408,
+          "ari": 0.06580593682736928,
+          "cluster_size_min": 6,
+          "cluster_size_max": 17
+        }
+      ],
+      "aggregate": {
+        "acc": {
+          "mean": 0.32459564567397897,
+          "std": 0.019783178847021375,
+          "min": 0.3023255813953488,
+          "max": 0.3401360544217687
+        },
+        "nmi": {
+          "mean": 0.6075062904212376,
+          "std": 0.01257537323494683,
+          "min": 0.5930309627394408,
+          "max": 0.6157382773367314
+        },
+        "ari": {
+          "mean": 0.09457485041509851,
+          "std": 0.025219936553783788,
+          "min": 0.06580593682736928,
+          "max": 0.11287177548528259
+        }
+      }
+    },
+    "feature_kmeans": {
+      "feature": "feature",
+      "normalized": false,
+      "method": "kmeans",
+      "per_seed": [
+        {
+          "seed": 42,
+          "candidate_count": 466,
+          "acc": 0.3253012048192771,
+          "nmi": 0.573114735078776,
+          "ari": 0.09813918294734848,
+          "cluster_size_min": 1,
+          "cluster_size_max": 32
+        },
+        {
+          "seed": 123,
+          "candidate_count": 432,
+          "acc": 0.36054421768707484,
+          "nmi": 0.6002480977939664,
+          "ari": 0.12635103426123478,
+          "cluster_size_min": 2,
+          "cluster_size_max": 35
+        },
+        {
+          "seed": 3407,
+          "candidate_count": 494,
+          "acc": 0.32558139534883723,
+          "nmi": 0.5653447150083786,
+          "ari": 0.07119474794768305,
+          "cluster_size_min": 3,
+          "cluster_size_max": 26
+        }
+      ],
+      "aggregate": {
+        "acc": {
+          "mean": 0.33714227261839635,
+          "std": 0.020267163132300894,
+          "min": 0.3253012048192771,
+          "max": 0.36054421768707484
+        },
+        "nmi": {
+          "mean": 0.5795691826270403,
+          "std": 0.018325022573909378,
+          "min": 0.5653447150083786,
+          "max": 0.6002480977939664
+        },
+        "ari": {
+          "mean": 0.09856165505208876,
+          "std": 0.027580570008342582,
+          "min": 0.07119474794768305,
+          "max": 0.12635103426123478
+        }
+      }
+    },
+    "feature_normalized_kmeans": {
+      "feature": "feature",
+      "normalized": true,
+      "method": "kmeans",
+      "per_seed": [
+        {
+          "seed": 42,
+          "candidate_count": 466,
+          "acc": 0.3373493975903614,
+          "nmi": 0.5996837927898581,
+          "ari": 0.12099983219532724,
+          "cluster_size_min": 2,
+          "cluster_size_max": 28
+        },
+        {
+          "seed": 123,
+          "candidate_count": 432,
+          "acc": 0.35374149659863946,
+          "nmi": 0.6155087179505914,
+          "ari": 0.09448105502423582,
+          "cluster_size_min": 3,
+          "cluster_size_max": 26
+        },
+        {
+          "seed": 3407,
+          "candidate_count": 494,
+          "acc": 0.29651162790697677,
+          "nmi": 0.588193282595006,
+          "ari": 0.08001406052084532,
+          "cluster_size_min": 4,
+          "cluster_size_max": 23
+        }
+      ],
+      "aggregate": {
+        "acc": {
+          "mean": 0.32920084069865924,
+          "std": 0.029472253089630234,
+          "min": 0.29651162790697677,
+          "max": 0.35374149659863946
+        },
+        "nmi": {
+          "mean": 0.6011285977784852,
+          "std": 0.013714913352174767,
+          "min": 0.588193282595006,
+          "max": 0.6155087179505914
+        },
+        "ari": {
+          "mean": 0.09849831591346946,
+          "std": 0.020786104943623176,
+          "min": 0.08001406052084532,
+          "max": 0.12099983219532724
+        }
+      }
+    },
+    "feature_pca_agglomerative": {
+      "feature": "feature_pca",
+      "normalized": true,
+      "method": "agglomerative",
+      "per_seed": [
+        {
+          "seed": 42,
+          "candidate_count": 466,
+          "acc": 0.35542168674698793,
+          "nmi": 0.6132133810422375,
+          "ari": 0.10075143695882371,
+          "cluster_size_min": 4,
+          "cluster_size_max": 22
+        },
+        {
+          "seed": 123,
+          "candidate_count": 432,
+          "acc": 0.3469387755102041,
+          "nmi": 0.6435493257451756,
+          "ari": 0.11433830808886751,
+          "cluster_size_min": 5,
+          "cluster_size_max": 20
+        },
+        {
+          "seed": 3407,
+          "candidate_count": 494,
+          "acc": 0.3081395348837209,
+          "nmi": 0.5778835922551979,
+          "ari": 0.07505646557988324,
+          "cluster_size_min": 6,
+          "cluster_size_max": 27
+        }
+      ],
+      "aggregate": {
+        "acc": {
+          "mean": 0.3368333323803043,
+          "std": 0.025208936051408233,
+          "min": 0.3081395348837209,
+          "max": 0.35542168674698793
+        },
+        "nmi": {
+          "mean": 0.6115487663475371,
+          "std": 0.03286449977187474,
+          "min": 0.5778835922551979,
+          "max": 0.6435493257451756
+        },
+        "ari": {
+          "mean": 0.09671540354252484,
+          "std": 0.019949510320513432,
+          "min": 0.07505646557988324,
+          "max": 0.11433830808886751
+        }
+      }
+    },
+    "feature_pca_spectral": {
+      "feature": "feature_pca",
+      "normalized": true,
+      "method": "spectral",
+      "per_seed": [
+        {
+          "seed": 42,
+          "candidate_count": 466,
+          "acc": 0.37349397590361444,
+          "nmi": 0.630499648740108,
+          "ari": 0.11890606593701457,
+          "cluster_size_min": 5,
+          "cluster_size_max": 21
+        },
+        {
+          "seed": 123,
+          "candidate_count": 432,
+          "acc": 0.3401360544217687,
+          "nmi": 0.6391006693975256,
+          "ari": 0.10252830674215131,
+          "cluster_size_min": 5,
+          "cluster_size_max": 17
+        },
+        {
+          "seed": 3407,
+          "candidate_count": 494,
+          "acc": 0.32558139534883723,
+          "nmi": 0.5911577809041356,
+          "ari": 0.07467700919202344,
+          "cluster_size_min": 7,
+          "cluster_size_max": 20
+        }
+      ],
+      "aggregate": {
+        "acc": {
+          "mean": 0.3464038085580734,
+          "std": 0.024563538024669363,
+          "min": 0.32558139534883723,
+          "max": 0.37349397590361444
+        },
+        "nmi": {
+          "mean": 0.6202526996805897,
+          "std": 0.025561301082763346,
+          "min": 0.5911577809041356,
+          "max": 0.6391006693975256
+        },
+        "ari": {
+          "mean": 0.09870379395706312,
+          "std": 0.022361183749309618,
+          "min": 0.07467700919202344,
+          "max": 0.11890606593701457
+        }
+      }
+    }
+  },
+  "decisions": {
+    "comparison_representation": "feature_pca",
+    "comparison_representation_status": "diagnostic_anchor_not_label_selected",
+    "method_comparison_status": "exploratory_post_hoc_not_confirmatory",
+    "retrospective_feature_pca_best_three_seed_mean_all_metrics": true,
+    "retrospective_feature_pca_nmi_beats_raw_feature_all_seeds": true,
+    "retrospective_feature_pca_nmi_beats_projection_pca_all_seeds": false,
+    "retrospective_feature_pca_beats_normalized_raw_all_seeds": {
+      "acc": false,
+      "nmi": false,
+      "ari": false
+    },
+    "method_metric_winners": {
+      "42": {
+        "acc": [
+          "spectral"
+        ],
+        "nmi": [
+          "kmeans"
+        ],
+        "ari": [
+          "kmeans"
+        ]
+      },
+      "123": {
+        "acc": [
+          "agglomerative",
+          "kmeans"
+        ],
+        "nmi": [
+          "agglomerative"
+        ],
+        "ari": [
+          "agglomerative"
+        ]
+      },
+      "3407": {
+        "acc": [
+          "spectral"
+        ],
+        "nmi": [
+          "spectral"
+        ],
+        "ari": [
+          "agglomerative"
+        ]
+      }
+    },
+    "dominant_methods_all_metrics_all_seeds": [],
+    "run_auto_k": false,
+    "stop_reason": "The oracle-K candidate pools contain a known-sample majority and recover only a small fraction of unknown samples; method winners also vary by seed and metric. Candidate-pool quality is the current priority, so auto K is deferred rather than ruled out."
+  }
+}

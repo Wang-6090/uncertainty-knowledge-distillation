@@ -1,0 +1,1 @@
+C:\Users\MILI\AppData\Local\Programs\Python\Python311\python.exe scripts/summarize_frozen_candidate_pool.py runs/qiyuhan_cifar_seed42 runs/qiyuhan_cifar_seed123 runs/qiyuhan_cifar_seed3407 --output-dir analysis/qiyuhan_frozen_candidate_pool_multiseed
