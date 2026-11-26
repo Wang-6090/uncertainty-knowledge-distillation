@@ -7,6 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.audit_teacher_uncertainty_alignment import (
+    binned_true_class_probability_error,
     classwise_alignment,
     minibatch_weight_diagnostics,
 )
@@ -78,3 +79,25 @@ def test_class_balanced_weights_keep_within_class_signal_and_count_singletons():
     assert result["within_class_uncertainty"]["mean_batch_weight_std"] > 0.0
     assert result["within_class_uncertainty"]["mean_batch_ess_fraction"] < 1.0
     assert result["singleton_class_exposure_fraction"] == 1 / 3
+
+
+def test_true_class_probability_bins_report_error_and_repair_strength_in_order():
+    probability = np.asarray([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+    error = np.asarray([True, True, True, False, True, False, False, False, False, False])
+
+    bins = binned_true_class_probability_error(probability, error)
+
+    np.testing.assert_allclose(
+        [row["true_class_probability_mean"] for row in bins],
+        [0.15, 0.35, 0.55, 0.75, 0.95],
+    )
+    assert [row["teacher_error_rate"] for row in bins] == [1.0, 0.5, 0.5, 0.0, 0.0]
+    np.testing.assert_allclose(
+        [row["repair_strength_mean"] for row in bins],
+        [0.85, 0.65, 0.45, 0.25, 0.05],
+    )
+
+
+def test_true_class_probability_bins_reject_invalid_values():
+    with np.testing.assert_raises(ValueError):
+        binned_true_class_probability_error(np.asarray([0.2, 1.1]), np.asarray([False, True]))

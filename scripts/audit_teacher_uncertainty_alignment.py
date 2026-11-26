@@ -79,6 +79,7 @@ def extract(model, loader, device: torch.device) -> dict[str, np.ndarray]:
     uncertainty: list[np.ndarray] = []
     errors: list[np.ndarray] = []
     confidence: list[np.ndarray] = []
+    true_class_probability: list[np.ndarray] = []
     labels: list[np.ndarray] = []
     for images, mapped_labels, _raw_labels, is_known, _indices in loader:
         if not bool(is_known.all()):
@@ -88,7 +89,16 @@ def extract(model, loader, device: torch.device) -> dict[str, np.ndarray]:
         predicted = logits.argmax(dim=-1)
         uncertainty.append(output["uncertainty"].reshape(-1).float().cpu().numpy())
         errors.append(predicted.ne(mapped_labels.to(device)).cpu().numpy().astype(bool))
-        confidence.append(logits.softmax(dim=-1).amax(dim=-1).float().cpu().numpy())
+        probabilities = logits.softmax(dim=-1)
+        labels_on_device = mapped_labels.to(device)
+        confidence.append(probabilities.amax(dim=-1).float().cpu().numpy())
+        true_class_probability.append(
+            probabilities.gather(1, labels_on_device.unsqueeze(1))
+            .squeeze(1)
+            .float()
+            .cpu()
+            .numpy()
+        )
         labels.append(mapped_labels.cpu().numpy())
     if not uncertainty:
         raise ValueError("Cannot audit an empty dataset")
@@ -96,6 +106,7 @@ def extract(model, loader, device: torch.device) -> dict[str, np.ndarray]:
         "uncertainty": np.concatenate(uncertainty),
         "error": np.concatenate(errors),
         "confidence": np.concatenate(confidence),
+        "true_class_probability": np.concatenate(true_class_probability),
         "labels": np.concatenate(labels),
     }
 
@@ -267,6 +278,41 @@ def binned_error_rates(uncertainty: np.ndarray, error: np.ndarray, weights: np.n
     return bins
 
 
+def binned_true_class_probability_error(
+    true_class_probability: np.ndarray, error: np.ndarray
+) -> list[dict[str, float | int]]:
+    """Show teacher error and repair strength from low to high true-class mass."""
+    true_class_probability = np.asarray(true_class_probability, dtype=np.float64)
+    error = np.asarray(error, dtype=bool)
+    if (
+        true_class_probability.ndim != 1
+        or error.shape != true_class_probability.shape
+        or true_class_probability.size == 0
+    ):
+        raise ValueError("true_class_probability and error must be non-empty aligned vectors")
+    if not np.isfinite(true_class_probability).all() or np.any(
+        (true_class_probability < 0.0) | (true_class_probability > 1.0)
+    ):
+        raise ValueError("true_class_probability must be finite and in [0, 1]")
+
+    order = np.argsort(true_class_probability, kind="stable")
+    bins = []
+    for index, rows in enumerate(np.array_split(order, 5)):
+        if rows.size == 0:
+            continue
+        mean_probability = float(true_class_probability[rows].mean())
+        bins.append(
+            {
+                "bin": int(index + 1),
+                "count": int(rows.size),
+                "true_class_probability_mean": mean_probability,
+                "teacher_error_rate": float(error[rows].mean()),
+                "repair_strength_mean": 1.0 - mean_probability,
+            }
+        )
+    return bins
+
+
 def audit_split(
     values: dict[str, np.ndarray],
     raw_class_ids: list[int] | None = None,
@@ -276,6 +322,7 @@ def audit_split(
     uncertainty = values["uncertainty"].astype(np.float64)
     error = values["error"].astype(bool)
     confidence = values["confidence"].astype(np.float64)
+    true_class_probability = values["true_class_probability"].astype(np.float64)
     weights = np.exp(np.clip(-uncertainty, -60.0, 60.0))
     normalized_weights = weights / max(float(weights.mean()), 1e-12)
     report: dict[str, Any] = {
@@ -284,6 +331,7 @@ def audit_split(
         "teacher_error_rate": float(error.mean()),
         "uncertainty": summary(uncertainty),
         "confidence": summary(confidence),
+        "true_class_probability": summary(true_class_probability),
         "error_uncertainty_auroc": (
             float(roc_auc_score(error.astype(np.int64), uncertainty))
             if len(np.unique(error)) == 2
@@ -299,6 +347,30 @@ def audit_split(
             float(roc_auc_score(error.astype(np.int64), -confidence))
             if len(np.unique(error)) == 2
             else None
+        ),
+        "error_true_class_probability_auroc": (
+            float(roc_auc_score(error.astype(np.int64), -true_class_probability))
+            if len(np.unique(error)) == 2
+            else None
+        ),
+        "true_class_probability_mean_correct": float(true_class_probability[~error].mean())
+        if (~error).any()
+        else None,
+        "true_class_probability_mean_error": float(true_class_probability[error].mean())
+        if error.any()
+        else None,
+        "confidence_target_repair_strength_mean_correct": float(
+            (1.0 - true_class_probability[~error]).mean()
+        )
+        if (~error).any()
+        else None,
+        "confidence_target_repair_strength_mean_error": float(
+            (1.0 - true_class_probability[error]).mean()
+        )
+        if error.any()
+        else None,
+        "true_class_probability_sorted_bins": binned_true_class_probability_error(
+            true_class_probability, error
         ),
         "exp_minus_uncertainty": {
             "normalized_weight_mean": float(normalized_weights.mean()),

@@ -144,6 +144,29 @@ structure and audit it on known validation before another full downstream
 experiment; downstream rejector, candidate, Auto-K, and clustering behavior
 remain outside this implementation scope.
 
+## Post-hoc audit of the repair coefficient
+
+To test whether the coefficient itself was informative, the existing frozen
+teachers for seeds 2180 and 2181 were evaluated read-only on deterministic
+CIFAR known train and validation data. The audit added the teacher's
+true-class probability `p_teacher(y|x)` and did not change any checkpoint,
+training, calibration, or result selection. On known validation, the AUROC of
+`1-p_teacher(y|x)` for teacher error was `0.9945` and `0.9949`; max-softmax
+confidence in the same runs was only `0.8233` and `0.8099`. Mean repair
+strength on teacher-correct versus teacher-error validation samples was
+`0.1777/0.9054` for seed 2180 and `0.1891/0.9092` for seed 2181.
+
+The coefficient therefore carries a real known-label quality signal and the
+target-repair code is operating on a meaningful distinction. This still does
+not justify more strength scans: the two fresh downstream confirmations show
+that nearly correcting teacher-error rows toward their known labels does not
+reliably improve candidate purity or candidate clustering. The added audit is
+diagnostic evidence for the target-transfer limitation, not a new performance
+claim. Original diagnostics remain in
+`analysis/team_a_confidence_teacher_uncertainty_alignment_20261126_s2180.json`
+and `_s2181.json`; the true-class extension is in the corresponding
+`_true_class.json` files.
+
 Implementation tests and the full suite passed (`419 passed`, one existing
 warning). Confirmation machine output is local and gitignored at
 `analysis/team_a_confidence_target_repair_confirm_20261126_s2181.json`; its
