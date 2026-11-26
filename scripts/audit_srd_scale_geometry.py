@@ -1,4 +1,4 @@
-"""Read-only known-validation geometry audit for standard KD and SRD."""
+"""Read-only known-validation geometry audit for selected student arms."""
 
 from __future__ import annotations
 
@@ -86,6 +86,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=2170)
     parser.add_argument("--tag", default="team_a_srd_20261123")
+    parser.add_argument("--arms", nargs="+", default=["standard", "srd"])
     parser.add_argument(
         "--output",
         type=Path,
@@ -95,6 +96,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.output.exists():
         raise FileExistsError(f"Refusing to overwrite audit output: {args.output}")
+    if "standard" not in args.arms or len(set(args.arms)) != len(args.arms):
+        raise ValueError("arms must include standard exactly once and contain no duplicates")
     device = torch.device(
         "cuda"
         if args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available())
@@ -112,13 +115,12 @@ def main() -> None:
         raise ValueError("expected a disjoint CIFAR-100 60/40 split")
 
     run_dirs = {
-        "standard": ROOT / "runs" / f"{args.tag}_s{args.seed}_standard",
-        "srd": ROOT / "runs" / f"{args.tag}_s{args.seed}_srd",
+        arm: ROOT / "runs" / f"{args.tag}_s{args.seed}_{arm}" for arm in args.arms
     }
     configs = {arm: read_json(path / "train_student_config.json") for arm, path in run_dirs.items()}
     checkpoints = {arm: checkpoint_payload(path / "student.pt") for arm, path in run_dirs.items()}
     reference = configs["standard"]
-    for arm in ("standard", "srd"):
+    for arm in args.arms:
         cfg, ckpt = configs[arm], checkpoints[arm]
         for field in ("seed", "split_path", "dataset", "data_root", "image_size", "transform_profile", "known_split_mode", "limit_val"):
             if cfg.get(field) != reference.get(field):
@@ -156,24 +158,35 @@ def main() -> None:
 
     output = {}
     shared_ids = None
-    for arm in ("standard", "srd"):
+    shared_labels = None
+    for arm in args.arms:
         model = make_model(configs[arm], checkpoints[arm], device)
         features, labels, ids = extract(model, loader, device)
         if shared_ids is not None and not torch.equal(shared_ids, ids):
             raise RuntimeError("standard and SRD validation sample order differs")
+        if shared_labels is not None and not torch.equal(shared_labels, labels):
+            raise RuntimeError(f"{arm} validation labels differ from standard")
         shared_ids = ids
+        shared_labels = labels
         output[arm] = summarize(features, labels, len(known_classes))
 
     fields = output["standard"].keys()
-    output["srd_minus_standard"] = {
-        field: (
-            [srd_value - standard_value for srd_value, standard_value in zip(output["srd"][field], output["standard"][field])]
-            if isinstance(output["srd"][field], list)
-            else output["srd"][field] - output["standard"][field]
-        )
-        for field in fields
-        if field != "samples"
-    }
+    deltas = {}
+    for arm in args.arms:
+        if arm == "standard":
+            continue
+        deltas[f"{arm}_minus_standard"] = {
+            field: (
+                [arm_value - standard_value for arm_value, standard_value in zip(output[arm][field], output["standard"][field])]
+                if isinstance(output[arm][field], list)
+                else output[arm][field] - output["standard"][field]
+            )
+            for field in fields
+            if field != "samples"
+        }
+    output["deltas_vs_standard"] = deltas
+    if "srd" in deltas:
+        output["srd_minus_standard"] = deltas["srd_minus_standard"]
     payload = {
         "purpose": "read-only known-validation raw norm and normalized geometry comparison",
         "seed": args.seed,
@@ -181,6 +194,7 @@ def main() -> None:
         "data_accessed": "known validation portion of CIFAR-100 training data only",
         "unknown_labels_used": False,
         "transform_profile": reference["transform_profile"],
+        "arms_compared": args.arms,
         "sample_count": int(len(shared_ids)),
         "device": str(device),
         "arms": output,

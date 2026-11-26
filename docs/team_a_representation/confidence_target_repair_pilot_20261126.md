@@ -167,6 +167,28 @@ claim. Original diagnostics remain in
 and `_s2181.json`; the true-class extension is in the corresponding
 `_true_class.json` files.
 
+## Known-validation geometry audit
+
+The frozen standard, confidence-repair, and uncertainty students were then
+compared on the same 3,000-sample known validation subset, using normalized
+feature geometry and class labels only for the diagnostic. No unknown/test
+samples were loaded. Relative to standard, confidence repair changed
+normalized within-class cosine distance by `+0.003652` and normalized
+between/total scatter by `-0.015946` on seed 2180; on seed 2181 the changes
+were `-0.001323` and `-0.003624`. Its raw feature norm rose by `+5.083` and
+`+3.708`, respectively. Uncertainty-KD changed within-class distance by
+`-0.002274/-0.003194` and between/total scatter by `+0.006392/+0.001671`.
+
+Thus confidence repair reliably changes feature scale, but its normalized
+global class separation is not improved and its local compactness is
+seed-sensitive. Uncertainty-KD shows small geometry changes without a large
+or stable effect. This supports the downstream diagnosis: target correction
+can improve an oracle full-unknown readout while failing to make the known
+support geometry consistently better for the existing candidate pipeline.
+The read-only outputs are
+`analysis/team_a_confidence_geometry_20261126_s2180.json` and `_s2181.json`;
+the generalized audit remains opt-in and does not change training behavior.
+
 Implementation tests and the full suite passed (`419 passed`, one existing
 warning). Confirmation machine output is local and gitignored at
 `analysis/team_a_confidence_target_repair_confirm_20261126_s2181.json`; its
