@@ -39,6 +39,28 @@ validation 上明显强于当前版本且提供 CE 学生没有的互补正确�
 蒸馏算法处理。详细审计见
 [`docs/team_a_representation/teacher_quality_gate_audit_20261126.md`](docs/team_a_representation/teacher_quality_gate_audit_20261126.md)。
 
+### 2026-11-26：教师训练预算 pilot 暂停记录（seed=2182）
+
+为验证“正式教师过弱是否主要由 5 个 epoch 的训练预算造成”，注册了一个只改变
+教师训练轮数的 known-only pilot：同一 fresh semantic-hard 60/40 split、同一
+ResNet-34 预训练初始化、CIFAR transform、batch size、学习率、`alpha_unc=0.1`
+和 `freeze_bn_stats=false`，比较 5 epoch 控制臂与 15 epoch 处理臂。没有训练学生，
+没有加载未知/测试样本，也没有改变正式结果。
+
+5 epoch 控制臂已完整完成，保存于
+`runs/teacher_quality_budget_s2182_e5/`；其 known-validation 最优准确率为
+`53.30%`（best epoch 3），可作为该 fresh split 的教师质量控制值。15 epoch
+处理臂已在第 2 个 epoch 的训练中途按暂停要求停止，未产生完整配置或 checkpoint，
+不纳入比较，也不把中间日志作为结果。该 pilot 尚不能说明延长训练是否有效。
+
+本轮新增 runner 为
+`scripts/run_teacher_quality_budget_pilot.py`，fresh split 为
+`splits/semantic_hard/seed2182/cifar100_60_40_semantic_hard.json`。下次继续时，
+应从 15 epoch 处理臂重新开始或明确改用新的 run tag，先完成教师 known-train /
+known-validation 质量检查；只有教师质量门通过，才考虑用它开展新的学生
+CE/standard-KD/uncertainty-KD 配对。不要把 5 epoch 控制臂的单个 fresh seed 结果
+直接替换正式教师，也不要提前做未知检测或聚类。
+
 ## 2026-11-22：分类表征新机制阶段启动（类内中心化 feature KD）
 
 王笑颜负责的 formal CE-only / standard-KD / uncertainty-KD 三种子审计已经
