@@ -9,6 +9,7 @@ from .uncertainty_kd import (
     feature_distillation_loss as _feature_distillation_loss,
     kl_distillation_loss,
     quality_aware_kl_loss,
+    confidence_target_repair_kl_loss as _confidence_target_repair_kl_loss,
     uncertainty_error_repair_kl_loss as _uncertainty_error_repair_kl_loss,
     uncertainty_target_repair_kl_loss as _uncertainty_target_repair_kl_loss,
     semantic_representation_distillation_loss,
@@ -298,6 +299,20 @@ def quality_aware_distillation_loss(
         quality_floor=quality_floor,
         quality_power=quality_power,
         quality_weight_mode=quality_weight_mode,
+    )
+
+
+def confidence_target_repair_distillation_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    labels: torch.Tensor,
+    temperature: float = 2.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return _confidence_target_repair_kl_loss(
+        student_logits,
+        teacher_logits,
+        labels,
+        temperature=temperature,
     )
 
 

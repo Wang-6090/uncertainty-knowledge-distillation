@@ -31,6 +31,7 @@ from novel_discovery.uncertainty_kd import (
     quality_aware_kl_loss,
     uncertainty_target_repair_kl_loss,
     uncertainty_error_repair_kl_loss,
+    confidence_target_repair_kl_loss,
     teacher_quality_weights as module_teacher_quality_weights,
     uncertainty_calibration_loss,
     uncertainty_weights,
@@ -190,6 +191,12 @@ class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
     def test_error_repair_profile_uses_classifier_score(self):
         self.assertEqual(
             discovery_score_mode_for_profile("ce_uncertainty_error_repair"),
+            "max_softmax",
+        )
+
+    def test_confidence_target_repair_profile_uses_classifier_score(self):
+        self.assertEqual(
+            discovery_score_mode_for_profile("ce_confidence_target_repair"),
             "max_softmax",
         )
 
@@ -370,6 +377,42 @@ class UncertaintyKnowledgeDistillationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(loss, standard))
         self.assertEqual(active_fraction.item(), 0.0)
         self.assertEqual(repair_mean.item(), 0.0)
+
+    def test_confidence_target_repair_blends_by_true_class_confidence(self):
+        student = torch.tensor([[0.2, 0.4, -0.1], [0.0, 0.3, 0.7]], requires_grad=True)
+        teacher = torch.tensor([[2.0, 0.0, -1.0], [0.0, 0.2, 1.5]], requires_grad=True)
+        labels = torch.tensor([0, 0])
+        temperature = 1.7
+
+        actual, repair_mean = confidence_target_repair_kl_loss(
+            student, teacher, labels, temperature=temperature
+        )
+        detached_teacher = teacher.detach()
+        quality = F.softmax(detached_teacher, dim=1)[:, 0]
+        teacher_prob = F.softmax(detached_teacher / temperature, dim=1)
+        hard = F.one_hot(labels, num_classes=3).to(teacher_prob)
+        target = quality[:, None] * teacher_prob + (1.0 - quality)[:, None] * hard
+        expected = F.kl_div(
+            F.log_softmax(student / temperature, dim=1), target, reduction="none"
+        ).sum(1).mean() * temperature**2
+        self.assertTrue(torch.allclose(actual, expected))
+        self.assertAlmostEqual(repair_mean.item(), (1.0 - quality).mean().item())
+        actual.backward()
+        self.assertIsNotNone(student.grad)
+        self.assertGreater(student.grad.abs().sum().item(), 0.0)
+        self.assertIsNone(teacher.grad)
+
+    def test_confidence_target_repair_invalid_and_empty_inputs(self):
+        with self.assertRaises(ValueError):
+            confidence_target_repair_kl_loss(
+                torch.zeros(2, 2), torch.zeros(2, 2), torch.tensor([0, 2])
+            )
+        empty = torch.empty(0, 3, requires_grad=True)
+        loss, strength = confidence_target_repair_kl_loss(
+            empty, torch.empty(0, 3), torch.empty(0, dtype=torch.long)
+        )
+        self.assertEqual(loss.item(), 0.0)
+        self.assertEqual(strength.item(), 0.0)
 
     def test_standard_kl_only_backpropagates_to_student(self):
         student_logits = torch.tensor([[1.0, 0.0], [0.1, 0.9]], requires_grad=True)

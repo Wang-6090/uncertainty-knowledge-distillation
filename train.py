@@ -1343,6 +1343,7 @@ def build_parser():
             "uncertainty_target_repair",
             "teacher_error_repair",
             "uncertainty_error_repair",
+            "confidence_target_repair",
             "selective",
         ],
         default="standard",
@@ -1356,7 +1357,9 @@ def build_parser():
             "correct soft targets; uncertainty_target_repair moves uncertain "
             "teacher targets toward the verified known label."
             " uncertainty_error_repair applies that repair only to teacher-"
-            "wrong known samples; teacher_error_repair fully corrects only those rows."
+            "wrong known samples; teacher_error_repair fully corrects only those rows. "
+            "confidence_target_repair blends the detached teacher target toward "
+            "the known label using the teacher true-class confidence."
         ),
     )
     p.add_argument("--alpha-supcon", type=float, default=0.1)

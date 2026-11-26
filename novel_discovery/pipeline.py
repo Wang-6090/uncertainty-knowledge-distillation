@@ -38,6 +38,7 @@ from .losses import (
     discovery_view_loss,
     distillation_loss,
     quality_aware_distillation_loss,
+    confidence_target_repair_distillation_loss,
     uncertainty_error_repair_distillation_loss,
     uncertainty_target_repair_distillation_loss,
     selective_distillation_loss,
@@ -2087,6 +2088,7 @@ def train_one_epoch_student(
     kd_target_repair_mean_meter = AverageMeter()
     kd_error_repair_active_fraction_meter = AverageMeter()
     kd_error_repair_mean_meter = AverageMeter()
+    kd_confidence_target_repair_mean_meter = AverageMeter()
     feat_kd_meter = AverageMeter()
     centered_feat_kd_meter = AverageMeter()
     centered_feat_kd_active_fraction_meter = AverageMeter()
@@ -2281,6 +2283,9 @@ def train_one_epoch_student(
         elif kd_mode == "uncertainty_target_repair":
             # Target repair changes the detached teacher distribution; it does
             # not reweight the per-sample KD mass.
+            diagnostic_kd_weights = torch.ones_like(labels, dtype=torch.float32)
+        elif kd_mode == "confidence_target_repair":
+            # Confidence target repair changes the detached target, not KD mass.
             diagnostic_kd_weights = torch.ones_like(labels, dtype=torch.float32)
         elif kd_mode in {"teacher_error_repair", "uncertainty_error_repair"}:
             # Error-only target repair changes detached targets, not KD mass.
@@ -2487,6 +2492,7 @@ def train_one_epoch_student(
         kd_target_repair_mean = s_out["logits"].new_tensor(0.0)
         kd_error_repair_active_fraction = s_out["logits"].new_tensor(0.0)
         kd_error_repair_mean = s_out["logits"].new_tensor(0.0)
+        kd_confidence_target_repair_mean = s_out["logits"].new_tensor(0.0)
         if kd_mode in {"decoupled", "uncertainty_decoupled"}:
             (
                 loss_kd_target,
@@ -2522,6 +2528,13 @@ def train_one_epoch_student(
                 teacher_kd_logits,
                 labels,
                 teacher_kd_uncertainty_value,
+                temperature=temperature,
+            )
+        elif kd_mode == "confidence_target_repair":
+            loss_kd, kd_confidence_target_repair_mean = confidence_target_repair_distillation_loss(
+                s_out["logits"],
+                teacher_kd_logits,
+                labels,
                 temperature=temperature,
             )
         elif kd_mode in {"teacher_error_repair", "uncertainty_error_repair"}:
@@ -5365,6 +5378,9 @@ def train_one_epoch_student(
         kd_error_repair_mean_meter.update(
             kd_error_repair_mean.item(), images.size(0)
         )
+        kd_confidence_target_repair_mean_meter.update(
+            kd_confidence_target_repair_mean.item(), images.size(0)
+        )
         feat_kd_meter.update(loss_feat_kd.item(), images.size(0))
         centered_feat_kd_meter.update(loss_centered_feat_kd.item(), images.size(0))
         centered_feat_kd_active_fraction_meter.update(
@@ -5601,6 +5617,8 @@ def train_one_epoch_student(
         "kd_target_repair_mean": kd_target_repair_mean_meter.avg,
         "kd_error_repair_active_fraction": kd_error_repair_active_fraction_meter.avg,
         "kd_error_repair_mean": kd_error_repair_mean_meter.avg,
+        "kd_confidence_target_repair_applied": bool(kd_mode == "confidence_target_repair"),
+        "kd_confidence_target_repair_mean": kd_confidence_target_repair_mean_meter.avg,
         "kd_quality_floor": float(kd_quality_floor),
         "kd_quality_power": float(kd_quality_power),
         "kd_quality_weight_mode": str(kd_quality_weight_mode),
