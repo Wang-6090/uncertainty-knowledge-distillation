@@ -1,5 +1,33 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 2026-11-27：冻结教师在 CE 错误样本上的类别排序互补性未过门
+
+为回答既有教师质量审计尚未量化的问题——CE 学生已经分错时，教师的完整类别排序
+是否仍提供可蒸馏的正确类信息——对正式冻结教师与 CE-only 学生做了 known-only 配对
+复核。使用 semantic-hard CIFAR-100 60/40 的 seed `42/123/3407`，每个 split 同一
+3,000 个已知验证样本，类别排序按 logit 降序计算真实类 rank。标签仅在推理后用于
+CE 错误分组和真实类排名；未训练、校准、选择 checkpoint，也未构造测试集或未知池。
+
+| seed | CE 错误样本数 | 教师/CE MRR | 教师/CE top-5 | 教师 rank 更好/相同/更差 |
+|---:|---:|---:|---:|---:|
+| 42 | 854 | 0.4354 / 0.3521 | 64.17% / 79.16% | 42.97% / 12.41% / 44.61% |
+| 123 | 824 | 0.4209 / 0.3440 | 62.50% / 77.79% | 40.78% / 13.71% / 45.51% |
+| 3407 | 852 | 0.4441 / 0.3460 | 62.21% / 77.82% | 43.43% / 11.74% / 44.84% |
+
+教师 MRR 三组高于 CE，是因为教师在 CE 错误样本中仍有 `24.9%–28.9%` 的 top-1
+正确率，而 CE 在该子集的 top-1 按定义为零；但教师 top-5 三组都低于 CE，配对 rank
+平均优势（`CE rank - teacher rank`）也三组均为负。预注册门要求 MRR 至少 2/3 seed
+改善且 top-5 至少 2/3 seed 不退步；实际为 `3/3` 与 `0/3`，整体不通过。故不基于
+现有教师再做 teacher-error / uncertainty target-repair 训练臂。可保留“教师有少量
+互补 top-1 命中、但整体软目标排序不如 CE”的窄结论；三类划分有重叠，不能视为独立
+统计复现，也不能据此否定强教师下的 KD。
+
+复现协议、指标定义和停止判定见
+[`docs/team_a_representation/teacher_ce_rank_complementarity_protocol_20261127.md`](docs/team_a_representation/teacher_ce_rank_complementarity_protocol_20261127.md)，
+runner 为 `scripts/audit_teacher_ce_rank_complementarity.py`，测试为
+`tests/test_teacher_ce_rank_complementarity.py`。三个逐样本机器报告在 git-ignored 的
+`analysis/team_a_teacher_ce_rank_complementarity_s{42,123,3407}_20261127.json`。
+
 ## 2026-11-27：教师预算学生传递门未通过，停止该 pilot
 
 在 seed `2182` 的 semantic-hard CIFAR-100 60/40 split 上完成了预注册三臂
