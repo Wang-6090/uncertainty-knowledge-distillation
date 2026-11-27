@@ -1,5 +1,37 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 2026-11-27：教师预算学生传递门未通过，停止该 pilot
+
+在 seed `2182` 的 semantic-hard CIFAR-100 60/40 split 上完成了预注册三臂
+学生对照：同一 ResNet-18 配方、四个 epoch、全部 27,000 个 known-train 样本、
+3,000 个 known-validation 样本和 known-accuracy checkpoint selection。三臂只改变
+KD 是否启用及 KD 教师预算（5 或 15 epoch）；未使用未知/测试标签训练或选择模型。
+
+| 学生臂 | known-val accuracy | NLL | 相对 CE accuracy |
+|---|---:|---:|---:|
+| CE-only | 72.47% | 0.9629 | 基准 |
+| 5 epoch teacher + standard KD | 68.77% | 1.1081 | -3.70 pp |
+| 15 epoch teacher + standard KD | 69.90% | 1.0960 | -2.57 pp |
+
+5 epoch KD 的 normalized within-class cosine distance 比 CE 低 `0.0141`，
+between/total scatter ratio 高 `0.0214`；15 epoch KD 对应变化为 `-0.0014` 和
+`-0.0065`。几何信号不一致，且两个 KD 臂的分类准确率和 NLL 都差于 CE，故不满足
+预先规定的传递门。15 epoch 教师相对 5 epoch 教师只让学生准确率回升 `1.13 pp`，
+仍低于 CE `2.57 pp`；单 split 结果不能推广为教师预算的一般效应。
+
+随后仅对已有检查点执行 audit-only 复核，未重训。机制报告明确区分 raw KD 分量与
+`alpha_kd` 加权后的有效贡献：CE 臂 `alpha_kd=0`，其 raw KD gradient 非零但有效
+KD loss/gradient 为 0；两个 standard-KD 臂 `alpha_kd=1`，4/4 epoch KD loss、KD
+分量梯度及学生分类头更新均非零。结论是 KD 确实进入优化，但机制生效不代表收益为正。
+重算指标与旧报告逐项一致；报告标记未构造 test split、未迭代未知/测试样本。v2 结果：
+`analysis/team_a_teacher_budget_transfer_full_known_20261127_s2182_v2.json`；复现实验、
+限制及停止门记录于
+[`docs/team_a_representation/teacher_budget_student_transfer_protocol_20261127.md`](docs/team_a_representation/teacher_budget_student_transfer_protocol_20261127.md)。
+
+决策：不对 seed `2182` 做检测/聚类后验搜索，不调 KD 权重，也不改正式默认配置。
+本实验只否定“单纯增加这位教师训练轮数即可让 standard KD 超过 CE”这一具体假设，
+没有检验 uncertainty-KD，因此不能据此否定或确认不确定性加权的增量作用。
+
 ## 2026-11-27：seed 2182 教师训练预算复核完成
 
 完成 2026-11-26 预注册 pilot 的 15 epoch 处理臂，并在同一 fresh semantic-hard
@@ -30,6 +62,13 @@ test/unknown dataset 的审计实现；指标在相同 known-only 样本上重�
 然后用同一 seed/split 比较 CE、5-epoch-teacher standard-KD、15-epoch-teacher
 standard-KD；只有先看到分类/表征传递，再进入未知检测与发现评价。不得用未知标签
 选择 checkpoint 或方法，也不得覆盖正式结果。
+
+学生传递阶段首次启动时发现继承配置仍保留 `matched_discovery_pool=true`，实际每轮
+只有 21,600 个训练样本（338 batches），不是纯分类/KD 对照计划中的完整 27,000 个
+known-train 样本。该 run 在学生 checkpoint 保存前停止；没有模型指标纳入实验结果，
+原 protocol JSON 保留为中断记录。runner 已修正为关闭 matched discovery 留出，并在
+dry-run 报告训练样本数和每轮 batch 数；有效重跑使用新 tag
+`team_a_teacher_budget_transfer_full_known_20261127`。
 
 ## 2026-11-26：正式 KD 结果的教师质量门审计
 
