@@ -87,6 +87,37 @@ eligible for later KD experiments only if it materially exceeds the current
 teacher on known validation and provides complementary correctness relative to
 CE-only. No unknown-label metric may select the teacher.
 
+## Follow-up: training-budget pilot (2026-11-27)
+
+A single fresh semantic-hard split (seed `2182`) compared the matched 5- and
+15-epoch teacher checkpoints. The only intended treatment was the training
+budget. Deterministic evaluation used the same 27,000 known-train and 3,000
+known-validation samples; unknown/test samples were not loaded.
+
+| Budget | Known-train accuracy | Known-validation accuracy | Known-validation NLL |
+|---:|---:|---:|---:|
+| 5 epochs | 0.599778 | 0.533000 | 1.837632 |
+| 15 epochs | 0.797704 | 0.593333 | 1.960540 |
+| Delta | +0.197926 | +0.060333 | +0.122908 (worse) |
+
+The longer run improves validation top-1 by 6.03 percentage points, but the
+much larger train gain and worse validation NLL show that it does not uniformly
+repair teacher quality. This is one split and does not establish a generally
+better teacher recipe. No student was trained, so nothing is yet known about
+whether this gain transfers through standard KD, affects the student
+representation, or reaches unknown detection/discovery.
+
+The current paired-student runner is not yet safe for this comparison: it
+derives the teacher checkpoint path from `--tag` and seed, reusing a file only
+at that exact location; otherwise it calls `fit_teacher`. It has no explicit
+external frozen-checkpoint argument. Add such an input together with source
+config/checkpoint provenance validation before running students. The next
+comparison should hold seed/split fixed and include CE-only, standard KD from
+the 5-epoch teacher, and standard KD from the 15-epoch teacher. Evaluate the
+known-only student classification/representation gate first; only proceed to
+the existing downstream detection/discovery protocol if transfer is credible.
+Do not use unknown labels for model selection and do not overwrite formal runs.
+
 ## Reproducibility
 
 Sources: the frozen checkpoints under

@@ -1,5 +1,33 @@
 # 基于不确定性知识蒸馏的新类发现方法
 
+## 2026-11-27：seed 2182 教师训练预算复核完成
+
+完成 2026-11-26 预注册 pilot 的 15 epoch 处理臂，并在同一 fresh semantic-hard
+60/40 split、同一 27,000 个 known-train 样本和 3,000 个 known-validation 样本上，
+对冻结的 5/15 epoch 教师做 deterministic known-only 评估。训练轮数是唯一处理因素；
+未训练学生、未加载未知/测试样本，结果未用于正式 checkpoint 选择或调参。
+
+| 教师预算 | known-train accuracy | known-validation accuracy | known-validation NLL |
+|---:|---:|---:|---:|
+| 5 epochs | 59.98% | 53.30% | 1.8376 |
+| 15 epochs | 79.77% | 59.33% | 1.9605 |
+| 15 - 5 | +19.79 pp | +6.03 pp | +0.1229（变差）|
+
+延长训练确实提升了 top-1，验证集提升 6.03 pp；但训练集提升远大于验证集，且
+验证 NLL 恶化，说明 top-1 改善不等于概率质量全面改善。单个 fresh split 只能视为
+预算 pilot，不能据此认定教师问题已解决或推广到正式 seeds。完整逐项指标见
+`analysis/team_a_teacher_budget_s2182_known_metrics_20261127.json`，复核脚本为
+`scripts/audit_teacher_known_metrics.py`。
+
+本轮还检查了 `scripts/run_uncertainty_kd_core_pair.py`：该 runner 只会复用由
+`--tag` 和 seed 推导出的 `runs/{tag}_s{seed}_teacher/teacher.pt`；如果文件不存在，
+就会调用 `fit_teacher` 重新训练，且没有外部冻结教师 checkpoint 参数。因此目前
+不能直接用它做 5/15 epoch 教师的学生配对实验。下一步如要测试预算改善能否传到学生，
+应先给 runner 增加显式 checkpoint 输入及配置/来源校验，再 dry-run 确认不会重训教师，
+然后用同一 seed/split 比较 CE、5-epoch-teacher standard-KD、15-epoch-teacher
+standard-KD；只有先看到分类/表征传递，再进入未知检测与发现评价。不得用未知标签
+选择 checkpoint 或方法，也不得覆盖正式结果。
+
 ## 2026-11-26：正式 KD 结果的教师质量门审计
 
 在继续提出新的 KD 损失前，先核对正式 seed `42/123/3407` 所用教师是否具备
@@ -47,19 +75,16 @@ ResNet-34 预训练初始化、CIFAR transform、batch size、学习率、`alpha
 和 `freeze_bn_stats=false`，比较 5 epoch 控制臂与 15 epoch 处理臂。没有训练学生，
 没有加载未知/测试样本，也没有改变正式结果。
 
-5 epoch 控制臂已完整完成，保存于
-`runs/teacher_quality_budget_s2182_e5/`；其 known-validation 最优准确率为
-`53.30%`（best epoch 3），可作为该 fresh split 的教师质量控制值。15 epoch
-处理臂已在第 2 个 epoch 的训练中途按暂停要求停止，未产生完整配置或 checkpoint，
-不纳入比较，也不把中间日志作为结果。该 pilot 尚不能说明延长训练是否有效。
+5 epoch 控制臂完整保存于 `runs/teacher_quality_budget_s2182_e5/`；15 epoch 处理臂
+于次日完成，保存于 `runs/teacher_quality_budget_s2182_e15/`。完成结果和已知标签评估
+记录见 2026-11-27 条目；在该条目写入前，本 pilot 不应被当作完整比较。
 
 本轮新增 runner 为
 `scripts/run_teacher_quality_budget_pilot.py`，fresh split 为
 `splits/semantic_hard/seed2182/cifar100_60_40_semantic_hard.json`。下次继续时，
-应从 15 epoch 处理臂重新开始或明确改用新的 run tag，先完成教师 known-train /
-known-validation 质量检查；只有教师质量门通过，才考虑用它开展新的学生
-CE/standard-KD/uncertainty-KD 配对。不要把 5 epoch 控制臂的单个 fresh seed 结果
-直接替换正式教师，也不要提前做未知检测或聚类。
+下一步不得把任一预算臂直接替换正式教师。是否进入学生实验应按 2026-11-27 条目
+所述先解决冻结 checkpoint 的显式加载与来源校验，并保留相同 split 上的 CE 和两种
+教师预算 standard-KD 配对对照。
 
 ## 2026-11-22：分类表征新机制阶段启动（类内中心化 feature KD）
 
