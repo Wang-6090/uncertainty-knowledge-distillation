@@ -15,7 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from novel_discovery.data import build_data_bundle, build_transforms  # noqa: E402
+from novel_discovery.data import (  # noqa: E402
+    OpenSetCIFAR100,
+    build_transforms,
+    make_class_split,
+    split_known_indices,
+)
 from novel_discovery.pipeline import build_loader  # noqa: E402
 from scripts.audit_frozen_student_classification_impact import (  # noqa: E402
     classification_values,
@@ -62,16 +67,28 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
     device = torch.device(
         "cuda" if args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available()) else "cpu"
     )
-    bundle = build_data_bundle(
-        "cifar100", configs["epochs_5"]["data_root"], 60, args.seed, 64,
-        split_path=split_path, discovery_pool_mode="unknown", transform_profile="cifar",
+    known_classes, _novel_classes = make_class_split(
+        list(range(100)), 60, args.seed, str(split_path)
     )
+    train_transform = build_transforms(64, train=True, profile="cifar")
     eval_transform = build_transforms(64, train=False, profile="cifar")
-    replace_with_eval_transform(bundle.train, eval_transform)
-    replace_with_eval_transform(bundle.val, eval_transform)
+    train_full = OpenSetCIFAR100(
+        configs["epochs_5"]["data_root"], known_classes, train=True,
+        transform=train_transform, download=False, include_unknown=False,
+    )
+    val_full = OpenSetCIFAR100(
+        configs["epochs_5"]["data_root"], known_classes, train=True,
+        transform=eval_transform, download=False, include_unknown=False,
+    )
+    train_indices, val_indices = split_known_indices(
+        len(train_full), val_ratio=0.1, seed=args.seed
+    )
+    train_set = torch.utils.data.Subset(train_full, train_indices)
+    val_set = torch.utils.data.Subset(val_full, val_indices)
+    replace_with_eval_transform(train_set, eval_transform)
     loaders = {
-        "known_train": build_loader(bundle.train, args.batch_size, False, 0),
-        "known_validation": build_loader(bundle.val, args.batch_size, False, 0),
+        "known_train": build_loader(train_set, args.batch_size, False, 0),
+        "known_validation": build_loader(val_set, args.batch_size, False, 0),
     }
     models = {
         name: load_teacher(config_paths[name], checkpoint_paths[name], device)[2]
@@ -103,7 +120,10 @@ def audit(args: argparse.Namespace) -> dict[str, Any]:
         "purpose": "frozen known-only teacher training-budget audit",
         "seed": args.seed,
         "split_path": str(split_path),
-        "unknown_test_samples_loaded": False,
+        "test_split_instantiated": False,
+        "unknown_or_test_examples_iterated": False,
+        "novel_class_metadata_used_only_for_known_subset_exclusion": True,
+        "unknown_metrics_used_for_selection": False,
         "used_for_training_selection_or_tuning": False,
         "device": str(device),
         "invariant_fields": list(invariant_fields),

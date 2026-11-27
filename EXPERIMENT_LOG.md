@@ -5,7 +5,8 @@
 完成 2026-11-26 预注册 pilot 的 15 epoch 处理臂，并在同一 fresh semantic-hard
 60/40 split、同一 27,000 个 known-train 样本和 3,000 个 known-validation 样本上，
 对冻结的 5/15 epoch 教师做 deterministic known-only 评估。训练轮数是唯一处理因素；
-未训练学生、未加载未知/测试样本，结果未用于正式 checkpoint 选择或调参。
+未训练学生，也未创建 test dataset 或 unknown-pool loader。CIFAR train targets 仅按
+预注册类别清单筛出 known 子集；未知类指标未用于选择或调参。
 
 | 教师预算 | known-train accuracy | known-validation accuracy | known-validation NLL |
 |---:|---:|---:|---:|
@@ -16,8 +17,10 @@
 延长训练确实提升了 top-1，验证集提升 6.03 pp；但训练集提升远大于验证集，且
 验证 NLL 恶化，说明 top-1 改善不等于概率质量全面改善。单个 fresh split 只能视为
 预算 pilot，不能据此认定教师问题已解决或推广到正式 seeds。完整逐项指标见
-`analysis/team_a_teacher_budget_s2182_known_metrics_20261127.json`，复核脚本为
-`scripts/audit_teacher_known_metrics.py`。
+`analysis/team_a_teacher_budget_s2182_known_metrics_20261127_v2.json`，复核脚本为
+`scripts/audit_teacher_known_metrics.py`。v2 修正了先前版本通过通用 bundle 顺带构造
+test/unknown dataset 的审计实现；指标在相同 known-only 样本上重算，旧 JSON 不再作为
+数据隔离声明的依据。
 
 本轮还检查了 `scripts/run_uncertainty_kd_core_pair.py`：该 runner 只会复用由
 `--tag` 和 seed 推导出的 `runs/{tag}_s{seed}_teacher/teacher.pt`；如果文件不存在，

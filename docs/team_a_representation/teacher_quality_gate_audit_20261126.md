@@ -92,7 +92,10 @@ CE-only. No unknown-label metric may select the teacher.
 A single fresh semantic-hard split (seed `2182`) compared the matched 5- and
 15-epoch teacher checkpoints. The only intended treatment was the training
 budget. Deterministic evaluation used the same 27,000 known-train and 3,000
-known-validation samples; unknown/test samples were not loaded.
+known-validation samples. The corrected audit constructs only known-filtered
+training datasets and does not instantiate the test split or an unknown-pool
+loader. CIFAR training targets are consulted only to exclude non-known rows
+from the known loaders; no unknown metric is used for selection or tuning.
 
 | Budget | Known-train accuracy | Known-validation accuracy | Known-validation NLL |
 |---:|---:|---:|---:|
@@ -117,6 +120,13 @@ the 5-epoch teacher, and standard KD from the 15-epoch teacher. Evaluate the
 known-only student classification/representation gate first; only proceed to
 the existing downstream detection/discovery protocol if transfer is credible.
 Do not use unknown labels for model selection and do not overwrite formal runs.
+
+The first audit implementation used the generic data-bundle constructor, which
+also instantiated unknown-pool and test dataset objects even though neither was
+iterated. Its earlier `unknown_test_samples_loaded: false` field overstated the
+isolation guarantee. The corrected result is
+`analysis/team_a_teacher_budget_s2182_known_metrics_20261127_v2.json`; the
+earlier JSON is superseded for provenance claims.
 
 ## Reproducibility
 
