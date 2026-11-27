@@ -14,9 +14,44 @@ from .utils import load_json, save_json, split_list
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+CIFAR100_MEAN = (0.5071, 0.4867, 0.4408)
+CIFAR100_STD = (0.2675, 0.2565, 0.2761)
+CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
+CIFAR10_STD = (0.2470, 0.2435, 0.2616)
 
 
-def build_transforms(image_size: int, train: bool) -> transforms.Compose:
+def build_transforms(
+    image_size: int,
+    train: bool,
+    profile: str = "imagenet",
+    cifar_stats: str = "cifar100",
+) -> transforms.Compose:
+    if profile not in {"imagenet", "cifar"}:
+        raise ValueError(f"Unsupported transform profile: {profile}")
+    if profile == "cifar":
+        if cifar_stats == "cifar100":
+            normalize = transforms.Normalize(CIFAR100_MEAN, CIFAR100_STD)
+        elif cifar_stats == "cifar10":
+            normalize = transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD)
+        else:
+            raise ValueError(f"Unsupported CIFAR statistics: {cifar_stats}")
+        if train:
+            return transforms.Compose(
+                [
+                    transforms.Resize((image_size, image_size)),
+                    transforms.RandomCrop(image_size, padding=max(2, image_size // 16)),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    normalize,
+                ]
+            )
+        return transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.ToTensor(),
+                normalize,
+            ]
+        )
     if train:
         return transforms.Compose(
             [
@@ -42,6 +77,7 @@ def build_outlier_dataset(
     root: str,
     image_size: int,
     download: bool = False,
+    transform_profile: str = "imagenet",
 ) -> Dataset:
     """Build an unlabeled auxiliary dataset for Outlier Exposure.
 
@@ -50,7 +86,16 @@ def build_outlier_dataset(
     collection of images from a disjoint source such as Tiny-ImageNet.
     """
     name = dataset_name.lower()
-    transform = build_transforms(image_size, train=True)
+    # Auxiliary CIFAR-10 images must use their own statistics. Reusing
+    # CIFAR-100 normalization here silently shifts the OE input distribution
+    # and makes a boundary-loss experiment confound method with preprocessing.
+    cifar_stats = "cifar10" if name == "cifar10" else "cifar100"
+    transform = build_transforms(
+        image_size,
+        train=True,
+        profile=transform_profile,
+        cifar_stats=cifar_stats,
+    )
     if name == "cifar10":
         return datasets.CIFAR10(root=root, train=True, transform=transform, download=download)
     if name == "imagefolder":
@@ -221,22 +266,28 @@ def _known_labels(dataset: Dataset) -> list[int]:
         for child in dataset.datasets:
             labels.extend(_known_labels(child))
         return labels
+    # ImageFolder exposes both ``targets`` (integer class ids) and ``samples``.
+    # Its open-set mapping is keyed by class *names*, unlike CIFAR's mapping,
+    # so handle it before the generic integer-target path below.
+    if isinstance(dataset, OpenSetImageFolder):
+        return [
+            int(
+                dataset.known_to_idx.get(
+                    dataset.base.classes[int(dataset.base.samples[index][1])], -1
+                )
+            )
+            for index in dataset.allowed_indices
+        ]
     if hasattr(dataset, "allowed_indices") and hasattr(dataset, "base"):
         allowed_indices = list(dataset.allowed_indices)
-        # ImageFolder exposes a ``targets`` integer list too, but
-        # ``known_to_idx`` is keyed by class names there.  Prefer the
-        # samples/class-name path whenever it is available; otherwise the
-        # CIFAR-style integer-target path is used.
-        if hasattr(dataset.base, "samples"):
-            return [
-                int(dataset.known_to_idx.get(
-                    dataset.base.classes[int(dataset.base.samples[index][1])], -1
-                ))
-                for index in allowed_indices
-            ]
         if hasattr(dataset.base, "targets"):
             return [
                 int(dataset.known_to_idx[int(dataset.base.targets[index])])
+                for index in allowed_indices
+            ]
+        if hasattr(dataset.base, "samples"):
+            return [
+                int(dataset.known_to_idx[dataset.base.classes[int(dataset.base.samples[index][1])]])
                 for index in allowed_indices
             ]
     # FakeData and custom datasets have no stable raw-label table. Their
@@ -282,16 +333,25 @@ def _known_flags(dataset: Dataset) -> list[bool]:
         for child in dataset.datasets:
             flags.extend(_known_flags(child))
         return flags
+    # ImageFolder has an integer ``targets`` attribute too, but
+    # ``known_to_idx`` is keyed by folder names. Do not treat those raw ids as
+    # CIFAR ids: this flag feeds mixed-pool prior estimation and PU training.
+    if isinstance(dataset, OpenSetImageFolder):
+        return [
+            dataset.base.classes[int(dataset.base.samples[index][1])]
+            in dataset.known_to_idx
+            for index in dataset.allowed_indices
+        ]
     if hasattr(dataset, "allowed_indices") and hasattr(dataset, "base"):
         allowed_indices = list(dataset.allowed_indices)
         known_to_idx = getattr(dataset, "known_to_idx", {})
+        if hasattr(dataset.base, "targets"):
+            return [int(dataset.base.targets[index]) in known_to_idx for index in allowed_indices]
         if hasattr(dataset.base, "samples"):
             return [
                 dataset.base.classes[int(dataset.base.samples[index][1])] in known_to_idx
                 for index in allowed_indices
             ]
-        if hasattr(dataset.base, "targets"):
-            return [int(dataset.base.targets[index]) in known_to_idx for index in allowed_indices]
     return [bool(dataset[index][3]) for index in range(len(dataset))]
 
 
@@ -340,6 +400,63 @@ def split_validation_for_calibration(
             selection_indices[index] for index in order[: len(calibration_indices)]
         ]
     return Subset(dataset, selection_indices), Subset(dataset, calibration_indices)
+
+
+def dataset_source_indices(dataset: Dataset) -> list[int]:
+    """Resolve subsets to stable positions in their base dataset for split audits."""
+    if isinstance(dataset, Subset):
+        parent_indices = dataset_source_indices(dataset.dataset)
+        return [parent_indices[int(index)] for index in dataset.indices]
+    if isinstance(dataset, ConcatDataset):
+        indices: list[int] = []
+        offset = 0
+        for child in dataset.datasets:
+            child_indices = dataset_source_indices(child)
+            indices.extend(offset + index for index in child_indices)
+            offset += len(child_indices)
+        return indices
+    return list(range(len(dataset)))
+
+
+def dataset_source_keys(dataset: Dataset) -> list[tuple]:
+    """Return source identities that remain stable across dataset views.
+
+    ``dataset_source_indices`` is useful only when all views share one base
+    object.  Open-set CIFAR construction intentionally creates separate
+    dataset objects for train/validation/test and for deterministic versus
+    augmented transforms, so a plain positional index can collide across
+    genuinely different views.  This helper includes the source split and
+    the underlying dataset index, which makes overlap audits meaningful.
+    """
+    if isinstance(dataset, Subset):
+        parent_keys = dataset_source_keys(dataset.dataset)
+        return [parent_keys[int(index)] for index in dataset.indices]
+    if isinstance(dataset, ConcatDataset):
+        keys: list[tuple] = []
+        for child in dataset.datasets:
+            keys.extend(dataset_source_keys(child))
+        return keys
+    if isinstance(dataset, OpenSetCIFAR100):
+        source = (
+            "cifar100",
+            str(Path(dataset.base.root).resolve()),
+            bool(dataset.base.train),
+        )
+        return [source + (int(index),) for index in dataset.allowed_indices]
+    if isinstance(dataset, OpenSetImageFolder):
+        source = ("imagefolder", str(Path(dataset.base.root).resolve()))
+        return [source + (int(index),) for index in dataset.allowed_indices]
+    if isinstance(dataset, OpenSetFakeData):
+        source = (
+            "fakedata",
+            int(getattr(dataset.base, "random_offset", 0)),
+            int(getattr(dataset.base, "size", len(dataset.base))),
+        )
+        return [source + (int(index),) for index in dataset.allowed_indices]
+    # Generic datasets cannot expose a portable sample identity.  Keep the
+    # object identity explicit rather than silently claiming that positions in
+    # two unrelated datasets refer to the same sample.
+    return [("dataset_object", id(dataset), int(index)) for index in range(len(dataset))]
 
 
 def split_known_for_discovery(
@@ -462,8 +579,9 @@ class DataBundle:
 class TwoViewDataset(Dataset):
     """Return two independently augmented views from one base sample."""
 
-    def __init__(self, dataset: Dataset) -> None:
+    def __init__(self, dataset: Dataset, include_metadata: bool = False) -> None:
         self.dataset = dataset
+        self.include_metadata = bool(include_metadata)
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -471,6 +589,10 @@ class TwoViewDataset(Dataset):
     def __getitem__(self, index: int):
         first = self.dataset[index]
         second = self.dataset[index]
+        if self.include_metadata:
+            # Metadata is used only for post-hoc diagnostics of pseudo-anchor
+            # purity. It must never be consumed by the training loss.
+            return first[0], second[0], first[1], first[2], first[3]
         return first[0], second[0]
 
 
@@ -478,7 +600,9 @@ def unknown_subset(dataset: Dataset) -> Dataset:
     """Build an unlabeled view of the samples outside the known classes."""
     if hasattr(dataset, "allowed_indices") and hasattr(dataset, "base"):
         allowed_indices = list(dataset.allowed_indices)
-        if hasattr(dataset.base, "samples"):
+        # ImageFolder also exposes integer ``targets``; its known-class map is
+        # keyed by folder names, so select its unknown rows by class name.
+        if isinstance(dataset, OpenSetImageFolder):
             indices = []
             for local_index, real_index in enumerate(allowed_indices):
                 raw_label = int(dataset.base.samples[real_index][1])
@@ -493,6 +617,14 @@ def unknown_subset(dataset: Dataset) -> Dataset:
                 for local_index, real_index in enumerate(allowed_indices)
                 if int(raw_targets[real_index]) not in dataset.known_to_idx
             ]
+            return Subset(dataset, indices)
+        if hasattr(dataset.base, "samples"):
+            indices = []
+            for local_index, real_index in enumerate(allowed_indices):
+                raw_label = int(dataset.base.samples[real_index][1])
+                class_name = dataset.base.classes[raw_label]
+                if class_name not in dataset.known_to_idx:
+                    indices.append(local_index)
             return Subset(dataset, indices)
 
     indices = []
@@ -523,6 +655,9 @@ def build_open_validation_and_discovery(
     discovery_pool_mode: str,
     unknown_open_val_pool: Dataset | None = None,
     known_discovery_pool: Dataset | None = None,
+    matched_discovery_pool: bool = False,
+    matched_pool_size: int = 0,
+    matched_known_prior: float = 0.2,
 ):
     """Reserve training-split samples for open validation, never from test.
 
@@ -545,7 +680,33 @@ def build_open_validation_and_discovery(
     else:
         open_val = None
 
-    if discovery_pool_mode == "unknown":
+    if matched_discovery_pool:
+        pool_size = int(matched_pool_size)
+        known_prior = float(matched_known_prior)
+        if pool_size <= 0:
+            raise ValueError("matched_pool_size must be positive")
+        if not 0.0 <= known_prior < 1.0:
+            raise ValueError("matched_known_prior must be in [0, 1)")
+        known_count = int(round(pool_size * known_prior)) if discovery_pool_mode == "mixed" else 0
+        unknown_count = pool_size - known_count
+        if len(unknown_pool) < unknown_count:
+            raise ValueError(
+                "Not enough novel samples for the matched discovery pool: "
+                f"need {unknown_count}, have {len(unknown_pool)}"
+            )
+        matched_unknown_pool = limit_dataset(unknown_pool, unknown_count, seed + 31)
+        if known_count:
+            if known_discovery_pool is None or len(known_discovery_pool) < known_count:
+                available = 0 if known_discovery_pool is None else len(known_discovery_pool)
+                raise ValueError(
+                    "Not enough reserved known samples for the matched mixed pool: "
+                    f"need {known_count}, have {available}"
+                )
+            matched_known_pool = limit_dataset(known_discovery_pool, known_count, seed + 47)
+            discovery_pool = ConcatDataset([matched_known_pool, matched_unknown_pool])
+        else:
+            discovery_pool = matched_unknown_pool
+    elif discovery_pool_mode == "unknown":
         discovery_pool = unknown_pool
     else:
         if known_discovery_pool is None:
@@ -575,6 +736,10 @@ def build_data_bundle(
     calibration_overlap_control: bool = False,
     known_split_mode: str = "random",
     mixed_known_pool_ratio: float = 0.2,
+    matched_discovery_pool: bool = False,
+    matched_pool_size: int = 0,
+    matched_known_prior: float = 0.2,
+    transform_profile: str = "imagenet",
 ) -> DataBundle:
     if discovery_pool_mode not in {"unknown", "mixed"}:
         raise ValueError(f"Unsupported discovery pool mode: {discovery_pool_mode}")
@@ -587,11 +752,30 @@ def build_data_bundle(
             "mixed discovery requires 0 < mixed_known_pool_ratio < 1 so the "
             "known portion is disjoint from supervised training"
         )
+    if matched_discovery_pool:
+        if not 0.0 < float(mixed_known_pool_ratio) < 1.0:
+            raise ValueError(
+                "matched discovery requires 0 < mixed_known_pool_ratio < 1 "
+                "to reserve the same known training subset in both arms"
+            )
+        if int(matched_pool_size) <= 0:
+            raise ValueError("matched_pool_size must be positive")
+        if not 0.0 < float(matched_known_prior) < 1.0:
+            raise ValueError("matched_known_prior must be in (0, 1)")
+        if discovery_pool_mode == "mixed" and int(round(int(matched_pool_size) * float(matched_known_prior))) <= 0:
+            raise ValueError("matched mixed pool must contain at least one known sample")
+        if discovery_pool_mode == "mixed" and int(round(int(matched_pool_size) * float(matched_known_prior))) >= int(matched_pool_size):
+            raise ValueError("matched mixed pool must contain at least one novel sample")
+        if limit_discovery and int(limit_discovery) != int(matched_pool_size):
+            raise ValueError(
+                "When matched_discovery_pool is enabled, limit_discovery must be "
+                "zero or equal matched_pool_size"
+            )
 
     if dataset_name.lower() == "cifar100":
         known_classes, novel_classes = make_class_split(list(range(100)), num_known, seed, split_path)
-        train_tf = build_transforms(image_size, train=True)
-        test_tf = build_transforms(image_size, train=False)
+        train_tf = build_transforms(image_size, train=True, profile=transform_profile)
+        test_tf = build_transforms(image_size, train=False, profile=transform_profile)
         train_full = OpenSetCIFAR100(root, known_classes, train=True, transform=train_tf, download=download, include_unknown=False)
         val_full = OpenSetCIFAR100(root, known_classes, train=True, transform=test_tf, download=download, include_unknown=False)
         pool_full = OpenSetCIFAR100(root, known_classes, train=True, transform=train_tf, download=download, include_unknown=True)
@@ -606,7 +790,7 @@ def build_data_bundle(
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
         known_discovery_pool = None
-        if discovery_pool_mode == "mixed":
+        if discovery_pool_mode == "mixed" or matched_discovery_pool:
             train_set, known_discovery_pool = split_known_for_discovery(
                 train_set,
                 mixed_known_pool_ratio,
@@ -624,6 +808,9 @@ def build_data_bundle(
             discovery_pool_mode,
             unknown_open_val_pool=unknown_open_val_pool,
             known_discovery_pool=known_discovery_pool,
+            matched_discovery_pool=matched_discovery_pool,
+            matched_pool_size=matched_pool_size,
+            matched_known_prior=matched_known_prior,
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
@@ -664,8 +851,8 @@ def build_data_bundle(
             split_file = Path(split_path)
             imagefolder_split = str(split_file.with_name(split_file.stem + "_imagefolder.json"))
         known_classes, novel_classes = make_class_split(base.classes, num_known, seed, imagefolder_split)
-        train_tf = build_transforms(image_size, train=True)
-        test_tf = build_transforms(image_size, train=False)
+        train_tf = build_transforms(image_size, train=True, profile=transform_profile)
+        test_tf = build_transforms(image_size, train=False, profile=transform_profile)
         train_full = OpenSetImageFolder(str(train_root), known_classes, transform=train_tf, include_unknown=False)
         val_full = OpenSetImageFolder(str(train_root), known_classes, transform=test_tf, include_unknown=False)
         pool_full = OpenSetImageFolder(str(train_root), known_classes, transform=train_tf, include_unknown=True)
@@ -680,7 +867,7 @@ def build_data_bundle(
         train_set = Subset(train_full, train_indices)
         val_set = Subset(val_full, val_indices)
         known_discovery_pool = None
-        if discovery_pool_mode == "mixed":
+        if discovery_pool_mode == "mixed" or matched_discovery_pool:
             train_set, known_discovery_pool = split_known_for_discovery(
                 train_set,
                 mixed_known_pool_ratio,
@@ -698,6 +885,9 @@ def build_data_bundle(
             discovery_pool_mode,
             unknown_open_val_pool=unknown_open_val_pool,
             known_discovery_pool=known_discovery_pool,
+            matched_discovery_pool=matched_discovery_pool,
+            matched_pool_size=matched_pool_size,
+            matched_known_prior=matched_known_prior,
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)
@@ -723,8 +913,8 @@ def build_data_bundle(
 
     if dataset_name.lower() in {"toy", "fake"}:
         known_classes, novel_classes = make_class_split(list(range(100)), num_known, seed, split_path)
-        train_tf = build_transforms(image_size, train=True)
-        test_tf = build_transforms(image_size, train=False)
+        train_tf = build_transforms(image_size, train=True, profile=transform_profile)
+        test_tf = build_transforms(image_size, train=False, profile=transform_profile)
         train_full = OpenSetFakeData(1000, known_classes, image_size, transform=train_tf, include_unknown=False, random_offset=0)
         val_full = OpenSetFakeData(200, known_classes, image_size, transform=test_tf, include_unknown=False, random_offset=10000)
         pool_full = OpenSetFakeData(1000, known_classes, image_size, transform=train_tf, include_unknown=True, random_offset=30000)
@@ -736,7 +926,7 @@ def build_data_bundle(
             train_full, val_ratio=0.1, seed=seed, mode=known_split_mode
         )
         known_discovery_pool = None
-        if discovery_pool_mode == "mixed":
+        if discovery_pool_mode == "mixed" or matched_discovery_pool:
             train_set, known_discovery_pool = split_known_for_discovery(
                 train_set,
                 mixed_known_pool_ratio,
@@ -755,6 +945,9 @@ def build_data_bundle(
             discovery_pool_mode,
             unknown_open_val_pool=unknown_open_val_pool,
             known_discovery_pool=known_discovery_pool,
+            matched_discovery_pool=matched_discovery_pool,
+            matched_pool_size=matched_pool_size,
+            matched_known_prior=matched_known_prior,
         )
         train_set = limit_known_dataset(train_set, limit_train, seed, known_split_mode)
         val_set = limit_known_dataset(val_set, limit_val, seed, known_split_mode)

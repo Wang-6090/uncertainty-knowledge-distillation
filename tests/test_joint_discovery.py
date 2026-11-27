@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import torch
@@ -13,12 +14,20 @@ from novel_discovery.joint_discovery import (
     NovelPrototypeHead,
     balanced_assignment_loss,
     balanced_assignments,
+    global_balanced_assignments,
     combine_known_novel_logits,
     joint_discovery_loss,
+    memory_neighbor_consistency_loss,
     information_maximization_loss,
+    known_residual_weights,
+    neighbor_novel_support_weights,
+    novel_mass_weights,
+    bounded_novel_mass_weights,
     neighbor_consistency_loss,
     novel_consistency_loss,
+    prototype_pseudo_label_loss,
 )
+from novel_discovery.pipeline import select_joint_candidates
 
 
 class JointDiscoveryTest(unittest.TestCase):
@@ -39,6 +48,150 @@ class JointDiscoveryTest(unittest.TestCase):
         self.assertTrue(torch.allclose(assignments.sum(dim=1), torch.ones(8), atol=1e-4))
         self.assertTrue(torch.isfinite(assignments).all())
 
+    def test_balanced_assignments_support_nonuniform_class_marginals(self):
+        logits = torch.randn(120, 6, generator=torch.Generator().manual_seed(23))
+        class_marginal = torch.tensor([0.1, 0.1, 0.2, 0.2, 0.2, 0.2])
+        for sample_weights in (None, torch.linspace(0.2, 1.0, 120)):
+            assignments = balanced_assignments(
+                logits,
+                temperature=0.2,
+                iterations=100,
+                sample_weights=sample_weights,
+                class_marginal=class_marginal,
+            )
+            expected = class_marginal / class_marginal.sum()
+            if sample_weights is None:
+                self.assertTrue(torch.allclose(assignments.sum(dim=1), torch.ones(120), atol=1e-5))
+                observed = assignments.mean(dim=0)
+            else:
+                self.assertTrue(torch.allclose(assignments.sum(dim=1), torch.ones(120), atol=1e-5))
+                observed = (assignments * sample_weights[:, None]).sum(dim=0) / sample_weights.sum()
+            self.assertTrue(torch.allclose(observed, expected, atol=1e-2))
+
+    def test_prior_aware_unified_joint_loss_is_finite_and_differentiable(self):
+        first_features = torch.randn(12, 5, requires_grad=True)
+        second_features = torch.randn(12, 5, requires_grad=True)
+        first_novel_logits = torch.randn(12, 4, requires_grad=True)
+        second_novel_logits = torch.randn(12, 4, requires_grad=True)
+        first_known_logits = torch.randn(12, 6, requires_grad=True)
+        second_known_logits = torch.randn(12, 6, requires_grad=True)
+        losses = joint_discovery_loss(
+            first_features,
+            second_features,
+            first_novel_logits,
+            second_novel_logits,
+            first_known_logits=first_known_logits,
+            second_known_logits=second_known_logits,
+            known_class_prior=0.2,
+            confidence_threshold=0.0,
+        )
+        self.assertTrue(torch.isfinite(losses["total"]))
+        losses["total"].backward()
+        self.assertIsNotNone(first_novel_logits.grad)
+        self.assertIsNotNone(first_known_logits.grad)
+
+    def test_prior_aware_marginal_reaches_default_cross_view_sinkhorn_path(self):
+        features = torch.randn(10, 5)
+        novel_logits = torch.randn(10, 4)
+        known_logits = torch.randn(10, 6)
+        with patch(
+            "novel_discovery.joint_discovery.balanced_assignments",
+            wraps=balanced_assignments,
+        ) as assignment_spy:
+            joint_discovery_loss(
+                features,
+                features + 0.01,
+                novel_logits,
+                novel_logits + 0.01,
+                first_known_logits=known_logits,
+                second_known_logits=known_logits + 0.01,
+                known_class_prior=0.2,
+                confidence_threshold=0.0,
+            )
+        self.assertGreaterEqual(assignment_spy.call_count, 4)
+        expected = torch.tensor([0.2 / 6] * 6 + [0.8 / 4] * 4)
+        for call in assignment_spy.call_args_list:
+            self.assertIn("class_marginal", call.kwargs)
+            self.assertTrue(torch.allclose(call.kwargs["class_marginal"], expected))
+
+    def test_prior_aware_assignments_require_unified_logits(self):
+        features = torch.randn(4, 5)
+        novel_logits = torch.randn(4, 3)
+        with self.assertRaisesRegex(ValueError, "unified"):
+            joint_discovery_loss(
+                features,
+                features,
+                novel_logits,
+                novel_logits,
+                known_class_prior=0.2,
+            )
+
+    def test_global_assignments_return_current_rows_only(self):
+        current = torch.tensor([[4.0, 0.0, -1.0], [0.0, 3.0, -1.0]])
+        memory = torch.randn(12, 3)
+        assignments = global_balanced_assignments(
+            current, memory_logits=memory, iterations=5
+        )
+        self.assertEqual(tuple(assignments.shape), tuple(current.shape))
+        self.assertTrue(torch.isfinite(assignments).all())
+        self.assertTrue(torch.allclose(assignments.sum(dim=-1), torch.ones(2), atol=1e-5))
+
+    def test_global_assignments_validate_memory_dimension(self):
+        with self.assertRaises(ValueError):
+            global_balanced_assignments(torch.randn(3, 4), torch.randn(5, 3))
+
+    def test_global_assignment_joint_loss_is_finite(self):
+        first_features = torch.randn(6, 5, requires_grad=True)
+        second_features = torch.randn(6, 5, requires_grad=True)
+        first_logits = torch.randn(6, 4, requires_grad=True)
+        second_logits = torch.randn(6, 4, requires_grad=True)
+        losses = joint_discovery_loss(
+            first_features,
+            second_features,
+            first_logits,
+            second_logits,
+            confidence_threshold=0.0,
+            global_assignment=True,
+            global_memory_logits=torch.randn(20, 4),
+        )
+        self.assertTrue(torch.isfinite(losses["total"]))
+        self.assertTrue(torch.isfinite(losses["global_assignment_entropy"]))
+        self.assertGreaterEqual(float(losses["global_assignment_active_classes"]), 1.0)
+        losses["total"].backward()
+        self.assertIsNotNone(first_logits.grad)
+
+    def test_zero_weight_samples_do_not_change_active_sinkhorn_targets(self):
+        active_logits = torch.tensor([[4.0, 0.0, -1.0], [0.0, 3.0, -1.0]])
+        weights = torch.tensor([1.0, 1.0, 0.0])
+        first = balanced_assignments(
+            torch.cat([active_logits, torch.tensor([[10.0, -10.0, -10.0]])]),
+            sample_weights=weights,
+            iterations=5,
+        )
+        second = balanced_assignments(
+            torch.cat([active_logits, torch.tensor([[-10.0, 10.0, -10.0]])]),
+            sample_weights=weights,
+            iterations=5,
+        )
+        self.assertTrue(torch.allclose(first[:2], second[:2], atol=1e-6))
+        self.assertTrue(torch.allclose(first.sum(dim=-1), torch.ones(3), atol=1e-5))
+
+    def test_weighted_sinkhorn_validates_sample_weight_shape(self):
+        with self.assertRaises(ValueError):
+            balanced_assignments(torch.randn(4, 3), sample_weights=torch.ones(3))
+
+    def test_sinkhorn_is_finite_for_low_temperature_and_large_logits(self):
+        logits = torch.tensor([[100.0, 80.0, -50.0], [-80.0, 100.0, 50.0]])
+        weights = torch.tensor([1.0, 0.2])
+        for sample_weights in (None, weights):
+            assignments = balanced_assignments(
+                logits, temperature=0.01, iterations=5, sample_weights=sample_weights
+            )
+            self.assertTrue(torch.isfinite(assignments).all())
+            self.assertTrue(torch.allclose(
+                assignments.sum(dim=-1), torch.ones(2), atol=1e-5
+            ))
+
     def test_joint_loss_is_finite_and_differentiable(self):
         first_features = torch.randn(8, 6, requires_grad=True)
         second_features = torch.randn(8, 6, requires_grad=True)
@@ -54,9 +207,37 @@ class JointDiscoveryTest(unittest.TestCase):
             neighbor_k=3,
         )
         self.assertTrue(torch.isfinite(losses["total"]))
+        self.assertTrue(torch.isfinite(losses["assignment_entropy"]))
+        self.assertTrue(torch.isfinite(losses["assignment_max_probability"]))
+        self.assertGreaterEqual(float(losses["assignment_active_classes"]), 1.0)
+        self.assertLessEqual(float(losses["assignment_active_classes"]), 4.0)
         losses["total"].backward()
         self.assertIsNotNone(first_logits.grad)
         self.assertIsNotNone(second_logits.grad)
+
+    def test_memory_neighbor_consistency_is_finite_and_differentiable(self):
+        features = torch.randn(4, 6, requires_grad=True)
+        logits = torch.randn(4, 3, requires_grad=True)
+        memory_features = torch.randn(8, 6)
+        memory_logits = torch.randn(8, 3)
+        loss = memory_neighbor_consistency_loss(
+            features, logits, memory_features, memory_logits, k=3
+        )
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        # Neighbor selection is intentionally detached; only current logits
+        # receive gradients from this consistency target.
+        self.assertIsNone(features.grad)
+        self.assertIsNotNone(logits.grad)
+
+    def test_memory_neighbor_consistency_empty_bank_is_zero(self):
+        loss = memory_neighbor_consistency_loss(
+            torch.randn(2, 4),
+            torch.randn(2, 3),
+            torch.empty(0, 4),
+            torch.empty(0, 3),
+        )
+        self.assertEqual(float(loss), 0.0)
 
     def test_empty_and_small_batches_are_safe(self):
         empty = torch.empty(0, 4)
@@ -77,6 +258,58 @@ class JointDiscoveryTest(unittest.TestCase):
         unified = combine_known_novel_logits(known, novel)
         self.assertEqual(tuple(unified.shape), (3, 9))
 
+    def test_known_residual_weights_downweight_confident_known_samples(self):
+        logits = torch.tensor([[8.0, 0.0], [0.0, 0.0]], requires_grad=True)
+        weights = known_residual_weights(logits)
+        self.assertLess(float(weights[0]), float(weights[1]))
+        self.assertTrue(torch.all((weights >= 0.0) & (weights <= 1.0)))
+        self.assertFalse(weights.requires_grad)
+
+    def test_known_residual_view_agreement_suppresses_unstable_weights(self):
+        first = torch.tensor([0.8, 0.9])
+        second = torch.tensor([0.8, 0.1])
+        mean = 0.5 * (first + second)
+        agreement = 1.0 - (first - second).abs()
+        weighted = bounded_novel_mass_weights(mean, agreement)
+        self.assertAlmostEqual(float(weighted[0]), 0.8, places=6)
+        self.assertLess(float(weighted[1]), float(mean[1]))
+
+    def test_novel_mass_weights_compare_known_and_novel_evidence(self):
+        known = torch.tensor([[8.0, 0.0], [0.0, 0.0]], requires_grad=True)
+        novel = torch.tensor([[0.0, 0.0], [8.0, 8.0]], requires_grad=True)
+        weights = novel_mass_weights(known, novel)
+        self.assertLess(float(weights[0]), float(weights[1]))
+        self.assertTrue(torch.all((weights >= 0.0) & (weights <= 1.0)))
+        self.assertFalse(weights.requires_grad)
+
+    def test_bounded_novel_mass_weights_preserve_relative_evidence(self):
+        masses = torch.tensor([0.0, 0.5, 1.0], requires_grad=True)
+        agreement = torch.tensor([0.0, 0.5, 1.0])
+        weights = bounded_novel_mass_weights(masses, agreement, floor=0.05)
+        self.assertTrue(torch.allclose(weights, torch.tensor([0.05, 0.2875, 1.0])))
+        self.assertGreaterEqual(float(weights.min()), 0.05)
+        self.assertFalse(weights.requires_grad)
+        with self.assertRaises(ValueError):
+            bounded_novel_mass_weights(masses, floor=1.0)
+
+    def test_neighbor_support_downweights_isolated_novel_mass(self):
+        features = torch.tensor(
+            [
+                [1.0, 0.0], [0.99, 0.01], [0.98, 0.02],
+                [-1.0, 0.0], [-0.99, 0.01], [-0.98, -0.01],
+            ]
+        )
+        masses = torch.tensor([0.9, 0.9, 0.9, 0.9, 0.1, 0.1])
+        weights = neighbor_novel_support_weights(features, masses, k=2)
+        self.assertGreater(float(weights[:3].mean()), float(weights[3]))
+        self.assertTrue(torch.isfinite(weights).all())
+
+    def test_neighbor_support_handles_empty_and_singleton_batches(self):
+        empty = neighbor_novel_support_weights(torch.empty(0, 4), torch.empty(0), k=3)
+        single = neighbor_novel_support_weights(torch.ones(1, 4), torch.tensor([0.7]), k=3)
+        self.assertEqual(empty.numel(), 0)
+        self.assertTrue(torch.allclose(single, torch.tensor([0.7])))
+
     def test_weighted_joint_loss_is_finite(self):
         first_features = torch.randn(6, 5, requires_grad=True)
         second_features = torch.randn(6, 5, requires_grad=True)
@@ -94,6 +327,76 @@ class JointDiscoveryTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(losses["total"]))
         losses["total"].backward()
         self.assertIsNotNone(first_logits.grad)
+
+    def test_unweighted_sinkhorn_keeps_loss_weights_but_disables_weighted_targets(self):
+        first_features = torch.randn(5, 4, requires_grad=True)
+        second_features = torch.randn(5, 4, requires_grad=True)
+        first_logits = torch.tensor(
+            [[4.0, 0.0, -1.0], [0.0, 3.0, -1.0], [1.0, 0.0, 0.0],
+             [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], requires_grad=True
+        )
+        second_logits = (first_logits.detach() + 0.2 * torch.randn(5, 3)).requires_grad_()
+        weights = torch.tensor([1.0, 0.8, 0.3, 0.1, 0.0])
+        losses = joint_discovery_loss(
+            first_features,
+            second_features,
+            first_logits,
+            second_logits,
+            confidence_threshold=0.0,
+            sample_weights=weights,
+            weighted_assignments=False,
+        )
+        self.assertTrue(torch.isfinite(losses["total"]))
+        losses["total"].backward()
+        self.assertIsNotNone(first_logits.grad)
+
+    def test_hard_prototype_pseudo_loss_is_finite_and_differentiable(self):
+        first = torch.randn(8, 4, requires_grad=True)
+        second = torch.randn(8, 4, requires_grad=True)
+        loss = prototype_pseudo_label_loss(first, second, confidence_threshold=0.0)
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        self.assertIsNotNone(first.grad)
+        self.assertIsNotNone(second.grad)
+
+    def test_soft_prototype_pseudo_loss_is_finite_and_differentiable(self):
+        first = torch.randn(8, 4, requires_grad=True)
+        second = torch.randn(8, 4, requires_grad=True)
+        loss = prototype_pseudo_label_loss(
+            first, second, confidence_threshold=0.0, target_mode="soft"
+        )
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        self.assertIsNotNone(first.grad)
+        self.assertIsNotNone(second.grad)
+
+    def test_prototype_distance_candidate_selection(self):
+        known_logits = torch.randn(8, 3)
+        novel_logits = torch.randn(8, 2)
+        features = torch.randn(8, 5)
+        prototypes = torch.randn(3, 5)
+        mask = select_joint_candidates(
+            known_logits,
+            novel_logits,
+            features=features,
+            known_prototypes=prototypes,
+            ratio=0.25,
+            mode="prototype_distance",
+        )
+        self.assertEqual(mask.dtype, torch.bool)
+        self.assertEqual(int(mask.sum()), 2)
+
+    def test_distance_consensus_candidate_selection(self):
+        mask = select_joint_candidates(
+            torch.randn(8, 3),
+            torch.randn(8, 2),
+            uncertainty=torch.rand(8),
+            features=torch.randn(8, 5),
+            known_prototypes=torch.randn(3, 5),
+            ratio=0.25,
+            mode="distance_consensus",
+        )
+        self.assertEqual(int(mask.sum()), 2)
 
 
 if __name__ == "__main__":

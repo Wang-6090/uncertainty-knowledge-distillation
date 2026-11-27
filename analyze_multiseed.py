@@ -23,7 +23,7 @@ METRIC_KEYS = (
 )
 
 RUN_NAME_RE = re.compile(
-    r"^(?:revised_ms_s|protocol_s)(?P<seed>\d+)_(?P<method>.+)_detect(?:_(?P<cluster_k>oracle|auto))?$"
+    r"^revised_ms_s(?P<seed>\d+)_(?P<method>.+)_detect_(?P<cluster_k>oracle|auto)$"
 )
 
 
@@ -61,7 +61,7 @@ def collect_runs(root: Path, pattern: str):
                 "run_dir": str(run_dir),
                 "seed": int(match.group("seed")),
                 "method": match.group("method"),
-                "cluster_k_mode": match.group("cluster_k") or "auto",
+                "cluster_k_mode": match.group("cluster_k"),
                 "cluster_k": detail.get("cluster_k"),
                 "config": load_json(config_path) if config_path.exists() else {},
                 "metrics": load_json(report_path),
@@ -96,14 +96,17 @@ def aggregate(items):
 def fmt(item):
     if item["mean"] is None:
         return "-"
-    return f"{item['mean']:.4f} ± {item['std']:.4f}"
+    count = int(item.get("count", 0))
+    return f"{item['mean']:.4f} ± {item['std']:.4f} (n={count})"
 
 
 def make_markdown(summary):
     lines = [
         "# Multi-seed Ablation Summary",
         "",
-        "Results are mean +/- sample standard deviation across completed seeds.",
+        "Results are mean +/- sample standard deviation across completed seeds. "
+        "Each metric includes its valid report count (n). Older reports may omit "
+        "newer metrics such as AUPR or OSCR.",
         "",
         "| method | K protocol | seeds | AUROC | AUPR | FPR95 | OSCR | known acc | unknown reject | cluster ACC | NMI | ARI | estimated K |",
         "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",

@@ -26,6 +26,22 @@ analysis/archive_old/
 *.ckpt
 *.npy
 
-# Local downloaded datasets
-CIFAR-100-dataset-main/
+# Experiment outputs and local diagnostics
+analysis/
+*.inspect.ndjson
+*.log
+*.out
+*.err
 
+# Presentation and report build artifacts
+_ppt_edit_build/
+ppt_check/
+deliverables/
+*.pptx
+*.pptx.inspect.ndjson
+*.docx
+*.pdf
+
+# Local temporary files
+*.tmp
+*.bak

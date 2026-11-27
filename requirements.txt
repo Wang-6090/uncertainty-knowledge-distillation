@@ -2,5 +2,6 @@ torch
 torchvision
 numpy
 scikit-learn
+threadpoolctl
 scipy
 tqdm

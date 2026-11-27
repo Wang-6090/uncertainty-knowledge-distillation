@@ -24,7 +24,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Fair score comparison using one MC extraction")
     p.add_argument("--dataset", default="cifar100")
     p.add_argument("--data-root", default="./data")
-    p.add_argument("--split-path", default="./splits_cifar100_60_40.json")
+    p.add_argument("--split-path", default="./splits/cifar100_60_40.json")
     p.add_argument("--num-known", type=int, default=60)
     p.add_argument("--num-novel", type=int, default=40)
     p.add_argument("--seed", type=int, default=123)

@@ -2,18 +2,26 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import os
-import time
 from pathlib import Path
 
 import numpy as np
 import torch
 from sklearn.cluster import KMeans
+from threadpoolctl import threadpool_limits
 
 # Keep downloaded torchvision weights inside the project by default.
 os.environ.setdefault("TORCH_HOME", str(Path.cwd() / ".torch_cache"))
 
-from novel_discovery.data import TwoViewDataset, build_data_bundle
+from novel_discovery.data import (
+    TwoViewDataset,
+    build_data_bundle,
+    build_outlier_dataset,
+    build_transforms,
+    dataset_source_indices,
+    known_proportion,
+)
 from novel_discovery.joint_discovery import NovelPrototypeHead, combine_known_novel_logits
 from novel_discovery.metrics import compute_auroc
 from novel_discovery.models import build_model
@@ -21,21 +29,253 @@ from novel_discovery.pipeline import (
     build_loader,
     calibrate_threshold,
     calibrate_class_thresholds,
+    calibrate_open_threshold,
+    calibrate_coverage_threshold,
     collect_diagonal_gaussian_stats,
     collect_prototypes,
+    collect_classwise_knn_support,
     fit_score_normalization,
     evaluate_classification,
+    evaluate_representation_geometry,
     extract_outputs,
     compute_open_score,
+    compute_predicted_classwise_mahalanobis,
+    select_discovery_candidates,
+    select_mc_epistemic_head_candidates,
+    select_mc_epistemic_plus_head_candidates,
+    select_prototype_boundary_candidates,
+    select_confident_boundary_candidates,
     apply_temperature,
     calibration_diagnostics,
     fit_temperature,
     run_discovery,
+    collect_activation_clip_value,
+    fit_feature_rejector,
+    fit_virtual_outlier_rejector,
+    fit_known_support_rejector,
+    attach_known_support_score,
+    fit_known_conformal_support_rejector,
+    attach_known_conformal_support_score,
+    fit_pu_feature_rejector,
+    fit_nnpu_feature_rejector,
+    attach_feature_rejector_score,
+    collect_knn_feature_bank,
+    attach_knn_distances,
+    purify_candidate_mask,
+    evaluate_candidate_purification,
+    collect_vim_stats,
+    attach_vim_residual,
     train_one_epoch_student,
     train_one_epoch_teacher,
     uncertainty_error_diagnostics,
+    update_ema_model,
 )
-from novel_discovery.utils import ensure_dir, save_json, set_seed
+from novel_discovery.utils import ensure_dir, load_json, save_json, set_seed
+from sklearn.isotonic import IsotonicRegression
+
+
+def validate_rejector_configuration(args):
+    """Reject detector configurations whose feature ablation is unused."""
+    rejector_score_modes = {
+        "feature_rejector",
+        "feature_rejector_fusion",
+        "feature_rejector_uncertainty_fusion",
+        "feature_rejector_uncertainty_conjunction",
+        "virtual_rejector",
+    }
+    if (
+        args.rejector_feature_mode != "embedding"
+        and args.score_mode not in rejector_score_modes
+    ):
+        raise ValueError(
+            "--rejector-feature-mode only affects the final detector when "
+            "--score-mode is a feature-rejector mode, including "
+            "feature_rejector_uncertainty_conjunction, or "
+            "virtual_rejector; choose a rejector score mode or use "
+            "--rejector-feature-mode embedding"
+        )
+    if (
+        args.rejector_strict_mixed
+        and args.discovery_pool_mode == "mixed"
+        and args.rejector_training == "hard"
+        and args.score_mode in {
+            "feature_rejector",
+            "feature_rejector_fusion",
+            "feature_rejector_uncertainty_fusion",
+            "feature_rejector_uncertainty_conjunction",
+        }
+    ):
+        raise ValueError(
+            "--rejector-strict-mixed cannot use rejector-training=hard: the "
+            "mixed discovery pool contains known samples and would be assigned "
+            "hard unknown labels; use soft_pu or nnpu"
+        )
+    if (
+        args.discovery_pool_mode == "mixed"
+        and args.rejector_training == "hard"
+        and args.rejector_pool_selection == "all"
+        and args.score_mode in {
+            "feature_rejector",
+            "feature_rejector_fusion",
+            "feature_rejector_uncertainty_fusion",
+            "feature_rejector_uncertainty_conjunction",
+        }
+    ):
+        raise ValueError(
+            "mixed discovery with rejector-training=hard and "
+            "rejector-pool-selection=all would assign hard unknown labels to "
+            "the unlabeled mixed pool; use soft_pu or nnpu, or explicitly "
+            "select pseudo-unknown candidates"
+        )
+
+
+def rejector_protocol_metadata(args):
+    """Describe rejector supervision so reports cannot hide pool semantics."""
+    rejector_score_modes = {
+        "feature_rejector",
+        "feature_rejector_fusion",
+        "feature_rejector_uncertainty_fusion",
+        "feature_rejector_uncertainty_conjunction",
+        "virtual_rejector",
+    }
+    active = args.score_mode in rejector_score_modes
+    pool_mode = str(args.discovery_pool_mode)
+    training = str(args.rejector_training)
+    selection = str(args.rejector_pool_selection)
+    if not active:
+        interpretation = "not_active"
+    elif pool_mode == "unknown" and training == "hard":
+        interpretation = "pure_unknown_hard_control"
+    elif pool_mode == "mixed" and training in {"soft_pu", "nnpu"}:
+        interpretation = "unlabeled_mixed_pu"
+    elif pool_mode == "mixed" and training == "hard":
+        interpretation = "model_selected_pseudo_unknown"
+    else:
+        interpretation = "explicit_nondefault_protocol"
+    return {
+        "active": bool(active),
+        "score_mode": str(args.score_mode),
+        "discovery_pool_mode": pool_mode,
+        "training": training,
+        "pool_selection": selection,
+        "strict_mixed": bool(args.rejector_strict_mixed),
+        "hard_labels_used": bool(active and training == "hard"),
+        "interpretation": interpretation,
+        "test_labels_used_for_training_or_calibration": False,
+    }
+
+
+def support_model_diagnostics(support_model):
+    """Return compact, JSON-safe diagnostics for a classwise support model."""
+    if support_model is None:
+        return None
+    radii = np.asarray(support_model.get("radii", []), dtype=np.float64)
+    classes = np.asarray(support_model.get("classes", []), dtype=np.int64)
+    if radii.size == 0:
+        return {
+            "classes": int(classes.size),
+            "quantile": float(support_model.get("quantile", 0.0)),
+            "radius": {"count": 0},
+        }
+    return {
+        "classes": int(classes.size),
+        "quantile": float(support_model.get("quantile", 0.0)),
+        "radius": {
+            "count": int(radii.size),
+            "min": float(np.min(radii)),
+            "q25": float(np.quantile(radii, 0.25)),
+            "median": float(np.median(radii)),
+            "q75": float(np.quantile(radii, 0.75)),
+            "max": float(np.max(radii)),
+            "ratio_max_to_min": float(np.max(radii) / max(np.min(radii), 1e-12)),
+        },
+    }
+
+
+def fit_validation_uncertainty_error_calibrator(outputs_val):
+    """Fit a validation-only monotone map from uncertainty to error risk."""
+    labels = np.asarray(outputs_val["labels"], dtype=np.int64).reshape(-1)
+    logits = np.asarray(outputs_val["logits"], dtype=float)
+    uncertainty = np.asarray(outputs_val["head_uncertainty"], dtype=float).reshape(-1)
+    valid = (labels >= 0) & np.isfinite(uncertainty)
+    if int(valid.sum()) < 2:
+        raise ValueError("uncertainty calibration requires at least two known validation samples")
+    errors = (logits.argmax(axis=1) != labels).astype(float)
+    calibrator = IsotonicRegression(out_of_bounds="clip")
+    calibrator.fit(uncertainty[valid], errors[valid])
+    return calibrator, {
+        "sample_count": int(valid.sum()),
+        "error_rate": float(errors[valid].mean()),
+        "uncertainty_min": float(uncertainty[valid].min()),
+        "uncertainty_max": float(uncertainty[valid].max()),
+        "calibration_source": "known_validation_only",
+        "labels_used_for_training_or_test_selection": False,
+    }
+
+
+def attach_validation_uncertainty_error_score(outputs, calibrator):
+    """Attach calibrated uncertainty risk without using sample labels."""
+    uncertainty = np.asarray(outputs["head_uncertainty"], dtype=float).reshape(-1)
+    outputs["calibrated_uncertainty_error"] = np.asarray(
+        calibrator.predict(uncertainty), dtype=np.float64
+    )
+
+
+def discovery_training_requirements(args):
+    """Return whether student training needs a discovery pool and/or PU pool.
+
+    Keep all discovery-loss switches in one place so a newly added objective
+    cannot silently be configured without receiving discovery batches or
+    mixed-pool validation.
+    """
+    uses_discovery_regularizer = (
+        args.alpha_discovery > 0.0
+        or args.alpha_discovery_feature_consistency > 0.0
+        or args.alpha_discovery_rejection_consistency > 0.0
+        or args.alpha_discovery_rejection_score_consistency > 0.0
+        or args.alpha_discovery_projection_consistency > 0.0
+        or args.alpha_discovery_unknown > 0.0
+        or args.alpha_discovery_energy > 0.0
+        or args.alpha_discovery_energy_pu > 0.0
+        or args.alpha_discovery_uniform > 0.0
+        or args.alpha_discovery_feature_margin > 0.0
+        or args.alpha_discovery_uncertainty_feature_margin > 0.0
+        or args.alpha_discovery_rejection_feature_margin > 0.0
+        or args.alpha_discovery_rejection_feature_separation > 0.0
+        or args.alpha_discovery_objectosphere > 0.0
+        or args.alpha_discovery_feature_separation > 0.0
+        or args.alpha_discovery_boundary > 0.0
+        or args.alpha_discovery_knn_boundary > 0.0
+        or args.alpha_discovery_rejection_knn_boundary > 0.0
+        or args.alpha_discovery_uncertainty_separation > 0.0
+        or args.alpha_discovery_uncertainty_pu > 0.0
+        or args.alpha_discovery_rejection_pu_feature_margin > 0.0
+        or args.alpha_discovery_rejection_boundary > 0.0
+        or (
+            args.alpha_discovery_uncertainty_feature_margin > 0.0
+            and args.discovery_uncertainty_feature_margin_mode == "pu_corrected"
+        )
+        or args.alpha_discovery_selective_unknown > 0.0
+        or args.alpha_discovery_selective_energy > 0.0
+        or args.alpha_reciprocal > 0.0
+        or args.joint_discovery
+        or args.alpha_discovery_known_consistency > 0.0
+    )
+    uses_mixed_pu = (
+        args.alpha_discovery_uncertainty_pu > 0.0
+        or args.alpha_discovery_energy_pu > 0.0
+        or args.alpha_discovery_rejection_pu_feature_margin > 0.0
+        or args.alpha_discovery_rejection_boundary > 0.0
+        or (
+            args.alpha_discovery_boundary > 0.0
+            and args.discovery_boundary_mode == "pu"
+        )
+        or (
+            args.alpha_discovery_uncertainty_feature_margin > 0.0
+            and args.discovery_uncertainty_feature_margin_mode == "pu_corrected"
+        )
+    )
+    return uses_discovery_regularizer, uses_mixed_pu
 
 
 def parse_args(argv=None):
@@ -45,18 +285,122 @@ def parse_args(argv=None):
     def add_common(p):
         p.add_argument("--dataset", default="cifar100", choices=["cifar100", "imagefolder", "toy", "fake"])
         p.add_argument("--data-root", default="./data")
-        p.add_argument("--split-path", default="./splits.json")
+        p.add_argument("--split-path", default="./splits/default.json")
         p.add_argument("--num-known", type=int, default=60)
         p.add_argument("--seed", type=int, default=42)
+        p.add_argument(
+            "--model-seed",
+            type=int,
+            default=None,
+            help=(
+                "Override the training RNG seed while keeping --seed fixed "
+                "for class/data splitting. Defaults to --seed."
+            ),
+        )
         p.add_argument("--image-size", type=int, default=224)
+        p.add_argument(
+            "--transform-profile",
+            choices=["auto", "imagenet", "cifar"],
+            default="auto",
+            help=(
+                "Image preprocessing profile. 'auto' uses CIFAR-style transforms "
+                "for CIFAR-100 and ImageNet-style transforms otherwise; "
+                "'imagenet' preserves historical behavior; 'cifar' uses CIFAR "
+                "mean/std and crop/flip augmentation."
+            ),
+        )
         p.add_argument("--batch-size", type=int, default=64)
         p.add_argument("--num-workers", type=int, default=4)
         p.add_argument("--backbone", default="resnet18")
         p.add_argument("--teacher-backbone", default=None)
         p.add_argument("--student-backbone", default=None)
+        p.add_argument(
+            "--teacher-rejection-feature-dim",
+            type=int,
+            default=0,
+            help=(
+                "Explicit rejection embedding dimension for the frozen teacher. "
+                "0 preserves the historical auto-selection based on rejection KD."
+            ),
+        )
         p.add_argument("--pretrained", action="store_true")
+        p.add_argument(
+            "--encoder-lr-scale",
+            type=float,
+            default=1.0,
+            help=(
+                "Multiply the learning rate of the student encoder only. "
+                "Values below 1 preserve pretrained features during fine-tuning; "
+                "default 1.0 keeps the historical behavior."
+            ),
+        )
+        p.add_argument(
+            "--encoder-lr-decay",
+            type=float,
+            default=1.0,
+            help=(
+                "Optional layer-wise decay within the encoder. Values below 1 "
+                "use smaller learning rates for earlier feature stages; default "
+                "1.0 preserves the single encoder learning-rate group."
+            ),
+        )
         p.add_argument("--proj-dim", type=int, default=128)
         p.add_argument("--dropout", type=float, default=0.2)
+        p.add_argument(
+            "--rejection-feature-dim",
+            type=int,
+            default=0,
+            help=(
+                "Enable an independent rejection representation with this dimension. "
+                "0 preserves the historical shared uncertainty head."
+            ),
+        )
+        p.add_argument(
+            "--independent-rejection-encoder",
+            action="store_true",
+            help=(
+                "Use a lightweight image-to-feature rejection encoder; requires "
+                "--rejection-feature-dim > 0. Set for both training and discovery."
+            ),
+        )
+        p.add_argument(
+            "--independent-rejection-encoder-init",
+            choices=["scratch_cnn", "shared_backbone", "random_backbone"],
+            default="shared_backbone",
+            help=(
+                "Initialization/architecture for the independent rejection "
+                "encoder. shared_backbone is the validated mainline candidate "
+                "and copies the student backbone; scratch_cnn keeps the legacy "
+                "lightweight CNN; random_backbone uses the same architecture "
+                "with random weights."
+            ),
+        )
+        p.add_argument(
+            "--independent-rejection-input-norm",
+            choices=["none", "layernorm"],
+            default="none",
+            help=(
+                "Optional normalization between an independent image-to-rejection "
+                "encoder and its rejection projector. 'none' preserves the "
+                "historical protocol; 'layernorm' is a single-factor treatment."
+            ),
+        )
+        p.add_argument(
+            "--cifar-stem",
+            action="store_true",
+            help=(
+                "Use a CIFAR-style 3x3/stride-1 ResNet stem and remove the "
+                "initial max-pool. Disabled by default for historical compatibility."
+            ),
+        )
+        p.add_argument(
+            "--freeze-bn-stats",
+            action="store_true",
+            help=(
+                "Keep BatchNorm running statistics fixed during training while "
+                "still training BatchNorm affine parameters. Disabled by default."
+            ),
+        )
         p.add_argument("--download", action="store_true")
         p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
         p.add_argument("--work-dir", default="./runs")
@@ -64,7 +408,219 @@ def parse_args(argv=None):
         p.add_argument("--limit-val", type=int, default=0)
         p.add_argument("--limit-test", type=int, default=0)
         p.add_argument("--limit-discovery", type=int, default=0)
+        p.add_argument(
+            "--save-epoch-checkpoints",
+            action="store_true",
+            help=(
+                "Save teacher_epoch_N.pt/student_epoch_N.pt for checkpoint audit; "
+                "disabled by default and does not change model selection."
+            ),
+        )
+        p.add_argument(
+            "--calibration-ratio",
+            type=float,
+            default=0.0,
+            help=(
+                "Reserve this fraction of the limited known validation set for "
+                "threshold calibration; the remainder is used for checkpoint selection. "
+                "Use the same value in training and discover commands."
+            ),
+        )
+        p.add_argument(
+            "--calibration-overlap-control",
+            action="store_true",
+            help=(
+                "Diagnostic only: keep the calibration subset the same size, "
+                "but sample it from the model-selection subset to measure the "
+                "effect of validation overlap. Do not use as a final protocol."
+            ),
+        )
         p.add_argument("--discovery-pool-mode", choices=["unknown", "mixed"], default="unknown")
+        p.add_argument(
+            "--rejector-pool-selection",
+            choices=["all", "high_risk", "weighted_boundary"],
+            default="all",
+            help=(
+                "Use all discovery samples, only high-risk pseudo-unknowns, or "
+                "all samples with extra weight on prototype-boundary candidates."
+            ),
+        )
+        p.add_argument("--rejector-candidate-ratio", type=float, default=0.25)
+        p.add_argument(
+            "--rejector-candidate-weight",
+            type=float,
+            default=2.0,
+            help=(
+                "Additional weight assigned to selected candidates when "
+                "--rejector-pool-selection=weighted_boundary; weights are normalized "
+                "to mean one before nnPU training."
+            ),
+        )
+        p.add_argument(
+            "--rejector-training",
+            choices=["hard", "soft_pu", "nnpu"],
+            default="hard",
+            help=(
+                "Hard binary rejector for a pure unknown pool, heuristic soft-PU, "
+                "or non-negative PU risk on a mixed unlabeled pool. Mixed pools "
+                "cannot use hard labels for all samples."
+            ),
+        )
+        p.add_argument("--rejector-pu-iterations", type=int, default=4)
+        p.add_argument(
+            "--rejector-max-samples",
+            type=int,
+            default=0,
+            help=(
+                "Maximum known and mixed-pool samples used to fit a feature rejector. "
+                "Use 0 (the default) to keep all available samples; set 5000 or "
+                "another positive value only for a controlled ablation."
+            ),
+        )
+        p.add_argument(
+            "--rejector-stratified-known",
+            action="store_true",
+            help="Sample the known rejector support approximately equally across known classes.",
+        )
+        p.add_argument(
+            "--rejector-known-prior",
+            type=float,
+            default=0.2,
+            help="Estimated known fraction in a mixed unlabeled pool for nnPU training.",
+        )
+        p.add_argument(
+            "--rejector-nnpu-risk",
+            choices=["legacy", "nu_corrected"],
+            default="legacy",
+            help=(
+                "Risk decomposition for the mixed-pool nnPU rejector. "
+                "legacy preserves the historical formula; nu_corrected uses "
+                "the direct negative-unlabeled decomposition."
+            ),
+        )
+        p.add_argument(
+            "--rejector-nnpu-model",
+            choices=["linear", "mlp"],
+            default="linear",
+            help="Function family for the mixed-pool nnPU rejector; linear preserves the current baseline.",
+        )
+        p.add_argument(
+            "--rejector-score-margin-weight",
+            type=float,
+            default=0.0,
+            help=(
+                "Optional mean-score separation regularizer for nnPU rejectors; "
+                "default 0 preserves the historical risk."
+            ),
+        )
+        p.add_argument(
+            "--rejector-score-margin",
+            type=float,
+            default=0.5,
+            help="Target score gap used by --rejector-score-margin-weight.",
+        )
+        p.add_argument(
+            "--rejector-feature-mode",
+            choices=[
+                "embedding",
+                "rejection_embedding",
+                "augmented",
+                "support_augmented",
+                "predicted_support_augmented",
+                "uncertainty_augmented",
+                "support_uncertainty_augmented",
+                "rejection_uncertainty_augmented",
+                "rejection_support_uncertainty_augmented",
+                "rejection_support_augmented",
+                "rejection_balanced_support_augmented",
+                "rejection_logit_augmented",
+                "rejection_support_logit_augmented",
+                "prototype_augmented",
+                "prototype_support_augmented",
+            ],
+            default="embedding",
+            help=(
+                "Use frozen embeddings alone, append classifier summaries, prototype "
+                "similarities, or MC-dropout epistemic/entropy signals."
+            ),
+        )
+        p.add_argument(
+            "--rejector-mc-samples",
+            type=int,
+            default=1,
+            help="MC-dropout passes used to build rejector training features; 1 disables MC features.",
+        )
+        p.add_argument(
+            "--rejector-model",
+            choices=["logistic", "mlp"],
+            default="logistic",
+            help="Linear or small nonlinear classifier for the frozen-feature rejector.",
+        )
+        p.add_argument(
+            "--rejector-strict-mixed",
+            action="store_true",
+            help=(
+                "For mixed discovery, train the rejector's known side from the "
+                "reserved open-validation known subset, requiring --open-val-ratio > 0. "
+                "Hard labeling of the mixed pool remains invalid."
+            ),
+        )
+        p.add_argument(
+            "--rejector-known-support-transform",
+            choices=["train", "eval"],
+            default="train",
+            help=(
+                "Transform used to extract the known support features when the "
+                "rejector uses bundle.train. 'train' preserves the historical "
+                "augmented-support behavior; 'eval' uses deterministic evaluation "
+                "transforms to match discovery/test feature extraction."
+            ),
+        )
+        p.add_argument(
+            "--rejector-candidate-mode",
+            choices=[
+                "entropy", "max_softmax", "energy", "entropy_uncertainty",
+                "consensus", "prototype_boundary", "confident_boundary",
+                "mc_epistemic_head_fusion",
+                "mc_epistemic_plus_head_uncertainty",
+            ],
+            default="entropy_uncertainty",
+        )
+        p.add_argument(
+            "--known-split-mode",
+            choices=["random", "stratified"],
+            default="random",
+            help="How to split known training samples into train/validation; random preserves the historical baseline.",
+        )
+        p.add_argument(
+            "--mixed-known-pool-ratio",
+            type=float,
+            default=0.2,
+            help=(
+                "Fraction of the known training partition reserved as disjoint "
+                "unlabeled samples when --discovery-pool-mode=mixed."
+            ),
+        )
+        p.add_argument(
+            "--matched-discovery-pool",
+            action="store_true",
+            help=(
+                "Diagnostic protocol: reserve the same known supervised subset "
+                "in pure and mixed arms and construct equal-size discovery pools."
+            ),
+        )
+        p.add_argument(
+            "--matched-pool-size",
+            type=int,
+            default=5400,
+            help="Total unlabeled discovery-pool size for --matched-discovery-pool.",
+        )
+        p.add_argument(
+            "--matched-known-prior",
+            type=float,
+            default=0.2,
+            help="Known fraction in the matched mixed pool; ignored in unknown mode.",
+        )
 
     p = sub.add_parser("train_teacher")
     add_common(p)
@@ -72,42 +628,513 @@ def parse_args(argv=None):
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--alpha-unc", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-rejection-known-ce",
+        type=float,
+        default=0.0,
+        help="Known-class CE weight for the optional rejection branch.",
+    )
+    p.add_argument(
+        "--rejection-known-ce-decay-start-epoch",
+        type=int,
+        default=0,
+        help=(
+            "One-based epoch at which rejection known CE starts decaying; "
+            "0 keeps the coefficient static."
+        ),
+    )
+    p.add_argument(
+        "--rejection-known-ce-decay-epochs",
+        type=int,
+        default=0,
+        help="Number of epochs over which rejection known CE decays.",
+    )
+    p.add_argument(
+        "--rejection-known-ce-final-scale",
+        type=float,
+        default=1.0,
+        help="Final multiplier for rejection known CE after its optional decay.",
+    )
+    p.add_argument(
+        "--alpha-rejection-supcon",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-label supervised contrastive weight on the independent "
+            "rejection embedding; disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--alpha-rejection-center",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-label center compactness weight on the independent "
+            "rejection embedding; disabled by default."
+        ),
+    )
     p.add_argument("--alpha-proto", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-center", type=float, default=0.0,
+        help="Weight a labelled known-class center compactness loss.",
+    )
+    p.add_argument(
+        "--alpha-radius", type=float, default=0.0,
+        help="Weight a hinge loss for labelled features outside their class radius.",
+    )
+    p.add_argument("--known-feature-radius", type=float, default=0.2)
+    p.add_argument("--alpha-center-margin", type=float, default=0.0)
+    p.add_argument("--center-margin", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-proto-repulsion", type=float, default=0.0,
+        help="Weight a cosine-margin regularizer that separates class prototypes.",
+    )
+    p.add_argument("--proto-repulsion-margin", type=float, default=0.0)
     p.add_argument("--alpha-proxy", type=float, default=0.0)
     p.add_argument("--proxy-temperature", type=float, default=0.1)
+    p.add_argument("--alpha-proxy-anchor", type=float, default=0.0)
+    p.add_argument("--proxy-anchor-alpha", type=float, default=32.0)
+    p.add_argument("--proxy-anchor-margin", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-hard-proxy-margin",
+        type=float,
+        default=0.0,
+        help="Weight a known-only hard-negative margin against the nearest wrong class proxy.",
+    )
+    p.add_argument("--hard-proxy-margin", type=float, default=0.2)
     p.add_argument("--alpha-pseudo", type=float, default=0.0)
     p.add_argument("--alpha-energy", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-angular", type=float, default=0.0,
+        help="Weight an ArcFace-style additive angular-margin loss for known classes.",
+    )
+    p.add_argument("--angular-margin", type=float, default=0.2)
+    p.add_argument("--angular-scale", type=float, default=16.0)
+    p.add_argument(
+        "--angular-correct-only",
+        action="store_true",
+        help="Apply angular-margin loss only to currently correctly classified known samples.",
+    )
+    p.add_argument(
+        "--angular-warmup-epochs",
+        type=int,
+        default=0,
+        help="Known-class warm-up epochs before enabling the angular-margin loss.",
+    )
+    p.add_argument(
+        "--angular-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp the angular-margin weight after warm-up.",
+    )
     p.add_argument("--energy-margin", type=float, default=1.0)
     p.add_argument("--energy-temperature", type=float, default=1.0)
     # Keep the validated baseline as the default; ``strong`` remains an
     # explicit experimental option and is documented by its own run.
     p.add_argument("--pseudo-mode", choices=["legacy", "strong"], default="legacy")
     p.add_argument("--pseudo-feature-noise", type=float, default=0.05)
-    p.add_argument("--uncertainty-target-mode", choices=["confidence", "classification_error", "margin"], default="confidence")
+    p.add_argument(
+        "--uncertainty-target-mode",
+        choices=["confidence", "classification_error", "margin"],
+        default="confidence",
+        help=(
+            "Target for the student rejection-uncertainty head. 'teacher' "
+            "regresses the frozen teacher head output instead of a label-derived target."
+        ),
+    )
     p.add_argument("--teacher-ckpt", default="./runs/teacher.pt")
 
     p = sub.add_parser("train_student")
     add_common(p)
+    p.add_argument(
+        "--alpha-rejection-superclass-supcon",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional known-only superclass-aware SupCon weight on rejection "
+            "features; requires CIFAR-100 split metadata and a rejection branch."
+        ),
+    )
+    p.add_argument(
+        "--open-val-ratio",
+        type=float,
+        default=0.0,
+        help=(
+            "Reserve matched known and novel examples from the training partition "
+            "for open-set validation. Use the identical value for the subsequent "
+            "discover command; test samples are never used for score selection."
+        ),
+    )
+    p.add_argument(
+        "--checkpoint-selection",
+        choices=["known_acc", "open_auroc", "open_ks"],
+        default="known_acc",
+        help=(
+            "Criterion used to keep the best student epoch. The open-set "
+            "criteria require --open-val-ratio > 0 and use only the reserved "
+            "open validation split; known_acc preserves the historical default."
+        ),
+    )
+    p.add_argument(
+        "--checkpoint-selection-score",
+        choices=["max_softmax", "entropy_proto", "energy", "head_uncertainty"],
+        default="max_softmax",
+        help=(
+            "Score used by open_auroc/open_ks checkpoint selection. This is "
+            "computed on the reserved open validation split, never on test."
+        ),
+    )
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight-decay", type=float, default=1e-4)
+    p.add_argument(
+        "--audit-loss-gradients",
+        action="store_true",
+        help=(
+            "Record raw CE/KD/SupCon/uncertainty-discovery encoder gradient "
+            "norms and cosine similarities for diagnosis; disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--student-ema-decay",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional epoch-level EMA decay for the saved/evaluated student. "
+            "0 keeps the historical checkpoint; values in (0, 1) smooth "
+            "representation updates to reduce seed sensitivity."
+        ),
+    )
+    p.add_argument(
+        "--student-ema-warmup-epochs",
+        type=int,
+        default=0,
+        help=(
+            "For student EMA, directly synchronize the EMA model with the "
+            "online student for this many initial epochs before averaging. "
+            "This avoids selecting a cold-start EMA model that is still close "
+            "to random initialization."
+        ),
+    )
     p.add_argument("--alpha-unc", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-rejection-known-ce",
+        type=float,
+        default=0.0,
+        help="Known-class CE weight for the optional rejection branch.",
+    )
+    p.add_argument(
+        "--rejection-known-ce-decay-start-epoch",
+        type=int,
+        default=0,
+        help=(
+            "One-based epoch at which rejection known CE starts decaying; "
+            "0 keeps the coefficient static."
+        ),
+    )
+    p.add_argument(
+        "--rejection-known-ce-decay-epochs",
+        type=int,
+        default=0,
+        help="Number of epochs over which rejection known CE decays.",
+    )
+    p.add_argument(
+        "--rejection-known-ce-final-scale",
+        type=float,
+        default=1.0,
+        help="Final multiplier for rejection known CE after its optional decay.",
+    )
+    p.add_argument(
+        "--alpha-rejection-supcon",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-label supervised contrastive weight on the independent "
+            "rejection embedding; disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--alpha-rejection-center",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-label center compactness weight on the independent "
+            "rejection embedding; disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--alpha-rejection-decorrelation",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-only cross-covariance penalty between shared and rejection "
+            "features; disabled by default and requires rejection_feature_dim > 0."
+        ),
+    )
+    p.add_argument(
+        "--alpha-rejection-variance-floor",
+        type=float,
+        default=0.0,
+        help=(
+            "Known-only normalized-coordinate variance-floor weight for the "
+            "independent rejection embedding; disabled by default."
+        ),
+    )
+    p.add_argument(
+        "--rejection-variance-floor",
+        type=float,
+        default=0.05,
+        help="Target per-coordinate std after per-sample rejection-feature normalization.",
+    )
     p.add_argument("--alpha-kd", type=float, default=1.0)
     p.add_argument("--alpha-feat-kd", type=float, default=0.0)
-    p.add_argument("--kd-mode", choices=["standard", "uncertainty"], default="uncertainty")
+    p.add_argument(
+        "--alpha-rejection-kd",
+        type=float,
+        default=0.0,
+        help="KD weight for optional rejection-branch logits.",
+    )
+    p.add_argument(
+        "--alpha-rejection-feat-kd",
+        type=float,
+        default=0.0,
+        help="Cosine feature-KD weight for the optional rejection branch.",
+    )
+    p.add_argument(
+        "--rejection-feature-kd-weighting",
+        choices=["inherit", "uniform", "teacher_uncertainty"],
+        default="inherit",
+        help=(
+            "Per-sample weighting for rejection-feature KD only. 'inherit' "
+            "follows --kd-mode; the other modes isolate this branch without "
+            "changing logits or shared-feature KD."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-pu-feature-margin",
+        type=float,
+        default=0.0,
+        help=(
+            "PU-corrected feature-margin weight on the independent rejection "
+            "branch; requires a mixed discovery pool and --rejection-feature-dim > 0."
+        ),
+    )
+    p.add_argument(
+        "--discovery-rejection-pu-risk",
+        choices=["hard_nnpu", "soft_nnpu"],
+        default="hard_nnpu",
+        help=(
+            "PU risk for the independent rejection feature-margin loss; "
+            "hard_nnpu preserves the historical clamp and soft_nnpu uses a "
+            "smooth non-negative surrogate."
+        ),
+    )
+    p.add_argument(
+        "--discovery-rejection-pu-softness",
+        type=float,
+        default=0.05,
+        help="Temperature of the soft_nnpu surrogate; must be positive.",
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-boundary",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight a PU-corrected class-conditional boundary loss on the "
+            "independent rejection representation; requires a mixed pool, "
+            "--rejection-feature-dim > 0, and --discovery-boundary-mode pu."
+        ),
+    )
+    p.add_argument(
+        "--discovery-rejection-boundary-warmup-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Disable the rejection-boundary loss for the first N student "
+            "epochs while the rejection representation stabilizes."
+        ),
+    )
+    p.add_argument(
+        "--discovery-rejection-boundary-ramp-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Linearly ramp the rejection-boundary loss after warm-up; 0 "
+            "applies the full weight immediately."
+        ),
+    )
+    p.add_argument(
+        "--discovery-rejection-boundary-stop-epoch",
+        type=int,
+        default=0,
+        help=(
+            "Disable the rejection-boundary loss after this 1-based student "
+            "epoch; 0 keeps it active for all epochs."
+        ),
+    )
+    p.add_argument(
+        "--kd-mode",
+        choices=["standard", "uncertainty"],
+        default="standard",
+        help=(
+            "Logits-KD treatment. standard is the current default control; "
+            "uncertainty is an explicit opt-in ablation because it is not yet "
+            "a validated core method."
+        ),
+    )
     p.add_argument("--alpha-supcon", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-raw-supcon",
+        type=float,
+        default=0.0,
+        help="Additional supervised contrastive loss directly on backbone features.",
+    )
     p.add_argument("--alpha-proto", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-center", type=float, default=0.0,
+        help="Weight a labelled known-class center compactness loss.",
+    )
+    p.add_argument(
+        "--alpha-radius", type=float, default=0.0,
+        help="Weight a hinge loss for labelled features outside their class radius.",
+    )
+    p.add_argument("--known-feature-radius", type=float, default=0.2)
+    p.add_argument("--alpha-center-margin", type=float, default=0.0)
+    p.add_argument("--center-margin", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-proto-repulsion", type=float, default=0.0,
+        help="Weight a cosine-margin regularizer that separates class prototypes.",
+    )
+    p.add_argument("--proto-repulsion-margin", type=float, default=0.0)
     p.add_argument("--alpha-proxy", type=float, default=0.0)
     p.add_argument("--proxy-temperature", type=float, default=0.1)
+    p.add_argument("--alpha-proxy-anchor", type=float, default=0.0)
+    p.add_argument("--proxy-anchor-alpha", type=float, default=32.0)
+    p.add_argument("--proxy-anchor-margin", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-hard-proxy-margin",
+        type=float,
+        default=0.0,
+        help="Weight a known-only hard-negative margin against the nearest wrong class proxy.",
+    )
+    p.add_argument("--hard-proxy-margin", type=float, default=0.2)
+    p.add_argument(
+        "--reciprocal-points", type=int, default=0,
+        help="Number of learnable ARPL-inspired reciprocal points (0 disables them).",
+    )
+    p.add_argument("--alpha-reciprocal", type=float, default=0.0)
+    p.add_argument("--reciprocal-margin", type=float, default=0.2)
     p.add_argument("--alpha-pseudo", type=float, default=0.0)
     p.add_argument("--alpha-energy", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-vos", type=float, default=0.0,
+        help="Weight VOS-inspired virtual-outlier Energy/uniform separation during student training.",
+    )
+    p.add_argument(
+        "--alpha-vos-rejection", type=float, default=0.0,
+        help=(
+            "Optional weight for direct high-uncertainty supervision on VOS "
+            "features; disabled by default because VOS candidates are synthetic."
+        ),
+    )
+    p.add_argument(
+        "--vos-mode", choices=["gaussian", "batch_center", "interclass_mix"], default="gaussian",
+        help=(
+            "Virtual-outlier generator: class-conditional Gaussian tails, "
+            "online batch-center tails, or different-class boundary mixtures."
+        ),
+    )
+    p.add_argument(
+        "--vos-tail-scale", type=float, default=1.5,
+        help="Radial scale of the synthetic low-density feature direction.",
+    )
+    p.add_argument(
+        "--vos-noise-scale", type=float, default=0.25,
+        help="Orthogonal noise scale used for virtual outlier synthesis.",
+    )
+    p.add_argument(
+        "--vos-interclass-pairing",
+        choices=["random", "nearest_class"],
+        default="random",
+        help=(
+            "Partner selection for inter-class virtual outliers: random pairs "
+            "or the nearest different class centroid in the current batch."
+        ),
+    )
+    p.add_argument(
+        "--vos-source-gradient",
+        action="store_true",
+        help=(
+            "Legacy ablation: allow inter-class VOS construction to backpropagate "
+            "through real source features. The default detaches source features."
+        ),
+    )
+    p.add_argument(
+        "--vos-boundary-fraction",
+        type=float,
+        default=1.0,
+        help=(
+            "Fraction of lowest known classification-margin samples receiving "
+            "the VOS loss; 1.0 keeps the historical all-sample behavior."
+        ),
+    )
+    p.add_argument(
+        "--vos-uniform-weight", type=float, default=0.25,
+        help="Relative uniform-logit weight inside the VOS loss.",
+    )
+    p.add_argument(
+        "--alpha-angular", type=float, default=0.0,
+        help="Weight an ArcFace-style additive angular-margin loss for known classes.",
+    )
+    p.add_argument("--angular-margin", type=float, default=0.2)
+    p.add_argument("--angular-scale", type=float, default=16.0)
+    p.add_argument(
+        "--angular-correct-only",
+        action="store_true",
+        help="Apply angular-margin loss only to currently correctly classified known samples.",
+    )
+    p.add_argument(
+        "--angular-warmup-epochs",
+        type=int,
+        default=0,
+        help="Known-class warm-up epochs before enabling the angular-margin loss.",
+    )
+    p.add_argument(
+        "--angular-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp the angular-margin weight after warm-up.",
+    )
     p.add_argument("--energy-margin", type=float, default=1.0)
     p.add_argument("--energy-temperature", type=float, default=1.0)
     p.add_argument("--pseudo-mode", choices=["legacy", "strong"], default="legacy")
     p.add_argument("--pseudo-feature-noise", type=float, default=0.05)
-    p.add_argument("--uncertainty-target-mode", choices=["confidence", "classification_error", "margin"], default="confidence")
+    p.add_argument(
+        "--uncertainty-target-mode",
+        choices=["confidence", "classification_error", "margin", "teacher"],
+        default="confidence",
+        help=(
+            "Target for the student rejection-uncertainty head. 'teacher' "
+            "regresses the frozen teacher head output instead of a label-derived target."
+        ),
+    )
     p.add_argument("--temperature", type=float, default=2.0)
     p.add_argument("--uncertainty-weight-mode", choices=["raw", "mean_normalized"], default="raw")
+    p.add_argument(
+        "--kd-uncertainty-source",
+        choices=["head", "mc_epistemic", "mc_predictive_entropy"],
+        default="head",
+        help=(
+            "Uncertainty used to weight KD: the learned teacher head, or "
+            "MC-Dropout epistemic/predictive entropy."
+        ),
+    )
+    p.add_argument(
+        "--kd-mc-samples",
+        type=int,
+        default=4,
+        help="Number of stochastic teacher passes for MC uncertainty KD.",
+    )
     p.add_argument("--uncertainty-weight-min", type=float, default=None)
     p.add_argument("--uncertainty-weight-max", type=float, default=None)
     p.add_argument("--teacher-ckpt", default="./runs/teacher.pt")
@@ -118,12 +1145,550 @@ def parse_args(argv=None):
         help="Use unlabeled novel-class training images for two-view consistency learning.",
     )
     p.add_argument("--alpha-discovery", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-discovery-feature-consistency",
+        type=float,
+        default=0.0,
+        help=(
+            "Align two augmentations of discovery-pool samples in backbone "
+            "feature space without assigning pseudo labels."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-consistency",
+        type=float,
+        default=0.0,
+        help=(
+            "Align two augmentations in the rejection representation. In a "
+            "mixed pool, the existing paired candidate gate restricts this "
+            "loss to high-risk boundary candidates."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-score-consistency",
+        type=float,
+        default=0.0,
+        help=(
+            "Align the scalar uncertainty/rejection-risk proxy across two "
+            "augmentations of each discovery-pool sample."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-projection-consistency",
+        type=float,
+        default=0.0,
+        help=(
+            "Align discovery views in the projection head while detaching "
+            "the shared backbone, so this auxiliary loss cannot change the "
+            "known/unknown rejection representation."
+        ),
+    )
     p.add_argument("--alpha-discovery-unknown", type=float, default=0.0)
     p.add_argument(
         "--alpha-discovery-energy",
         type=float,
         default=0.0,
         help="Apply energy-margin separation between known samples and a pure unknown discovery pool.",
+    )
+    p.add_argument(
+        "--alpha-discovery-energy-pu",
+        type=float,
+        default=0.0,
+        help=(
+            "PU-corrected energy-boundary loss for a mixed discovery pool; "
+            "does not assign every mixed sample a hard unknown label."
+        ),
+    )
+    p.add_argument(
+        "--discovery-energy-pu-known-prior",
+        type=float,
+        default=0.2,
+        help="Estimated known fraction in the mixed discovery pool for PU energy training.",
+    )
+    p.add_argument(
+        "--discovery-energy-pu-risk",
+        choices=["hard_nnpu", "soft_nnpu"],
+        default="hard_nnpu",
+        help="Non-negative risk variant for PU energy training.",
+    )
+    p.add_argument(
+        "--discovery-energy-pu-softness",
+        type=float,
+        default=0.05,
+        help="Softness for the soft_nnpu PU energy surrogate.",
+    )
+    p.add_argument(
+        "--alpha-discovery-uniform",
+        type=float,
+        default=0.0,
+        help="Apply Outlier Exposure-style uniform known-class logits to a pure unknown discovery pool.",
+    )
+    p.add_argument(
+        "--discovery-uniform-warmup-epochs",
+        type=int,
+        default=0,
+        help="Keep uniform-logit Outlier Exposure disabled for the first N student epochs.",
+    )
+    p.add_argument(
+        "--discovery-uniform-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp uniform-logit Outlier Exposure after its warmup period.",
+    )
+    p.add_argument(
+        "--alpha-discovery-feature-margin",
+        type=float,
+        default=0.0,
+        help="Push pure-unknown discovery features away from the nearest known classifier prototype.",
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-feature-margin",
+        type=float,
+        default=0.0,
+        help=(
+            "Push candidate unknowns away from rejection-branch class prototypes; "
+            "requires --rejection-feature-dim > 0."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-feature-separation",
+        type=float,
+        default=0.0,
+        help=(
+            "Use a non-saturating support-based rejection loss on the independent "
+            "rejection embedding; requires --rejection-feature-dim > 0."
+        ),
+    )
+    p.add_argument("--discovery-rejection-feature-separation-margin", type=float, default=0.0)
+    p.add_argument("--discovery-rejection-feature-separation-temperature", type=float, default=0.1)
+    p.add_argument(
+        "--discovery-rejection-feature-margin",
+        type=float,
+        default=0.2,
+        help="Maximum cosine similarity to a rejection-branch known prototype.",
+    )
+    p.add_argument(
+        "--discovery-feature-margin",
+        type=float,
+        default=0.2,
+        help="Maximum cosine similarity allowed between a discovery feature and its nearest known prototype.",
+    )
+    p.add_argument(
+        "--alpha-discovery-uncertainty-feature-margin",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight a mixed-pool feature margin using detached uncertainty as "
+            "a soft novelty weight; no hard novel labels are assigned."
+        ),
+    )
+    p.add_argument(
+        "--discovery-uncertainty-feature-margin",
+        type=float,
+        default=0.2,
+        help="Maximum cosine similarity to a known prototype for soft uncertainty-gated features.",
+    )
+    p.add_argument(
+        "--discovery-feature-margin-weight-source",
+        choices=[
+            "uncertainty", "msp", "mean", "max", "product",
+            "prototype_distance", "distance_consensus",
+            "ema_uncertainty", "ema_msp", "ema_product",
+            "cross_view_min_uncertainty",
+        ],
+        default="uncertainty",
+        help=(
+            "Soft novelty weight for the mixed-pool feature margin: learned "
+            "uncertainty, 1-MSP, prototype distance, or consensus variants."
+        ),
+    )
+    p.add_argument(
+        "--discovery-feature-margin-weight-power",
+        type=float,
+        default=1.0,
+        help=(
+            "Exponent for sharpening mixed-pool soft novelty weights; 1.0 "
+            "preserves the existing weighting exactly."
+        ),
+    )
+    p.add_argument(
+        "--discovery-uncertainty-feature-margin-mode",
+        choices=["soft_weighted", "pu_corrected"],
+        default="soft_weighted",
+        help=(
+            "Estimator for the mixed-pool uncertainty feature margin: the "
+            "historical detached soft weighting or a PU-corrected unknown risk."
+        ),
+    )
+    p.add_argument(
+        "--discovery-uncertainty-feature-margin-warmup-epochs",
+        type=int,
+        default=0,
+        help="Disable uncertainty feature-margin during the first N student epochs.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-feature-margin-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp uncertainty feature-margin after its warmup.",
+    )
+    p.add_argument(
+        "--alpha-discovery-objectosphere",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight an Objectosphere-style feature-norm loss; on mixed pools it "
+            "requires candidate gating and is disabled by default."
+        ),
+    )
+    p.add_argument("--objectosphere-known-radius", type=float, default=10.0)
+    p.add_argument("--objectosphere-unknown-weight", type=float, default=1.0)
+    p.add_argument(
+        "--alpha-discovery-feature-separation",
+        type=float,
+        default=0.0,
+        help="Push pure-unknown features away from the current known feature batch.",
+    )
+    p.add_argument(
+        "--discovery-feature-separation-margin",
+        type=float,
+        default=0.0,
+        help="Maximum smooth similarity allowed between unknown and observed known features.",
+    )
+    p.add_argument(
+        "--discovery-feature-separation-temperature",
+        type=float,
+        default=0.1,
+        help="Temperature for the smooth maximum over known-feature similarities.",
+    )
+    p.add_argument(
+        "--discovery-feature-candidate-gating",
+        action="store_true",
+        help=(
+            "In mixed discovery pools, apply feature margin/separation/boundary "
+            "losses only to high-risk candidates selected by discovery-select-ratio/mode."
+        ),
+    )
+    p.add_argument(
+        "--discovery-cross-view-gating",
+        action="store_true",
+        help=(
+            "Require both augmented views to independently select a mixed-pool "
+            "candidate before applying feature/Objectosphere losses."
+        ),
+    )
+    p.add_argument(
+        "--discovery-single-view-candidate-gating",
+        action="store_true",
+        help=(
+            "Use the first augmentation view as the fixed candidate-selection "
+            "frame (instead of averaging both views). Mutually exclusive with "
+            "cross-view gating; useful for matched PU-risk ablations."
+        ),
+    )
+    p.add_argument(
+        "--discovery-cross-view-aggregation",
+        choices=["intersection", "union", "union_budgeted"],
+        default="intersection",
+        help=(
+            "How to combine independently selected candidates from two "
+            "augmentation views when cross-view gating is enabled. "
+            "'intersection' is the conservative historical behavior; "
+            "'union' improves candidate coverage but may increase contamination; "
+            "'union_budgeted' ranks the union but keeps the intersection count."
+        ),
+    )
+    p.add_argument(
+        "--discovery-feature-candidate-space",
+        choices=[
+            "shared",
+            "rejection_support",
+            "shared_boundary",
+            "shared_boundary_consensus",
+            "shared_boundary_soft_consensus",
+        ],
+        default="shared",
+        help=(
+            "Representation used by mixed-pool feature candidate gating. "
+            "'shared' preserves the classifier/uncertainty gate; "
+            "'rejection_support' selects by distance outside the known "
+            "class-conditional rejection support bank; 'shared_boundary' "
+            "selects semantic-near samples close to the shared known-support boundary; "
+            "'shared_boundary_consensus' additionally requires the original "
+            "classifier/uncertainty consensus gate; the soft-consensus variant "
+            "keeps boundary candidates and uses classifier risk as a loss weight."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-boundary",
+        type=float,
+        default=0.0,
+        help="Weight a hybrid known-prototype/local-centroid boundary loss for pure-unknown discovery features.",
+    )
+    p.add_argument(
+        "--discovery-feature-candidate-soft-floor",
+        type=float,
+        default=0.25,
+        help="Minimum classifier-risk weight for soft shared-boundary candidates.",
+    )
+    p.add_argument(
+        "--discovery-boundary-mode",
+        choices=["pure", "pu"],
+        default="pure",
+        help="Use the historical pure-unknown boundary or a mixed-pool PU-corrected boundary.",
+    )
+    p.add_argument(
+        "--discovery-boundary-pu-risk",
+        choices=["hard_nnpu", "soft_nnpu"],
+        default="hard_nnpu",
+        help="Non-negative risk variant for the mixed-pool PU boundary.",
+    )
+    p.add_argument(
+        "--discovery-boundary-pu-softness",
+        type=float,
+        default=0.05,
+        help="Softness for the soft_nnpu mixed-pool boundary surrogate.",
+    )
+    p.add_argument(
+        "--discovery-boundary-margin",
+        type=float,
+        default=0.2,
+        help="Maximum hybrid cosine similarity allowed for pure-unknown features.",
+    )
+    p.add_argument(
+        "--discovery-boundary-prototype-weight",
+        type=float,
+        default=0.5,
+        help="Weight of global classifier prototypes versus current known-batch centroids.",
+    )
+    p.add_argument(
+        "--discovery-boundary-temperature",
+        type=float,
+        default=0.1,
+        help="Temperature for the local-centroid smooth maximum.",
+    )
+    p.add_argument(
+        "--alpha-discovery-knn-boundary",
+        type=float,
+        default=0.0,
+        help="Weight a class-conditional kNN support-boundary loss for a pure-unknown discovery pool.",
+    )
+    p.add_argument(
+        "--alpha-discovery-rejection-knn-boundary",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight a class-conditional kNN support-boundary loss in the "
+            "independent rejection representation; requires a rejection "
+            "feature dimension and uses only known training support."
+        ),
+    )
+    p.add_argument(
+        "--discovery-knn-k",
+        type=int,
+        default=5,
+        help="Number of same-class neighbors used in support distances.",
+    )
+    p.add_argument(
+        "--discovery-knn-risk",
+        choices=["pure", "naive_mixed", "hard_nnpu", "soft_nnpu"],
+        default="pure",
+        help=(
+            "Risk used by the mixed-pool kNN boundary loss: 'pure' requires "
+            "unknown-only candidates; 'naive_mixed' is an explicit control "
+            "that ignores known contamination; NNPU variants subtract the "
+            "known-support reference risk."
+        ),
+    )
+    p.add_argument(
+        "--discovery-knn-known-prior",
+        type=float,
+        default=0.2,
+        help="Known prior used by the NNPU kNN boundary correction.",
+    )
+    p.add_argument(
+        "--discovery-knn-softness",
+        type=float,
+        default=0.05,
+        help="Softness for the soft_nnpu kNN boundary correction.",
+    )
+    p.add_argument(
+        "--discovery-knn-selection-conditional",
+        action="store_true",
+        help=(
+            "Optional selection-conditional correction for mixed-pool PU "
+            "boundary losses: replay the same single-view candidate rule on "
+            "known samples, use the selected known-risk reference, and adjust "
+            "the prior by pi*P(S|known)/P(S|mixed). Requires candidate gating "
+            "and a PU NNPU boundary loss; disables cross-view intersection."
+        ),
+    )
+    p.add_argument(
+        "--discovery-knn-quantile",
+        type=float,
+        default=0.95,
+        help="Known-training leave-one-out distance quantile defining each class support radius.",
+    )
+    p.add_argument(
+        "--discovery-knn-margin",
+        type=float,
+        default=0.02,
+        help="Extra cosine-distance margin beyond each known-class support radius.",
+    )
+    p.add_argument(
+        "--discovery-knn-soft-weighting",
+        action="store_true",
+        help=(
+            "Use continuous risk/neighbor/EMA weights for candidate-gated KNN "
+            "support-boundary loss instead of equal hard-gate weights."
+        ),
+    )
+    p.add_argument(
+        "--discovery-knn-aggregation",
+        choices=["max", "smoothmax"],
+        default="max",
+        help=(
+            "Aggregate class-wise support violations with the historical hard "
+            "max or a temperature-controlled smooth maximum."
+        ),
+    )
+    p.add_argument(
+        "--discovery-knn-temperature",
+        type=float,
+        default=0.1,
+        help="Temperature for smoothmax KNN support aggregation; ignored by max.",
+    )
+    p.add_argument(
+        "--discovery-knn-boundary-objective",
+        choices=["outward", "signed_support"],
+        default="outward",
+        help=(
+            "KNN support objective. 'outward' preserves the historical PU risk; "
+            "'signed_support' additionally pulls labelled known samples inside "
+            "their own class support and requires an NNPU risk."
+        ),
+    )
+    p.add_argument(
+        "--discovery-knn-warmup-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Number of initial student epochs with the KNN support-boundary "
+            "loss disabled; useful when early features are unstable."
+        ),
+    )
+    p.add_argument(
+        "--discovery-knn-ramp-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Linearly ramp the KNN support-boundary loss after warm-up "
+            "instead of applying its full weight immediately."
+        ),
+    )
+    p.add_argument(
+        "--alpha-discovery-uncertainty-separation",
+        type=float,
+        default=0.0,
+        help="Train the uncertainty head to separate known samples from a pure-unknown discovery pool.",
+    )
+    p.add_argument(
+        "--alpha-discovery-uncertainty-pu",
+        type=float,
+        default=0.0,
+        help="Weight non-negative PU uncertainty training on known labels and a mixed unlabeled discovery pool.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-warmup-epochs",
+        type=int,
+        default=0,
+        help="Keep mixed-pool nnPU disabled for the first N student epochs.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp mixed-pool nnPU after its warm-up period.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-known-prior",
+        default="auto",
+        help=(
+            "Known proportion in the mixed discovery pool for PU uncertainty "
+            "training, or 'auto' to measure it after dataset splitting and limiting."
+        ),
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-risk",
+        choices=["legacy", "nu_corrected"],
+        default="legacy",
+        help=(
+            "Mixed-pool PU risk implementation. 'legacy' preserves historical "
+            "runs; 'nu_corrected' uses the audited known-positive risk "
+            "decomposition. Both names currently map to the same mathematically "
+            "consistent uncertainty-head objective; the alias is retained for "
+            "old configs and comparison scripts."
+        ),
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-weight-source",
+        choices=[
+            "none", "prototype_distance", "msp", "entropy", "distance_consensus",
+            "known_support", "support_consensus", "support_blended",
+        ],
+        default="none",
+        help=(
+            "Optional semantic soft weighting for mixed-pool uncertainty PU. "
+            "This emphasizes unlabeled samples that look farther from known "
+            "classes by prototype distance, local known support, MSP, entropy, "
+            "or their consensus; "
+            "'none' preserves the audited unweighted PU objective."
+        ),
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-weight-temperature",
+        type=float,
+        default=0.5,
+        help="Temperature for semantic soft weights in mixed-pool uncertainty PU.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-weight-power",
+        type=float,
+        default=1.0,
+        help="Power used to sharpen semantic soft weights for uncertainty PU.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-pu-detach-features",
+        action="store_true",
+        help=(
+            "Compute the mixed-pool PU uncertainty loss from detached encoder "
+            "features, so this objective updates the uncertainty/rejection head "
+            "without sending its gradient into the shared backbone."
+        ),
+    )
+    p.add_argument(
+        "--discovery-uncertainty-loss",
+        choices=["bce", "ranking"],
+        default="bce",
+        help="Objective for known/unknown uncertainty separation.",
+    )
+    p.add_argument(
+        "--discovery-uncertainty-margin",
+        type=float,
+        default=0.1,
+        help="Pairwise margin for ranking-based uncertainty separation.",
+    )
+    p.add_argument(
+        "--uncertainty-separation-warmup-epochs",
+        type=int,
+        default=0,
+        help="Keep uncertainty separation disabled for the first N student epochs.",
+    )
+    p.add_argument(
+        "--uncertainty-separation-ramp-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp uncertainty separation after its warmup period.",
     )
     p.add_argument(
         "--alpha-discovery-selective-unknown",
@@ -140,7 +1705,10 @@ def parse_args(argv=None):
     p.add_argument("--discovery-select-ratio", type=float, default=0.25)
     p.add_argument(
         "--discovery-select-mode",
-        choices=["entropy", "max_softmax", "energy", "entropy_uncertainty", "consensus"],
+        choices=[
+            "entropy", "max_softmax", "energy", "entropy_uncertainty", "consensus",
+            "prototype_distance", "distance_consensus",
+        ],
         default="entropy_uncertainty",
     )
     p.add_argument(
@@ -157,15 +1725,80 @@ def parse_args(argv=None):
     )
     p.add_argument(
         "--discovery-selection-model",
-        choices=["student", "ema"],
+        choices=["student", "ema", "teacher"],
         default="student",
-        help="Model used to select high-risk discovery samples; ema follows Mean Teacher-style smoothing.",
+        help=(
+            "Model used to select high-risk discovery samples; ema follows "
+            "Mean Teacher-style smoothing, teacher uses the frozen teacher checkpoint."
+        ),
     )
     p.add_argument(
         "--discovery-ema-decay",
         type=float,
         default=0.99,
         help="EMA decay for discovery-selection model when --discovery-selection-model ema is used.",
+    )
+    p.add_argument(
+        "--alpha-discovery-known-consistency",
+        type=float,
+        default=0.0,
+        help=(
+            "On a mixed discovery pool, apply a detached-teacher/EMA known-label "
+            "consistency loss only to low-risk, cross-view-agreeing samples."
+        ),
+    )
+    p.add_argument(
+        "--discovery-known-consistency-confidence",
+        type=float,
+        default=0.8,
+        help="Minimum target confidence for the mixed-pool known consistency anchors.",
+    )
+    p.add_argument(
+        "--discovery-known-consistency-target",
+        choices=["ema", "teacher"],
+        default="ema",
+        help="Detached target used for mixed-pool known consistency anchors.",
+    )
+    p.add_argument(
+        "--discovery-known-consistency-gate",
+        choices=["confidence", "prototype", "support", "prototype_support"],
+        default="confidence",
+        help=(
+            "Additional gate for mixed-pool known anchors. confidence keeps the "
+            "historical confidence-only rule; prototype/support require the "
+            "candidate to lie inside labelled-known feature support."
+        ),
+    )
+    p.add_argument(
+        "--discovery-known-consistency-support-multiplier",
+        type=float,
+        default=1.0,
+        help="Multiplier applied to the class-wise known support radius for anchor gating.",
+    )
+    p.add_argument(
+        "--discovery-known-consistency-uncertainty-max",
+        type=float,
+        default=None,
+        help=(
+            "Optional maximum detached target uncertainty for a mixed-pool known "
+            "anchor; omit it to keep uncertainty ungated."
+        ),
+    )
+    p.add_argument(
+        "--discovery-known-consistency-uncertainty-source",
+        choices=["head", "mc_epistemic", "mc_predictive_entropy"],
+        default="head",
+        help=(
+            "Uncertainty used by the mixed-pool known-anchor gate. head is the "
+            "learned uncertainty head; mc_epistemic uses MC-Dropout mutual "
+            "information; mc_predictive_entropy uses MC predictive entropy."
+        ),
+    )
+    p.add_argument(
+        "--discovery-known-consistency-uncertainty-mc-samples",
+        type=int,
+        default=4,
+        help="Number of stochastic teacher passes for MC known-anchor gating.",
     )
     p.add_argument(
         "--discovery-neighbor-filter",
@@ -223,6 +1856,15 @@ def parse_args(argv=None):
         help="Known-only warmup epochs before KMeans prototype initialization and joint loss.",
     )
     p.add_argument(
+        "--joint-prototype-refresh-epochs",
+        type=int,
+        default=0,
+        help=(
+            "Refresh KMeans novel prototypes from the current unlabeled discovery "
+            "features every N epochs after warm-up; 0 disables periodic refresh."
+        ),
+    )
+    p.add_argument(
         "--joint-space",
         choices=["novel", "unified"],
         default="novel",
@@ -242,13 +1884,182 @@ def parse_args(argv=None):
         help="Relative novel confidence: max softmax probability multiplied by num novel classes.",
     )
     p.add_argument("--joint-assignment-temperature", type=float, default=1.0)
+    p.add_argument(
+        "--joint-prior-aware-assignments",
+        action="store_true",
+        help=(
+            "In unified joint discovery, set Sinkhorn class marginals from the "
+            "mixed-pool known prior and the known/novel class counts."
+        ),
+    )
     p.add_argument("--alpha-joint-consistency", type=float, default=1.0)
     p.add_argument("--alpha-joint-balance", type=float, default=0.1)
     p.add_argument("--alpha-joint-information", type=float, default=0.1)
     p.add_argument("--alpha-joint-neighbor", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-joint-pseudo",
+        type=float,
+        default=0.0,
+        help="Weight cross-view hard pseudo-label learning for novel prototypes.",
+    )
+    p.add_argument(
+        "--alpha-joint-gate",
+        type=float,
+        default=0.0,
+        help="Weight independent uncertainty ranking for selected mixed-pool candidates.",
+    )
+    p.add_argument("--joint-gate-margin", type=float, default=0.1)
+    p.add_argument(
+        "--alpha-joint-proto-repulsion",
+        type=float,
+        default=0.0,
+        help="Separate learnable novel prototypes with an optional cosine-margin regularizer.",
+    )
+    p.add_argument("--joint-proto-repulsion-margin", type=float, default=0.0)
     p.add_argument("--joint-neighbor-k", type=int, default=5)
     p.add_argument("--alpha-joint-known-ce", type=float, default=0.1)
     p.add_argument("--joint-known-temperature", type=float, default=1.0)
+    p.add_argument(
+        "--joint-mixed-residual",
+        action="store_true",
+        help=(
+            "On a mixed discovery pool, weight novel-prototype learning by "
+            "1-max known-class probability instead of balancing known and "
+            "novel logits in one Sinkhorn space."
+        ),
+    )
+    p.add_argument(
+        "--joint-residual-temperature",
+        type=float,
+        default=1.0,
+        help="Temperature used to compute mixed-pool known residual weights.",
+    )
+    p.add_argument(
+        "--joint-residual-floor",
+        type=float,
+        default=0.0,
+        help="Minimum residual weight retained for mixed-pool novel learning.",
+    )
+    p.add_argument(
+        "--joint-residual-view-agreement",
+        action="store_true",
+        help=(
+            "Multiply detached known-residual weights by two-view agreement, "
+            "downweighting augmentation-unstable mixed-pool samples."
+        ),
+    )
+    p.add_argument(
+        "--joint-novel-mass",
+        action="store_true",
+        help=(
+            "Use the unified known-plus-novel probability mass, with two-view "
+            "agreement, to weight novel learning on a mixed discovery pool."
+        ),
+    )
+    p.add_argument(
+        "--joint-novel-weight-floor",
+        type=float,
+        default=0.0,
+        help=(
+            "Lower bound for final novel-mass times two-view-agreement weights. "
+            "Use a small positive value to keep mixed-pool novel learning alive."
+        ),
+    )
+    p.add_argument(
+        "--joint-novel-neighbor-support",
+        action="store_true",
+        help=(
+            "Multiply cross-view novel-mass weights by local kNN support in "
+            "the mixed-pool feature batch. Requires --joint-novel-mass."
+        ),
+    )
+    p.add_argument("--joint-novel-neighbor-k", type=int, default=5)
+    p.add_argument(
+        "--alpha-joint-memory-neighbor",
+        type=float,
+        default=0.0,
+        help="Weight cross-batch memory-bank neighbor consistency for novel discovery.",
+    )
+    p.add_argument(
+        "--joint-memory-size",
+        type=int,
+        default=4096,
+        help="Maximum number of detached discovery embeddings kept in the FIFO bank.",
+    )
+    p.add_argument("--joint-memory-k", type=int, default=5)
+    p.add_argument("--joint-memory-temperature", type=float, default=0.2)
+    p.add_argument(
+        "--joint-memory-warmup-size",
+        type=int,
+        default=256,
+        help="Minimum bank size before cross-batch consistency becomes active.",
+    )
+    p.add_argument(
+        "--joint-global-assignment",
+        action="store_true",
+        help=(
+            "Use the detached cross-batch memory bank in balanced novel-class "
+            "assignments; current rows remain the only rows receiving gradients."
+        ),
+    )
+    p.add_argument(
+        "--joint-global-assignment-memory-weight",
+        type=float,
+        default=1.0,
+        help="Relative transport mass of each memory-bank row in global assignment.",
+    )
+    p.add_argument(
+        "--joint-global-assignment-iterations",
+        type=int,
+        default=3,
+        help="Number of Sinkhorn normalization iterations for global assignment.",
+    )
+    p.add_argument(
+        "--joint-pseudo-target-mode",
+        choices=["hard", "soft"],
+        default="hard",
+        help="Use argmax or the full balanced probability target for prototype pseudo-label loss.",
+    )
+    p.add_argument(
+        "--joint-pseudo-ema-target",
+        action="store_true",
+        help="Use an EMA student and EMA novel head as detached pseudo-label teachers.",
+    )
+    p.add_argument(
+        "--joint-pseudo-ema-decay",
+        type=float,
+        default=0.99,
+        help="Decay for the optional EMA pseudo-label teachers.",
+    )
+    p.add_argument(
+        "--joint-weighted-sinkhorn",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Use detached novel-mass sample weights as Sinkhorn sample marginals; "
+            "loss weighting remains active when disabled."
+        ),
+    )
+    p.add_argument(
+        "--joint-novel-ema-weights",
+        action="store_true",
+        help=(
+            "Generate joint novel-mass and neighbor-support weights from the "
+            "EMA selection model; requires --discovery-selection-model ema."
+        ),
+    )
+    p.add_argument(
+        "--alpha-joint-novel-margin",
+        type=float,
+        default=0.0,
+        help="Weight soft feature repulsion for high-novel-mass mixed-pool samples.",
+    )
+    p.add_argument(
+        "--joint-novel-margin",
+        type=float,
+        default=0.2,
+        help="Maximum cosine similarity to a known prototype for soft novel repulsion.",
+    )
     p.add_argument(
         "--joint-candidate-gating",
         action="store_true",
@@ -257,7 +2068,16 @@ def parse_args(argv=None):
     p.add_argument("--joint-candidate-ratio", type=float, default=0.25)
     p.add_argument(
         "--joint-candidate-mode",
-        choices=["entropy", "max_softmax", "energy", "entropy_uncertainty", "consensus"],
+        choices=[
+            "entropy",
+            "max_softmax",
+            "energy",
+            "entropy_uncertainty",
+            "consensus",
+            "novel_mass",
+            "prototype_distance",
+            "distance_consensus",
+        ],
         default="consensus",
     )
     p.add_argument("--joint-candidate-neighbor-filter", action="store_true")
@@ -265,6 +2085,69 @@ def parse_args(argv=None):
     p.add_argument("--joint-candidate-min-votes", type=int, default=2)
     p.add_argument("--joint-candidate-soft-weighting", action="store_true")
     p.add_argument("--joint-candidate-weight-floor", type=float, default=0.05)
+    p.add_argument(
+        "--joint-mixed-known-consistency",
+        action="store_true",
+        help=(
+            "On a mixed unlabeled pool, train low-risk, cross-view-consistent "
+            "samples toward EMA known-class pseudo labels. Requires joint "
+            "candidate gating and mixed discovery mode."
+        ),
+    )
+    p.add_argument(
+        "--alpha-joint-known-consistency",
+        type=float,
+        default=0.0,
+        help="Weight the mixed-pool known-anchor pseudo-label consistency loss.",
+    )
+    p.add_argument(
+        "--joint-known-confidence-threshold",
+        type=float,
+        default=0.8,
+        help="Minimum EMA confidence for a low-risk mixed-pool known anchor.",
+    )
+    p.add_argument(
+        "--joint-known-target",
+        choices=["ema", "teacher"],
+        default="ema",
+        help="Detached model used to assign labels for mixed-pool known anchors.",
+    )
+    p.add_argument(
+        "--outlier-dataset",
+        choices=["cifar10", "imagefolder"],
+        default="",
+        help="Optional unlabeled auxiliary dataset for Outlier Exposure.",
+    )
+    p.add_argument("--outlier-data-root", default="")
+    p.add_argument("--outlier-download", action="store_true")
+    p.add_argument("--outlier-batch-size", type=int, default=0)
+    p.add_argument("--alpha-outlier-uniform", type=float, default=0.0)
+    p.add_argument("--alpha-outlier-energy", type=float, default=0.0)
+    p.add_argument("--alpha-outlier-uncertainty", type=float, default=0.0)
+    p.add_argument(
+        "--alpha-outlier-feature-margin", type=float, default=0.0,
+        help="Push auxiliary outlier features away from the nearest known classifier prototype.",
+    )
+    p.add_argument("--outlier-feature-margin", type=float, default=0.2)
+    p.add_argument(
+        "--alpha-outlier-rejection-feature-margin",
+        type=float,
+        default=0.0,
+        help=(
+            "Push auxiliary outlier rejection embeddings away from the nearest "
+            "known rejection prototype; requires --rejection-feature-dim > 0."
+        ),
+    )
+    p.add_argument("--outlier-rejection-feature-margin", type=float, default=0.2)
+    p.add_argument(
+        "--alpha-outlier-rejection-uniform",
+        type=float,
+        default=0.0,
+        help=(
+            "Match auxiliary outlier rejection logits to a uniform known-class "
+            "distribution; requires --rejection-feature-dim > 0."
+        ),
+    )
     p.add_argument("--discovery-batch-size", type=int, default=0)
     p.add_argument("--discovery-loss", choices=["consistency", "nt_xent"], default="nt_xent")
     p.add_argument("--discovery-temperature", type=float, default=0.2)
@@ -303,17 +2186,34 @@ def parse_args(argv=None):
             "unified",
             "unified_pca",
         ],
-        default="projection_pca",
+        default="feature_pca",
         help=(
-            "Representation used for clustering; projection_pca is the default "
-            "because it performed best in the current CIFAR-100 comparison."
+            "Representation used for clustering; feature_pca is the default "
+            "because it improves clustering quality without changing the "
+            "rejection score or known-coverage calibration. Use projection_pca "
+            "as the controlled ablation."
         ),
     )
     p.add_argument(
         "--cluster-selection",
-        choices=["silhouette", "composite", "stability"],
+        choices=[
+            "silhouette",
+            "composite",
+            "stability",
+            "bootstrap_stability",
+            "gmm_bic",
+        ],
         default="silhouette",
-        help="K selection criterion: silhouette, composite internal metrics, or stability.",
+        help=(
+            "K selection criterion: silhouette, composite metrics, legacy seed "
+            "stability, bootstrap_stability, or diagonal-GMM BIC."
+        ),
+    )
+    p.add_argument(
+        "--max-auto-clusters",
+        type=int,
+        default=50,
+        help="Upper bound for unlabeled auto-K search; independent of the evaluation-only --num-novel.",
     )
     p.add_argument("--cluster-pca-dim", type=int, default=32)
     p.add_argument(
@@ -323,8 +2223,6 @@ def parse_args(argv=None):
     )
     p.add_argument("--cluster-no-whiten", action="store_true")
     p.add_argument("--cluster-n-init", type=int, default=10)
-    p.add_argument("--cluster-max-k", type=int, default=None,
-                   help="Maximum K considered by auto-K; defaults to num-novel for compatibility.")
     p.add_argument("--cluster-stability-repeats", type=int, default=5)
     p.add_argument(
         "--skip-clustering",
@@ -334,18 +2232,62 @@ def parse_args(argv=None):
     p.add_argument("--threshold-percentile", type=float, default=95.0)
     p.add_argument(
         "--threshold-policy",
-        choices=["global", "class_conditional"],
+        choices=["global", "class_conditional", "known_coverage", "open_balanced", "open_f1", "open_known_coverage"],
         default="global",
-        help="Use one known-only threshold or one threshold per predicted known class.",
+        help="Use a known-only threshold, matched known coverage, class thresholds, or an open-validation operating point.",
+    )
+    p.add_argument(
+        "--target-known-coverage",
+        type=float,
+        default=0.95,
+        help="Target known acceptance rate for --threshold-policy known_coverage.",
     )
     p.add_argument("--threshold-min-class-samples", type=int, default=5)
     p.add_argument(
+        "--save-calibration-scores",
+        action="store_true",
+        help=(
+            "Export per-sample known-validation scores and source indices to "
+            "calibration_scores.npz for validation-only stability audits."
+        ),
+    )
+    p.add_argument(
         "--candidate-purify",
-        choices=["none", "open_score", "entropy", "head_uncertainty", "uncertainty_consensus"],
+        choices=[
+            "none",
+            "open_score",
+            "entropy",
+            "head_uncertainty",
+            "head_uncertainty_classwise",
+            "head_uncertainty_weighted",
+            "uncertainty_consensus",
+            "knn_support",
+            "open_knn_support",
+        ],
         default="none",
-        help="Purify rejected candidates only before clustering; detection metrics are unchanged.",
+        help=(
+            "Purify rejected candidates before clustering; detection metrics are "
+            "unchanged. head_uncertainty_weighted keeps all candidates and "
+            "uses soft k-means weights."
+        ),
     )
     p.add_argument("--candidate-keep-ratio", type=float, default=1.0)
+    p.add_argument(
+        "--cluster-candidate-mode",
+        choices=["detector", "feature_rejector_rank"],
+        default="detector",
+        help=(
+            "Candidate source for clustering. detector uses thresholded detector "
+            "rejections; feature_rejector_rank preserves that count but ranks "
+            "the unlabeled pool with the raw feature-rejector score."
+        ),
+    )
+    p.add_argument(
+        "--support-quantile",
+        type=float,
+        default=0.95,
+        help="Per-class known-feature distance quantile for known_support detection.",
+    )
     p.add_argument("--mc-samples", type=int, default=8)
     p.add_argument("--temperature-calibration", action="store_true")
     p.add_argument("--calibration-bins", type=int, default=15)
@@ -356,19 +2298,56 @@ def parse_args(argv=None):
             "auto",
             "full",
             "max_softmax",
+            "max_logit",
+            "logit_margin",
             "novel_msp",
             "novel_entropy",
             "unified_novel_mass",
             "classwise_unified_novel_mass",
+            "normalized_unified_novel_mass_entropy",
             "odin_msp",
             "energy",
+            "react_energy",
+            "knn_distance",
+            "normalized_entropy_knn",
+            "predicted_class_knn_distance",
+            "normalized_entropy_predicted_class_knn",
+            "normalized_entropy_predicted_class_knn_global",
+            "normalized_entropy_relative_predicted_class_knn",
+            "normalized_entropy_min_class_knn",
+            "normalized_entropy_min_class_relative_knn",
+            "normalized_entropy_uncertainty_min_class_knn",
+            "normalized_entropy_knn_conflict",
+            "feature_norm",
+            "normalized_entropy_feature_norm",
+            "normalized_entropy_mahalanobis_knn",
+            "gaussian_nll",
+            "openmax",
+            "reciprocal",
+            "normalized_entropy_gaussian_nll",
+            "relative_mahalanobis",
+            "normalized_entropy_relative_mahalanobis",
+            "normalized_entropy_proto_relative_mahalanobis",
+            "vim_residual",
+            "head_uncertainty",
+            "feature_rejector",
+            "feature_rejector_fusion",
+            "feature_rejector_uncertainty_fusion",
+            "feature_rejector_uncertainty_conjunction",
+            "virtual_rejector",
+            "known_support",
+            "known_conformal",
+            "margin_uncertainty",
             "entropy_only",
             "proto_only",
             "entropy_proto",
+            "normalized_full",
             "normalized_entropy_proto",
             "entropy_epistemic",
             "entropy_aleatoric",
             "expected_entropy",
+            "head_uncertainty",
+            "margin_uncertainty",
             "epistemic",
             "mahalanobis",
             "mahalanobis_diag",
@@ -379,9 +2358,47 @@ def parse_args(argv=None):
             "normalized_entropy_mahalanobis",
             "normalized_entropy_mahalanobis_diag",
             "normalized_entropy_mahalanobis_shared",
+            "classwise_mahalanobis",
+            "normalized_entropy_classwise_mahalanobis",
         ],
     )
-    p.add_argument("--open-val-ratio", type=float, default=0.0)
+    p.add_argument(
+        "--open-val-ratio",
+        type=float,
+        default=0.0,
+        help="Reserve train-split known and novel samples for score selection; never splits the final test set.",
+    )
+    p.add_argument(
+        "--fusion-base-score",
+        choices=[
+            "normalized_entropy_min_class_knn",
+            "normalized_entropy_mahalanobis_diag",
+            "normalized_entropy_proto",
+        ],
+        default="normalized_entropy_min_class_knn",
+        help=(
+            "Known-validation-normalized base detector used by "
+            "feature_rejector_fusion. The default matches the current kNN detector."
+        ),
+    )
+    p.add_argument(
+        "--fusion-rejector-weight",
+        type=float,
+        default=0.5,
+        help=(
+            "Weight of the validation-normalized rejector score in "
+            "feature_rejector_fusion; the base detector gets 1-weight."
+        ),
+    )
+    p.add_argument(
+        "--uncertainty-score-weight",
+        type=float,
+        default=0.5,
+        help=(
+            "Weight of the normalized uncertainty-head correction in "
+            "normalized_entropy_uncertainty_min_class_knn."
+        ),
+    )
     p.add_argument("--auto-calibrate-score", action="store_true")
     p.add_argument(
         "--auto-score-fast",
@@ -400,15 +2417,107 @@ def parse_args(argv=None):
         default=1000.0,
         help="Temperature used by ODIN-style MSP scoring.",
     )
+    p.add_argument(
+        "--react-percentile",
+        type=float,
+        default=0.0,
+        help="Enable ReAct feature clipping using this known-training activation percentile.",
+    )
+    p.add_argument("--knn-ood", action="store_true", help="Enable KNN distance OOD scoring from known training projections.")
+    p.add_argument("--knn-k", type=int, default=10, help="Number of known training neighbors for KNN-OOD.")
+    p.add_argument(
+        "--knn-feature",
+        choices=["features", "rejection_features", "proj"],
+        default="features",
+        help=(
+            "Embedding used by KNN-OOD: shared backbone feature, independent "
+            "rejection feature, or projection head."
+        ),
+    )
+    p.add_argument("--knn-bank-size", type=int, default=0, help="Optional maximum known training vectors in the KNN bank; 0 uses all.")
+    p.add_argument("--knn-support-quantile", type=float, default=0.95, help="Known-training leave-one-out quantile used for classwise kNN support radii.")
+    p.add_argument("--vim-ood", action="store_true", help="Enable VIM-style principal-subspace residual scoring.")
+    p.add_argument("--vim-rank", type=int, default=64, help="Known feature principal-subspace rank for VIM-OOD.")
 
     p = sub.add_parser("inspect_data")
     add_common(p)
     p.add_argument("--sample-count", type=int, default=5)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    resolve_transform_profile(args)
+    return args
 
 
-def load_checkpoint(model, path, device):
+def resolve_transform_profile(args) -> None:
+    """Resolve the user-facing transform profile before data/model creation."""
+    requested = args.transform_profile
+    if requested == "auto":
+        args.transform_profile = "cifar" if args.dataset == "cifar100" else "imagenet"
+    args.transform_profile_requested = requested
+
+
+def build_bundle_from_args(args):
+    """Build the protocol bundle from one command configuration.
+
+    Training, discovery, and inspection must resolve the same split controls.
+    Keeping this forwarding logic in one place prevents a command from saving a
+    configuration value (for example ``calibration_overlap_control``) while
+    silently constructing a different data protocol.
+    """
+    return build_data_bundle(
+        args.dataset,
+        args.data_root,
+        args.num_known,
+        args.seed,
+        args.image_size,
+        download=args.download,
+        split_path=args.split_path,
+        limit_train=args.limit_train or None,
+        limit_val=args.limit_val or None,
+        limit_test=args.limit_test or None,
+        limit_discovery=args.limit_discovery or None,
+        discovery_pool_mode=args.discovery_pool_mode,
+        calibration_ratio=args.calibration_ratio,
+        calibration_overlap_control=getattr(args, "calibration_overlap_control", False),
+        known_split_mode=args.known_split_mode,
+        mixed_known_pool_ratio=args.mixed_known_pool_ratio,
+        matched_discovery_pool=args.matched_discovery_pool,
+        matched_pool_size=args.matched_pool_size,
+        matched_known_prior=args.matched_known_prior,
+        open_val_ratio=getattr(args, "open_val_ratio", 0.0),
+        transform_profile=args.transform_profile,
+    )
+
+
+def load_checkpoint(
+    model,
+    path,
+    device,
+    expected_known_classes=None,
+    expected_novel_classes=None,
+):
     ckpt = torch.load(path, map_location=device)
+    if expected_known_classes is not None or expected_novel_classes is not None:
+        checkpoint_known = ckpt.get("known_classes")
+        checkpoint_novel = ckpt.get("novel_classes")
+        if checkpoint_known is None:
+            raise ValueError(
+                "Checkpoint is missing known_classes metadata; "
+                "refusing to load it for a split-dependent experiment."
+            )
+        if expected_known_classes is not None and list(checkpoint_known) != list(expected_known_classes):
+            raise ValueError(
+                "Checkpoint known_classes do not match the current split. "
+                f"checkpoint={list(checkpoint_known)} current={list(expected_known_classes)}"
+            )
+        if (
+            expected_novel_classes is not None
+            and checkpoint_novel is not None
+            and list(checkpoint_novel) != list(expected_novel_classes)
+        ):
+            raise ValueError(
+                "Checkpoint novel_classes do not match the current split. "
+                f"checkpoint={list(checkpoint_novel)} current={list(expected_novel_classes)}"
+            )
     model.load_state_dict(ckpt["model"])
     return ckpt
 
@@ -448,7 +2557,7 @@ def initialize_novel_head_kmeans(
     seed: int,
     candidate_ratio: float = 0.25,
     candidates_only: bool = False,
-    feature_l2_normalize: bool = True,
+    n_init: int = 10,
 ):
     """Initialize novel prototypes from discovery features without labels.
 
@@ -461,12 +2570,18 @@ def initialize_novel_head_kmeans(
     student.eval()
     features = []
     risks = []
-    for first_view, _ in discovery_loader:
+    for batch in discovery_loader:
+        # TwoViewDataset(include_metadata=True) returns five fields, while
+        # older/simple tests may return two.  Prototype initialization only
+        # needs the first augmented image view; unpacking exactly two fields
+        # breaks the real mixed-pool loader.
+        if not isinstance(batch, (tuple, list)) or len(batch) < 1:
+            raise ValueError(
+                "Discovery batches must be tuple/list-like and contain an image view."
+            )
+        first_view = batch[0]
         outputs = student(first_view.to(device))
-        batch_features = outputs["features"]
-        if feature_l2_normalize:
-            batch_features = torch.nn.functional.normalize(batch_features, dim=-1)
-        features.append(batch_features.cpu().numpy())
+        features.append(torch.nn.functional.normalize(outputs["features"], dim=-1).cpu().numpy())
         if candidates_only:
             probs = outputs["logits"].softmax(dim=-1).clamp_min(1e-8)
             entropy = -(probs * probs.log()).sum(dim=-1)
@@ -489,13 +2604,15 @@ def initialize_novel_head_kmeans(
         )
     clustering = KMeans(
         n_clusters=num_novel,
-        n_init=10,
+        n_init=max(1, int(n_init)),
         random_state=int(seed),
     )
-    clustering.fit(feature_array)
+    # Limit BLAS/OpenMP workers during refresh; otherwise Windows CPU runs can
+    # oversubscribe memory and appear to hang before the next epoch log.
+    with threadpool_limits(limits=1):
+        clustering.fit(feature_array)
     centers = torch.as_tensor(clustering.cluster_centers_, dtype=torch.float32, device=device)
-    if feature_l2_normalize:
-        centers = torch.nn.functional.normalize(centers, dim=-1)
+    centers = torch.nn.functional.normalize(centers, dim=-1)
     novel_head.prototypes.copy_(centers)
     student.train()
     return {
@@ -523,16 +2640,169 @@ def save_checkpoint(model, path, extra=None):
     torch.save(payload, path)
 
 
-def scheduled_weight(epoch: int, warmup_epochs: int = 0, ramp_epochs: int = 0) -> float:
-    """Return a loss multiplier using epoch-indexed warmup and linear ramp."""
+def save_command_config(run_dir, command: str, config: dict) -> None:
+    """Keep the legacy config.json while preserving each command's arguments."""
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    save_json(run_dir / "config.json", config)
+    save_json(run_dir / f"{command}_config.json", config)
+
+
+def build_encoder_optimizer_groups(encoder, base_lr: float, layer_decay: float = 1.0):
+    """Build optional layer-wise LR groups without changing the default path."""
+    if not 0.0 < layer_decay <= 1.0:
+        raise ValueError("encoder layer decay must be in (0, 1]")
+    named_parameters = [
+        (name, parameter)
+        for name, parameter in encoder.named_parameters()
+        if parameter.requires_grad
+    ]
+    if not named_parameters:
+        return []
+    if layer_decay == 1.0:
+        return [{"params": [parameter for _, parameter in named_parameters], "lr": base_lr}]
+
+    # ResNet and MobileNet expose ordered stages as features.<n>.
+    stage_indices = []
+    for name, _ in named_parameters:
+        parts = name.split(".")
+        for index, part in enumerate(parts[:-1]):
+            if part == "features" and parts[index + 1].isdigit():
+                stage_indices.append(int(parts[index + 1]))
+                break
+    if not stage_indices:
+        return [{"params": [parameter for _, parameter in named_parameters], "lr": base_lr}]
+    deepest_stage = max(stage_indices)
+    grouped = {}
+    for name, parameter in named_parameters:
+        stage = None
+        parts = name.split(".")
+        for index, part in enumerate(parts[:-1]):
+            if part == "features" and parts[index + 1].isdigit():
+                stage = int(parts[index + 1])
+                break
+        depth = deepest_stage - stage if stage is not None else 0
+        grouped.setdefault(depth, []).append(parameter)
+    return [
+        {"params": grouped[depth], "lr": base_lr * (layer_decay ** depth)}
+        for depth in sorted(grouped)
+    ]
+
+
+def scheduled_weight(
+    epoch: int,
+    warmup_epochs: int = 0,
+    ramp_epochs: int = 0,
+    stop_epoch: int = 0,
+) -> float:
+    """Return an epoch-indexed warmup/ramp multiplier with optional stopping.
+
+    ``epoch`` is zero-based internally, while ``stop_epoch`` is deliberately
+    one-based to match the epoch numbers printed in training logs.  A zero
+    stop value preserves the historical behavior and never disables the loss.
+    """
     warmup_epochs = max(int(warmup_epochs), 0)
     ramp_epochs = max(int(ramp_epochs), 0)
     epoch_number = int(epoch) + 1
+    stop_epoch = max(int(stop_epoch), 0)
+    if stop_epoch > 0 and epoch_number > stop_epoch:
+        return 0.0
     if epoch_number <= warmup_epochs:
         return 0.0
     if ramp_epochs <= 0:
         return 1.0
     return min(1.0, max(0.0, (epoch_number - warmup_epochs) / ramp_epochs))
+
+
+def scheduled_decay_scale(
+    epoch: int,
+    start_epoch: int = 0,
+    decay_epochs: int = 0,
+    final_scale: float = 1.0,
+) -> float:
+    """Keep scale 1, then linearly decay it to ``final_scale``.
+
+    Epochs are zero-based internally and ``start_epoch`` is one-based for
+    command-line readability.  A zero start or zero decay preserves a static
+    scale.  The default therefore has no effect on historical training.
+    """
+    start_epoch = max(int(start_epoch), 0)
+    decay_epochs = max(int(decay_epochs), 0)
+    final_scale = float(final_scale)
+    if not 0.0 <= final_scale <= 1.0:
+        raise ValueError("final_scale must be in [0, 1]")
+    if start_epoch <= 0:
+        return 1.0
+    epoch_number = int(epoch) + 1
+    if epoch_number < start_epoch:
+        return 1.0
+    if decay_epochs <= 0:
+        return final_scale
+    progress = min(1.0, max(0.0, (epoch_number - start_epoch + 1) / decay_epochs))
+    return 1.0 + (final_scale - 1.0) * progress
+
+
+def evaluate_open_checkpoint_selection(
+    model,
+    loader,
+    device,
+    score_mode: str = "max_softmax",
+) -> dict:
+    """Evaluate an epoch on a reserved open-validation split.
+
+    This helper is deliberately restricted to checkpoint selection.  It uses
+    only ``loader`` (which must be derived from the training/validation
+    partition), never the final test set, and reports threshold-independent
+    separation metrics so epoch selection cannot silently become a threshold
+    tuning procedure.
+    """
+    outputs = extract_outputs(model, loader, device, mc_samples=1)
+    prototypes = model.classifier.weight.detach().cpu().numpy()
+    scores, _ = compute_open_score(
+        outputs,
+        prototypes=prototypes,
+        score_mode=score_mode,
+    )
+    known = np.asarray(outputs["is_known"], dtype=bool)
+    labels = (~known).astype(np.int64)
+    auroc = compute_auroc(labels, scores)
+    known_scores = np.asarray(scores)[known]
+    unknown_scores = np.asarray(scores)[~known]
+    values = np.sort(np.unique(np.concatenate([known_scores, unknown_scores])))
+    known_sorted = np.sort(known_scores)
+    unknown_sorted = np.sort(unknown_scores)
+    known_cdf = np.searchsorted(known_sorted, values, side="right") / max(len(known_sorted), 1)
+    unknown_cdf = np.searchsorted(unknown_sorted, values, side="right") / max(len(unknown_sorted), 1)
+    ks = float(np.max(np.abs(known_cdf - unknown_cdf)))
+    return {
+        "score_mode": score_mode,
+        "auroc": float(auroc),
+        "ks": ks,
+        "known_count": int(known.sum()),
+        "unknown_count": int((~known).sum()),
+        "mean_gap_unknown_minus_known": float(unknown_scores.mean() - known_scores.mean()),
+    }
+
+
+def clone_dataset_with_eval_transform(
+    dataset, image_size: int, transform_profile: str = "imagenet"
+):
+    """Shallow-clone Subset wrappers and use deterministic transforms on base data."""
+    cloned = copy.copy(dataset)
+    if hasattr(dataset, "indices") and hasattr(dataset, "dataset"):
+        cloned.dataset = clone_dataset_with_eval_transform(
+            dataset.dataset, image_size, transform_profile
+        )
+        return cloned
+    if hasattr(dataset, "base"):
+        cloned.base = copy.copy(dataset.base)
+        cloned.base.transform = build_transforms(
+            image_size, train=False, profile=transform_profile
+        )
+        return cloned
+    raise TypeError(
+        "kNN support-bank refresh requires a dataset wrapper exposing a base dataset"
+    )
 
 
 def _checkpoint_parts(path_arg: str):
@@ -636,26 +2906,80 @@ def _score_needs_shared_mahalanobis(score_mode: str, auto_calibrate: bool = Fals
         "mahalanobis",
         "entropy_mahalanobis",
         "normalized_entropy_mahalanobis",
+        "normalized_entropy_mahalanobis_knn",
+        "relative_mahalanobis",
+        "normalized_entropy_relative_mahalanobis",
+        "normalized_entropy_proto_relative_mahalanobis",
+        "classwise_mahalanobis",
+        "normalized_entropy_classwise_mahalanobis",
+        "gaussian_nll",
+        "normalized_entropy_gaussian_nll",
+        "relative_mahalanobis",
+        "normalized_entropy_relative_mahalanobis",
+        "normalized_entropy_proto_relative_mahalanobis",
+    }
+
+
+def _calibrate_discovery_threshold(
+    args,
+    scores_val,
+    outputs_val,
+    scores_open_val,
+    outputs_open_val,
+    num_classes,
+):
+    if args.threshold_policy in {"open_balanced", "open_f1", "open_known_coverage"}:
+        if scores_open_val is None or outputs_open_val is None:
+            raise ValueError(
+                "open threshold policies require --open-val-ratio greater than 0"
+            )
+        objective = {
+            "open_f1": "unknown_f1",
+            "open_known_coverage": "known_coverage",
+        }.get(args.threshold_policy, "balanced_accuracy")
+        threshold, diagnostics = calibrate_open_threshold(
+            scores_open_val,
+            np.asarray(outputs_open_val["is_known"], dtype=bool),
+            objective=objective,
+            target_known_coverage=args.target_known_coverage,
+        )
+        return threshold, {
+            "type": f"open_val_{objective}",
+            "percentile": None,
+            "min_class_samples": None,
+            **diagnostics,
+        }
+    if args.threshold_policy == "known_coverage":
+        threshold, diagnostics = calibrate_coverage_threshold(
+            scores_val,
+            target_known_coverage=args.target_known_coverage,
+        )
+        return threshold, {
+            "type": "known_val_known_coverage",
+            "percentile": None,
+            "min_class_samples": None,
+            **diagnostics,
+        }
+    if args.threshold_policy == "class_conditional":
+        threshold = calibrate_class_thresholds(
+            scores_val,
+            outputs_val["logits"].argmax(axis=1),
+            num_classes,
+            percentile=args.threshold_percentile,
+            min_samples=args.threshold_min_class_samples,
+        )
+    else:
+        threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
+    return threshold, {
+        "type": f"known_val_{args.threshold_policy}",
+        "percentile": args.threshold_percentile,
+        "min_class_samples": args.threshold_min_class_samples,
     }
 
 
 def fit_teacher(args):
-    set_seed(args.seed)
-    bundle = build_data_bundle(
-        args.dataset,
-        args.data_root,
-        args.num_known,
-        args.seed,
-        args.image_size,
-        download=args.download,
-        split_path=args.split_path,
-        limit_train=args.limit_train or None,
-        limit_val=args.limit_val or None,
-        limit_test=args.limit_test or None,
-        limit_discovery=args.limit_discovery or None,
-        discovery_pool_mode=args.discovery_pool_mode,
-        open_val_ratio=getattr(args, "open_val_ratio", 0.0),
-    )
+    set_seed(args.seed if args.model_seed is None else args.model_seed)
+    bundle = build_bundle_from_args(args)
     device = resolve_device(args.device)
     print(f"device: {device}")
     train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
@@ -666,19 +2990,37 @@ def fit_teacher(args):
         proj_dim=args.proj_dim,
         dropout=args.dropout,
         pretrained=args.pretrained,
+        cifar_stem=args.cifar_stem,
+        rejection_feature_dim=args.rejection_feature_dim,
     ).to(device)
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     best_acc = -1.0
     best_state = None
     best_epoch = 0
+    history = []
     for epoch in range(args.epochs):
+        angular_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.angular_warmup_epochs,
+            ramp_epochs=args.angular_ramp_epochs,
+        )
         stats = train_one_epoch_teacher(
             model,
             train_loader,
             optim,
             device,
             alpha_unc=args.alpha_unc,
+            alpha_rejection_known_ce=args.alpha_rejection_known_ce,
+            alpha_rejection_supcon=args.alpha_rejection_supcon,
+            alpha_rejection_center=args.alpha_rejection_center,
             alpha_proto=args.alpha_proto,
+            alpha_center=args.alpha_center,
+            alpha_radius=args.alpha_radius,
+            radius=args.known_feature_radius,
+            alpha_center_margin=args.alpha_center_margin,
+            center_margin=args.center_margin,
+            alpha_proto_repulsion=args.alpha_proto_repulsion,
+            proto_repulsion_margin=args.proto_repulsion_margin,
             alpha_proxy=args.alpha_proxy,
             alpha_pseudo=args.alpha_pseudo,
             alpha_energy=args.alpha_energy,
@@ -688,27 +3030,53 @@ def fit_teacher(args):
             energy_margin=args.energy_margin,
             energy_temperature=args.energy_temperature,
             proxy_temperature=args.proxy_temperature,
+            alpha_angular=args.alpha_angular * angular_weight,
+            angular_margin=args.angular_margin,
+            angular_scale=args.angular_scale,
+            angular_correct_only=args.angular_correct_only,
+            alpha_proxy_anchor=args.alpha_proxy_anchor,
+            proxy_anchor_alpha=args.proxy_anchor_alpha,
+            proxy_anchor_margin=args.proxy_anchor_margin,
+            alpha_hard_proxy_margin=args.alpha_hard_proxy_margin,
+            hard_proxy_margin=args.hard_proxy_margin,
+            freeze_bn_stats=args.freeze_bn_stats,
         )
+        stats["angular_weight"] = angular_weight
         val_stats = evaluate_classification(model, val_loader, device)
-        print(f"[teacher][{epoch+1}/{args.epochs}] {stats} {val_stats}")
+        geometry_stats = evaluate_representation_geometry(
+            model, val_loader, device, len(bundle.known_classes)
+        )
+        history.append({
+            "epoch": epoch + 1,
+            "train": stats,
+            "validation": val_stats,
+            "validation_geometry": geometry_stats,
+        })
+        print(f"[teacher][{epoch+1}/{args.epochs}] {stats} {val_stats} {geometry_stats}")
+        if args.save_epoch_checkpoints:
+            epoch_dir = ensure_dir(args.work_dir)
+            save_checkpoint(
+                model,
+                epoch_dir / f"teacher_epoch_{epoch + 1}.pt",
+                extra={
+                    "known_classes": list(bundle.known_classes),
+                    "novel_classes": list(bundle.novel_classes),
+                    "epoch": epoch + 1,
+                },
+            )
         if val_stats["known_acc"] > best_acc:
             best_acc = val_stats["known_acc"]
             best_state = copy.deepcopy(model.state_dict())
             best_epoch = epoch + 1
-            if args.save_epoch_checkpoints:
-                save_checkpoint(
-                    model,
-                    ensure_dir(args.work_dir) / "teacher.pt",
-                    extra={
-                        "known_classes": list(bundle.known_classes),
-                        "novel_classes": list(bundle.novel_classes),
-                        "epoch": best_epoch,
-                    },
-                )
     if best_state is not None:
         model.load_state_dict(best_state)
     run_dir = ensure_dir(args.work_dir)
-    save_json(run_dir / "config.json", {**vars(args), "best_epoch": best_epoch, "best_val_known_acc": best_acc})
+    save_command_config(
+        run_dir,
+        args.command,
+        {**vars(args), "best_epoch": best_epoch, "best_val_known_acc": best_acc},
+    )
+    save_json(run_dir / "train_history.json", history)
     proto_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
     prototypes = collect_prototypes(model, proto_loader, device, len(bundle.known_classes)).cpu()
     gaussian_stats = collect_diagonal_gaussian_stats(
@@ -721,6 +3089,7 @@ def fit_teacher(args):
         ckpt_path,
         extra={
             "known_classes": list(bundle.known_classes),
+            "novel_classes": list(bundle.novel_classes),
             "prototypes": prototypes,
             "gaussian_stats": gaussian_stats,
         },
@@ -730,57 +3099,388 @@ def fit_teacher(args):
 
 
 def fit_student(args):
-    set_seed(args.seed)
-    bundle = build_data_bundle(
-        args.dataset,
-        args.data_root,
-        args.num_known,
-        args.seed,
-        args.image_size,
-        download=args.download,
-        split_path=args.split_path,
-        limit_train=args.limit_train or None,
-        limit_val=args.limit_val or None,
-        limit_test=args.limit_test or None,
-        limit_discovery=args.limit_discovery or None,
-        discovery_pool_mode=args.discovery_pool_mode,
-        open_val_ratio=getattr(args, "open_val_ratio", 0.0),
-    )
+    if int(getattr(args, "teacher_rejection_feature_dim", 0)) < 0:
+        raise ValueError("--teacher-rejection-feature-dim must be non-negative")
+    if int(getattr(args, "teacher_rejection_feature_dim", 0)) > 0 and int(args.rejection_feature_dim) <= 0:
+        raise ValueError(
+            "--teacher-rejection-feature-dim requires --rejection-feature-dim > 0"
+        )
+    if args.independent_rejection_encoder and args.alpha_vos_rejection > 0.0:
+        raise ValueError(
+            "--alpha-vos-rejection is incompatible with "
+            "--independent-rejection-encoder: feature-synthesized VOS samples "
+            "have no image for the independent rejection encoder"
+        )
+    if args.checkpoint_selection != "known_acc" and args.open_val_ratio <= 0.0:
+        raise ValueError(
+            "open-set checkpoint selection requires --open-val-ratio > 0; "
+            "use --checkpoint-selection known_acc to keep the historical behavior"
+        )
+    if not 0.0 <= args.joint_novel_weight_floor < 1.0:
+        raise ValueError("--joint-novel-weight-floor must be in [0, 1)")
+    if args.discovery_feature_margin_weight_source.startswith("ema_"):
+        if args.discovery_selection_model not in {"ema", "teacher"}:
+            raise ValueError(
+                "EMA feature-margin weight sources require "
+                "--discovery-selection-model ema or teacher"
+            )
+    if args.discovery_feature_candidate_space == "rejection_support":
+        if not args.discovery_feature_candidate_gating:
+            raise ValueError(
+                "--discovery-feature-candidate-space=rejection_support requires "
+                "--discovery-feature-candidate-gating"
+            )
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "rejection-support candidate gating requires "
+                "--discovery-pool-mode mixed"
+            )
+        if args.rejection_feature_dim <= 0:
+            raise ValueError(
+                "rejection-support candidate gating requires "
+                "--rejection-feature-dim > 0"
+            )
+    if args.discovery_feature_candidate_space in {
+        "shared_boundary",
+        "shared_boundary_consensus",
+        "shared_boundary_soft_consensus",
+    }:
+        if not args.discovery_feature_candidate_gating:
+            raise ValueError(
+                "--discovery-feature-candidate-space=shared_boundary requires "
+                "--discovery-feature-candidate-gating"
+            )
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "shared-boundary candidate gating requires "
+                "--discovery-pool-mode mixed"
+            )
+    if args.discovery_knn_selection_conditional:
+        if not args.discovery_feature_candidate_gating:
+            raise ValueError(
+                "selection-conditional PU requires "
+                "--discovery-feature-candidate-gating"
+            )
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "selection-conditional PU requires "
+                "--discovery-pool-mode mixed"
+            )
+        if args.discovery_cross_view_gating:
+            raise ValueError(
+                "selection-conditional PU requires single-view candidate "
+                "selection; disable --discovery-cross-view-gating"
+            )
+        knn_pu_active = (
+            (args.alpha_discovery_knn_boundary > 0.0
+             or args.alpha_discovery_rejection_knn_boundary > 0.0)
+            and args.discovery_knn_risk in {"hard_nnpu", "soft_nnpu"}
+        )
+        feature_pu_active = (
+            args.alpha_discovery_boundary > 0.0
+            and args.discovery_boundary_mode == "pu"
+            and args.discovery_boundary_pu_risk in {"hard_nnpu", "soft_nnpu"}
+        )
+        rejection_feature_pu_active = (
+            args.alpha_discovery_rejection_boundary > 0.0
+            and args.discovery_boundary_mode == "pu"
+            and args.discovery_boundary_pu_risk in {"hard_nnpu", "soft_nnpu"}
+        )
+        if not (knn_pu_active or feature_pu_active or rejection_feature_pu_active):
+            raise ValueError(
+                "selection-conditional PU requires an active kNN NNPU or "
+                "shared/rejection-feature PU NNPU boundary loss"
+            )
+    if args.discovery_single_view_candidate_gating and args.discovery_cross_view_gating:
+        raise ValueError(
+            "single-view and cross-view candidate gating are mutually exclusive"
+        )
+    if args.joint_mixed_known_consistency or args.alpha_joint_known_consistency > 0.0:
+        if (
+            not args.joint_discovery
+            or not args.joint_candidate_gating
+            or args.alpha_joint_discovery <= 0.0
+        ):
+            raise ValueError(
+                "mixed known consistency requires --joint-discovery and "
+                "--joint-candidate-gating"
+            )
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "mixed known consistency requires --discovery-pool-mode mixed"
+            )
+        if not args.discovery_pool:
+            raise ValueError(
+                "mixed known consistency requires --discovery-pool"
+            )
+        if args.discovery_selection_model != "ema":
+            raise ValueError(
+                "mixed known consistency requires --discovery-selection-model ema"
+            )
+        if args.alpha_joint_known_consistency <= 0.0:
+            raise ValueError(
+                "--joint-mixed-known-consistency requires "
+                "--alpha-joint-known-consistency > 0"
+            )
+    if args.alpha_discovery_known_consistency > 0.0:
+        if args.discovery_pool_mode != "mixed" or not args.discovery_pool:
+            raise ValueError(
+                "--alpha-discovery-known-consistency requires "
+                "--discovery-pool and --discovery-pool-mode mixed"
+            )
+        if not 0.0 < args.discovery_known_consistency_confidence <= 1.0:
+            raise ValueError(
+                "--discovery-known-consistency-confidence must be in (0, 1]"
+            )
+        if args.discovery_known_consistency_target == "ema" and args.discovery_selection_model != "ema":
+            raise ValueError(
+                "EMA known consistency requires --discovery-selection-model ema"
+            )
+        if args.discovery_known_consistency_gate != "confidence" and args.alpha_discovery_knn_boundary <= 0.0:
+            # The support bank is also useful as an anchor gate.  It is built
+            # below independently of the optional KNN boundary loss, so this
+            # condition is intentionally informational rather than an error.
+            pass
+        if args.discovery_known_consistency_support_multiplier <= 0.0:
+            raise ValueError(
+                "--discovery-known-consistency-support-multiplier must be positive"
+            )
+        if args.discovery_known_consistency_uncertainty_max is not None and not (
+            0.0 <= args.discovery_known_consistency_uncertainty_max <= 1.0
+        ):
+            raise ValueError(
+                "--discovery-known-consistency-uncertainty-max must be in [0, 1]"
+            )
+        if (
+            args.discovery_known_consistency_uncertainty_source != "head"
+            and args.discovery_known_consistency_uncertainty_mc_samples < 2
+        ):
+            raise ValueError(
+                "MC known-anchor uncertainty requires "
+                "--discovery-known-consistency-uncertainty-mc-samples >= 2"
+            )
+        if not 0.0 < args.joint_known_confidence_threshold <= 1.0:
+            raise ValueError("--joint-known-confidence-threshold must be in (0, 1]")
+    if args.joint_novel_ema_weights and (
+        not args.joint_novel_mass or args.discovery_selection_model != "ema"
+    ):
+        raise ValueError(
+            "--joint-novel-ema-weights requires --joint-novel-mass and "
+            "--discovery-selection-model ema"
+        )
+    if args.alpha_reciprocal > 0.0 and args.reciprocal_points <= 0:
+        raise ValueError("--alpha-reciprocal requires --reciprocal-points greater than zero")
+    if args.alpha_reciprocal > 0.0 and (
+        not args.discovery_pool or args.discovery_pool_mode != "unknown"
+    ):
+        raise ValueError(
+            "reciprocal-point discovery loss requires --discovery-pool with a pure unknown pool"
+        )
+    set_seed(args.seed if args.model_seed is None else args.model_seed)
+    bundle = build_bundle_from_args(args)
+    rejection_coarse_by_known_label = None
+    if args.alpha_rejection_superclass_supcon > 0.0:
+        if args.dataset.lower() != "cifar100":
+            raise ValueError("superclass-aware rejection SupCon is currently defined only for CIFAR-100")
+        if args.rejection_feature_dim <= 0:
+            raise ValueError("superclass-aware rejection SupCon requires --rejection-feature-dim > 0")
+        if not args.split_path or not Path(args.split_path).is_file():
+            raise ValueError("superclass-aware rejection SupCon requires an existing --split-path with taxonomy")
+        split_metadata = load_json(args.split_path)
+        fine_to_coarse = split_metadata.get("fine_to_coarse")
+        if not isinstance(fine_to_coarse, dict):
+            raise ValueError("split metadata must contain fine_to_coarse")
+        try:
+            fine_to_coarse = {int(fine): int(coarse) for fine, coarse in fine_to_coarse.items()}
+            rejection_coarse_by_known_label = [
+                fine_to_coarse[int(raw_class)] for raw_class in bundle.known_classes
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("split taxonomy does not cover all known CIFAR-100 classes") from exc
+    if args.checkpoint_selection != "known_acc":
+        if bundle.open_val is None:
+            raise ValueError(
+                "open-set checkpoint selection requires a non-empty open validation split"
+            )
+        open_known_fraction = known_proportion(bundle.open_val)
+        if (
+            open_known_fraction is None
+            or not 0.0 < float(open_known_fraction) < 1.0
+        ):
+            raise ValueError(
+                "open validation must contain both known and unknown samples; "
+                f"observed known fraction={open_known_fraction}"
+            )
     device = resolve_device(args.device)
     print(f"device: {device}")
     train_loader = build_loader(bundle.train, args.batch_size, True, args.num_workers)
     val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
-    discovery_loader = None
-    uses_discovery_regularizer = (
-        args.alpha_discovery_unknown > 0.0
-        or args.alpha_discovery_energy > 0.0
-        or args.alpha_discovery_selective_unknown > 0.0
-        or args.alpha_discovery_selective_energy > 0.0
-        or args.joint_discovery
+    open_checkpoint_loader = (
+        build_loader(bundle.open_val, args.batch_size, False, args.num_workers)
+        if args.checkpoint_selection != "known_acc" and bundle.open_val is not None
+        else None
     )
+    discovery_loader = None
+    outlier_loader = None
+    uses_outlier_exposure = (
+        args.alpha_outlier_uniform > 0.0
+        or args.alpha_outlier_energy > 0.0
+        or args.alpha_outlier_uncertainty > 0.0
+        or args.alpha_outlier_feature_margin > 0.0
+        or args.alpha_outlier_rejection_feature_margin > 0.0
+        or args.alpha_outlier_rejection_uniform > 0.0
+    )
+    if uses_outlier_exposure:
+        if not args.outlier_dataset or not args.outlier_data_root:
+            raise ValueError(
+                "Outlier Exposure requires --outlier-dataset and --outlier-data-root."
+            )
+        outlier_dataset = build_outlier_dataset(
+            args.outlier_dataset,
+            args.outlier_data_root,
+            args.image_size,
+            download=args.outlier_download,
+            transform_profile=args.transform_profile,
+        )
+        outlier_loader = build_loader(
+            outlier_dataset,
+            args.outlier_batch_size or args.batch_size,
+            True,
+            args.num_workers,
+        )
+    uses_discovery_regularizer, uses_mixed_pu = discovery_training_requirements(args)
     if uses_discovery_regularizer and not args.discovery_pool:
         raise ValueError("Discovery regularizers require --discovery-pool.")
+    if uses_mixed_pu:
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "PU discovery training requires --discovery-pool-mode mixed; "
+                "it must not treat a pure unknown pool as unlabeled mixture."
+            )
+        requested_prior = str(args.discovery_uncertainty_known_prior).strip().lower()
+        if requested_prior != "auto":
+            try:
+                prior_value = float(args.discovery_uncertainty_known_prior)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "--discovery-uncertainty-known-prior must be 'auto' or a value in (0, 1)."
+                ) from exc
+            if not 0.0 < prior_value < 1.0:
+                raise ValueError("--discovery-uncertainty-known-prior must be in (0, 1).")
+        elif bundle.discovery_pool is None or known_proportion(bundle.discovery_pool) is None:
+            raise ValueError(
+                "Cannot infer the mixed-pool known prior; provide an explicit "
+                "--discovery-uncertainty-known-prior value."
+            )
+    if args.alpha_discovery_rejection_boundary > 0.0:
+        if args.rejection_feature_dim <= 0:
+            raise ValueError(
+                "--alpha-discovery-rejection-boundary requires "
+                "--rejection-feature-dim > 0"
+            )
+        if args.discovery_pool_mode != "mixed":
+            raise ValueError(
+                "--alpha-discovery-rejection-boundary requires "
+                "--discovery-pool-mode mixed"
+            )
+        if args.discovery_boundary_mode != "pu":
+            raise ValueError(
+                "--alpha-discovery-rejection-boundary requires "
+                "--discovery-boundary-mode pu"
+            )
+    resolved_discovery_uncertainty_known_prior = None
+    if uses_mixed_pu:
+        measured_prior = known_proportion(bundle.discovery_pool)
+        resolved_discovery_uncertainty_known_prior = (
+            float(measured_prior)
+            if str(args.discovery_uncertainty_known_prior).strip().lower() == "auto"
+            else float(args.discovery_uncertainty_known_prior)
+        )
+        if not 0.0 < resolved_discovery_uncertainty_known_prior < 1.0:
+            raise ValueError(
+                "The resolved mixed-pool known prior must be in (0, 1); "
+                f"got {resolved_discovery_uncertainty_known_prior}."
+            )
+        print(
+            "mixed discovery known prior: "
+            f"requested={args.discovery_uncertainty_known_prior} "
+            f"resolved={resolved_discovery_uncertainty_known_prior:.6f}"
+        )
     if args.discovery_pool and bundle.discovery_pool is not None and len(bundle.discovery_pool) > 0:
+        if args.discovery_knn_boundary_objective == "signed_support" and (
+            args.alpha_discovery_knn_boundary > 0.0
+            or args.alpha_discovery_rejection_knn_boundary > 0.0
+        ):
+            if args.discovery_pool_mode != "mixed":
+                raise ValueError(
+                    "signed_support KNN boundary requires discovery_pool_mode='mixed'"
+                )
+            if args.discovery_knn_risk not in {"hard_nnpu", "soft_nnpu"}:
+                raise ValueError(
+                    "signed_support KNN boundary requires --discovery-knn-risk="
+                    "hard_nnpu or soft_nnpu"
+                )
         if args.discovery_pool_mode == "mixed" and (
-            args.alpha_discovery_unknown > 0.0 or args.alpha_discovery_energy > 0.0
+            args.alpha_discovery_unknown > 0.0
+            or args.alpha_discovery_energy > 0.0
+            or args.alpha_discovery_uniform > 0.0
+            or (
+                (
+                    args.alpha_discovery_feature_margin > 0.0
+                    or args.alpha_discovery_feature_separation > 0.0
+                    or (
+                        args.alpha_discovery_boundary > 0.0
+                        and args.discovery_boundary_mode == "pure"
+                    )
+                )
+                and not args.discovery_feature_candidate_gating
+            )
+            or (
+                args.alpha_discovery_knn_boundary > 0.0
+                and args.discovery_knn_risk == "pure"
+                and not args.discovery_feature_candidate_gating
+            )
+            or (
+                args.alpha_discovery_rejection_knn_boundary > 0.0
+                and args.discovery_knn_risk == "pure"
+                and not args.discovery_feature_candidate_gating
+            )
+            or args.alpha_discovery_uncertainty_separation > 0.0
+            or (
+                args.alpha_discovery_objectosphere > 0.0
+                and not args.discovery_feature_candidate_gating
+            )
         ):
             raise ValueError(
-                "alpha-discovery-unknown/energy requires --discovery-pool-mode unknown."
+                "full-pool discovery unknown/energy/feature-boundary losses require "
+                "--discovery-pool-mode unknown; use --discovery-feature-candidate-gating "
+                "for feature losses on a mixed pool."
             )
         discovery_loader = build_loader(
-            TwoViewDataset(bundle.discovery_pool),
+            TwoViewDataset(bundle.discovery_pool, include_metadata=True),
             args.discovery_batch_size or args.batch_size,
             True,
             args.num_workers,
         )
     teacher_backbone = args.teacher_backbone or args.backbone
     student_backbone = args.student_backbone or args.backbone
+    teacher_rejection_feature_dim = (
+        int(getattr(args, "teacher_rejection_feature_dim", 0))
+        if int(getattr(args, "teacher_rejection_feature_dim", 0)) > 0
+        else (
+            args.rejection_feature_dim
+            if args.alpha_rejection_kd > 0.0 or args.alpha_rejection_feat_kd > 0.0
+            else 0
+        )
+    )
     teacher = build_model(
         len(bundle.known_classes),
         backbone=teacher_backbone,
         proj_dim=args.proj_dim,
         dropout=args.dropout,
         pretrained=args.pretrained,
+        cifar_stem=args.cifar_stem,
+        rejection_feature_dim=teacher_rejection_feature_dim,
     ).to(device)
     student = build_model(
         len(bundle.known_classes),
@@ -788,7 +3488,71 @@ def fit_student(args):
         proj_dim=args.proj_dim,
         dropout=args.dropout,
         pretrained=args.pretrained,
+        cifar_stem=args.cifar_stem,
+        rejection_feature_dim=args.rejection_feature_dim,
+        independent_rejection_encoder=args.independent_rejection_encoder,
+        independent_rejection_encoder_init=args.independent_rejection_encoder_init,
+        independent_rejection_input_norm=args.independent_rejection_input_norm,
     ).to(device)
+    if not 0.0 <= float(args.student_ema_decay) < 1.0:
+        raise ValueError("--student-ema-decay must be in [0, 1)")
+    if int(args.student_ema_warmup_epochs) < 0:
+        raise ValueError("--student-ema-warmup-epochs must be non-negative")
+    student_ema = None
+    if args.student_ema_decay > 0.0:
+        student_ema = copy.deepcopy(student).to(device)
+        student_ema.eval()
+        for parameter in student_ema.parameters():
+            parameter.requires_grad_(False)
+    knn_support_loader = None
+    needs_known_support_bank = (
+        args.alpha_discovery_knn_boundary > 0.0
+        or args.alpha_discovery_rejection_knn_boundary > 0.0
+        or (
+            args.discovery_feature_candidate_gating
+            and args.discovery_feature_candidate_space
+            in {
+                "rejection_support",
+                "shared_boundary",
+                "shared_boundary_consensus",
+                "shared_boundary_soft_consensus",
+            }
+        )
+        or (
+            args.alpha_discovery_known_consistency > 0.0
+            and args.discovery_known_consistency_gate != "confidence"
+        )
+        or (
+            args.alpha_discovery_uncertainty_pu > 0.0
+            and args.discovery_uncertainty_pu_weight_source
+            in {"known_support", "support_consensus", "support_blended"}
+        )
+    )
+    if needs_known_support_bank:
+        if args.discovery_knn_k <= 0:
+            raise ValueError("--discovery-knn-k must be positive")
+        if not 0.5 <= args.discovery_knn_quantile < 1.0:
+            raise ValueError("--discovery-knn-quantile must be in [0.5, 1.0)")
+        if args.discovery_knn_margin < 0.0:
+            raise ValueError("--discovery-knn-margin must be non-negative")
+        if not 0.0 < args.discovery_knn_known_prior < 1.0:
+            raise ValueError("--discovery-knn-known-prior must be in (0, 1)")
+        if args.discovery_knn_softness <= 0.0:
+            raise ValueError("--discovery-knn-softness must be positive")
+        if (
+            args.alpha_discovery_rejection_knn_boundary > 0.0
+            and args.rejection_feature_dim <= 0
+        ):
+            raise ValueError(
+                "--alpha-discovery-rejection-knn-boundary requires "
+                "--rejection-feature-dim > 0"
+            )
+        deterministic_known_train = clone_dataset_with_eval_transform(
+            bundle.train, args.image_size, args.transform_profile
+        )
+        knn_support_loader = build_loader(
+            deterministic_known_train, args.batch_size, False, args.num_workers
+        )
     novel_head = None
     if args.joint_discovery:
         novel_head = NovelPrototypeHead(
@@ -802,24 +3566,128 @@ def fit_student(args):
         discovery_selection_model.eval()
         for parameter in discovery_selection_model.parameters():
             parameter.requires_grad_(False)
+    joint_pseudo_target_model = None
+    joint_pseudo_target_novel_head = None
+    if args.joint_pseudo_ema_target:
+        if novel_head is None:
+            raise ValueError("--joint-pseudo-ema-target requires --joint-discovery")
+        joint_pseudo_target_model = copy.deepcopy(student).to(device)
+        joint_pseudo_target_novel_head = copy.deepcopy(novel_head).to(device)
+        joint_pseudo_target_model.eval()
+        joint_pseudo_target_novel_head.eval()
+        for parameter in joint_pseudo_target_model.parameters():
+            parameter.requires_grad_(False)
+        for parameter in joint_pseudo_target_novel_head.parameters():
+            parameter.requires_grad_(False)
     teacher_ckpt = resolve_input_checkpoint(args.teacher_ckpt, args.work_dir, "teacher.pt")
-    load_checkpoint(teacher, teacher_ckpt, device)
-    trainable_parameters = list(student.parameters())
+    load_checkpoint(
+        teacher,
+        teacher_ckpt,
+        device,
+        expected_known_classes=bundle.known_classes,
+        expected_novel_classes=bundle.novel_classes,
+    )
+    if args.discovery_selection_model == "teacher":
+        teacher.eval()
+        for parameter in teacher.parameters():
+            parameter.requires_grad_(False)
+        discovery_selection_model = teacher
+    vos_gaussian_stats = None
+
+    def refresh_vos_gaussian_stats():
+        raw_stats = collect_diagonal_gaussian_stats(
+            student,
+            build_loader(bundle.train, args.batch_size, False, args.num_workers),
+            device,
+            len(bundle.known_classes),
+            include_shared_covariance=False,
+        )
+        return {
+            "means": torch.as_tensor(raw_stats["means"], dtype=torch.float32, device=device),
+            "variances": torch.as_tensor(raw_stats["variances"], dtype=torch.float32, device=device),
+        }
+
+    if args.alpha_vos > 0.0 and args.vos_mode == "gaussian":
+        vos_gaussian_stats = refresh_vos_gaussian_stats()
+        print("initialized VOS class-conditional Gaussian statistics")
+    if args.encoder_lr_scale < 0.0:
+        raise ValueError("--encoder-lr-scale must be non-negative")
+    if not 0.0 < args.encoder_lr_decay <= 1.0:
+        raise ValueError("--encoder-lr-decay must be in (0, 1]")
+    if args.rejection_known_ce_decay_start_epoch < 0:
+        raise ValueError("--rejection-known-ce-decay-start-epoch must be non-negative")
+    if args.rejection_known_ce_decay_epochs < 0:
+        raise ValueError("--rejection-known-ce-decay-epochs must be non-negative")
+    if not 0.0 <= args.rejection_known_ce_final_scale <= 1.0:
+        raise ValueError("--rejection-known-ce-final-scale must be in [0, 1]")
+    if args.alpha_rejection_variance_floor < 0.0:
+        raise ValueError("--alpha-rejection-variance-floor must be non-negative")
+    if args.rejection_variance_floor <= 0.0:
+        raise ValueError("--rejection-variance-floor must be positive")
+    encoder_parameters = list(student.encoder.parameters())
+    rejection_encoder_parameters = (
+        list(student.rejection_encoder.parameters())
+        if student.rejection_encoder is not None
+        else []
+    )
+    encoder_parameter_ids = {
+        id(parameter)
+        for parameter in encoder_parameters + rejection_encoder_parameters
+    }
+    head_parameters = [
+        parameter
+        for parameter in student.parameters()
+        if id(parameter) not in encoder_parameter_ids
+    ]
+    reciprocal_points = None
+    if args.reciprocal_points > 0:
+        reciprocal_points = torch.nn.Parameter(
+            torch.randn(args.reciprocal_points, student.encoder.out_dim, device=device) * 0.02
+        )
+    optimizer_groups = build_encoder_optimizer_groups(
+        student.encoder,
+        base_lr=args.lr * args.encoder_lr_scale,
+        layer_decay=args.encoder_lr_decay,
+    ) + [
+        {
+            "params": head_parameters,
+            "lr": args.lr,
+        },
+    ]
+    if student.rejection_encoder is not None:
+        optimizer_groups += build_encoder_optimizer_groups(
+            student.rejection_encoder,
+            base_lr=args.lr * args.encoder_lr_scale,
+            layer_decay=1.0,
+        )
     if novel_head is not None:
-        trainable_parameters += list(novel_head.parameters())
-    optim = torch.optim.AdamW(trainable_parameters, lr=args.lr, weight_decay=args.weight_decay)
+        optimizer_groups.append({"params": list(novel_head.parameters()), "lr": args.lr})
+    if reciprocal_points is not None:
+        optimizer_groups.append({"params": [reciprocal_points], "lr": args.lr})
+    optim = torch.optim.AdamW(optimizer_groups, weight_decay=args.weight_decay)
     best_acc = -1.0
+    best_selection_score = -float("inf")
+    best_open_checkpoint_stats = None
     best_state = None
     best_novel_head_state = None
+    best_reciprocal_state = None
     best_epoch = 0
+    history = []
+    joint_memory_bank = {}
     prototype_init_stats = None
     prototype_warmup = max(int(args.joint_prototype_warmup_epochs), 0)
-    if (
-        novel_head is not None
-        and args.joint_prototype_init in {"kmeans", "kmeans_candidates"}
-        and prototype_warmup == 0
-    ):
-        prototype_init_stats = initialize_novel_head_kmeans(
+    prototype_refresh_epochs = max(int(args.joint_prototype_refresh_epochs), 0)
+    prototype_refresh_history = []
+
+    def sync_pseudo_target_novel_head():
+        """Keep the EMA pseudo-label head aligned with refreshed prototypes."""
+        if joint_pseudo_target_novel_head is None or novel_head is None:
+            return
+        joint_pseudo_target_novel_head.load_state_dict(novel_head.state_dict())
+        joint_pseudo_target_novel_head.eval()
+
+    def refresh_novel_prototypes(epoch: int, reason: str):
+        stats = initialize_novel_head_kmeans(
             novel_head,
             student,
             discovery_loader,
@@ -829,29 +3697,187 @@ def fit_student(args):
             candidate_ratio=args.joint_prototype_candidate_ratio,
             candidates_only=args.joint_prototype_init == "kmeans_candidates",
         )
-        print(f"novel prototype KMeans init: {prototype_init_stats}")
+        event = {"epoch": int(epoch), "reason": reason, **stats}
+        prototype_refresh_history.append(event)
+        sync_pseudo_target_novel_head()
+        print(f"novel prototype KMeans refresh: {event}")
+        return stats
+
+    if (
+        novel_head is not None
+        and args.joint_prototype_init in {"kmeans", "kmeans_candidates"}
+        and prototype_warmup == 0
+    ):
+        prototype_init_stats = refresh_novel_prototypes(0, "initial")
     for epoch in range(args.epochs):
         if (
             novel_head is not None
             and args.joint_prototype_init in {"kmeans", "kmeans_candidates"}
-            and epoch == prototype_warmup
-            and prototype_warmup > 0
-        ):
-            prototype_init_stats = initialize_novel_head_kmeans(
-                novel_head,
-                student,
-                discovery_loader,
-                device,
-                args.joint_num_novel,
-                args.seed,
-                candidate_ratio=args.joint_prototype_candidate_ratio,
-                candidates_only=args.joint_prototype_init == "kmeans_candidates",
+            and (
+                (
+                    prototype_warmup > 0
+                    and epoch == prototype_warmup
+                )
+                or (
+                    prototype_refresh_epochs > 0
+                    and epoch > 0
+                    and epoch >= prototype_warmup
+                    and (epoch - prototype_warmup) % prototype_refresh_epochs == 0
+                )
             )
-            print(f"novel prototype KMeans init: {prototype_init_stats}")
+        ):
+            reason = "warmup" if epoch == prototype_warmup and prototype_warmup > 0 else "periodic"
+            prototype_init_stats = refresh_novel_prototypes(epoch + 1, reason)
+        discovery_knn_boundary_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.discovery_knn_warmup_epochs,
+            ramp_epochs=args.discovery_knn_ramp_epochs,
+        )
+        discovery_knn_support = None
+        rejection_knn_support = None
+        support_pu_active = (
+            args.alpha_discovery_uncertainty_pu > 0.0
+            and args.discovery_uncertainty_pu_weight_source
+            in {"known_support", "support_consensus", "support_blended"}
+        )
+        if (
+            (
+                args.alpha_discovery_knn_boundary > 0.0
+                or args.alpha_discovery_rejection_knn_boundary > 0.0
+                or support_pu_active
+                or (
+                    args.alpha_discovery_known_consistency > 0.0
+                    and args.discovery_known_consistency_gate != "confidence"
+                )
+                or (
+                    args.discovery_feature_candidate_gating
+                    and args.discovery_feature_candidate_space
+                    in {
+                        "shared_boundary",
+                        "shared_boundary_consensus",
+                        "shared_boundary_soft_consensus",
+                    }
+                )
+            )
+            and (
+                discovery_knn_boundary_weight > 0.0
+                or support_pu_active
+                or (
+                    args.alpha_discovery_known_consistency > 0.0
+                    and args.discovery_known_consistency_gate != "confidence"
+                )
+                or (
+                    args.discovery_feature_candidate_gating
+                    and args.discovery_feature_candidate_space
+                    in {
+                        "shared_boundary",
+                        "shared_boundary_consensus",
+                        "shared_boundary_soft_consensus",
+                    }
+                )
+            )
+        ):
+            if (
+                args.alpha_discovery_knn_boundary > 0.0
+                or support_pu_active
+                or (
+                    args.alpha_discovery_known_consistency > 0.0
+                    and args.discovery_known_consistency_gate != "confidence"
+                )
+                or (
+                    args.discovery_feature_candidate_gating
+                    and args.discovery_feature_candidate_space
+                    in {
+                        "shared_boundary",
+                        "shared_boundary_consensus",
+                        "shared_boundary_soft_consensus",
+                    }
+                )
+            ):
+                discovery_knn_support = collect_classwise_knn_support(
+                    student,
+                    knn_support_loader,
+                    device,
+                    len(bundle.known_classes),
+                    k=args.discovery_knn_k,
+                    quantile=args.discovery_knn_quantile,
+                )
+            if (
+                args.alpha_discovery_rejection_knn_boundary > 0.0
+                or (
+                    args.discovery_feature_candidate_gating
+                    and args.discovery_feature_candidate_space == "rejection_support"
+                )
+            ):
+                rejection_knn_support = collect_classwise_knn_support(
+                    student,
+                    knn_support_loader,
+                    device,
+                    len(bundle.known_classes),
+                    k=args.discovery_knn_k,
+                    quantile=args.discovery_knn_quantile,
+                    feature_key="rejection_features",
+                )
+                rejection_observed_radii = rejection_knn_support["radii"][
+                    rejection_knn_support["counts"].to(device) > 0
+                ]
+                print(
+                    "known rejection kNN support bank: "
+                    f"samples={int(rejection_knn_support['counts'].sum())}, "
+                    f"classes={int((rejection_knn_support['counts'] > 0).sum())}, "
+                    f"radius_median={rejection_observed_radii.median().item():.4f}"
+                )
+            if discovery_knn_support is not None:
+                observed_radii = discovery_knn_support["radii"][
+                    discovery_knn_support["counts"].to(device) > 0
+                ]
+                print(
+                    "known kNN support bank: "
+                    f"samples={int(discovery_knn_support['counts'].sum())}, "
+                    f"classes={int((discovery_knn_support['counts'] > 0).sum())}, "
+                    f"radius_median={observed_radii.median().item():.4f}"
+                )
         selective_weight = scheduled_weight(
             epoch,
             warmup_epochs=args.discovery_selective_warmup_epochs,
             ramp_epochs=args.discovery_selective_ramp_epochs,
+        )
+        uncertainty_separation_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.uncertainty_separation_warmup_epochs,
+            ramp_epochs=args.uncertainty_separation_ramp_epochs,
+        )
+        uncertainty_pu_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.discovery_uncertainty_pu_warmup_epochs,
+            ramp_epochs=args.discovery_uncertainty_pu_ramp_epochs,
+        )
+        discovery_uniform_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.discovery_uniform_warmup_epochs,
+            ramp_epochs=args.discovery_uniform_ramp_epochs,
+        )
+        uncertainty_feature_margin_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.discovery_uncertainty_feature_margin_warmup_epochs,
+            ramp_epochs=args.discovery_uncertainty_feature_margin_ramp_epochs,
+        )
+        discovery_rejection_boundary_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.discovery_rejection_boundary_warmup_epochs,
+            ramp_epochs=args.discovery_rejection_boundary_ramp_epochs,
+            stop_epoch=args.discovery_rejection_boundary_stop_epoch,
+        )
+        angular_weight = scheduled_weight(
+            epoch,
+            warmup_epochs=args.angular_warmup_epochs,
+            ramp_epochs=args.angular_ramp_epochs,
+        )
+        rejection_known_ce_scale = scheduled_decay_scale(
+            epoch,
+            start_epoch=args.rejection_known_ce_decay_start_epoch,
+            decay_epochs=args.rejection_known_ce_decay_epochs,
+            final_scale=args.rejection_known_ce_final_scale,
         )
         stats = train_one_epoch_student(
             student,
@@ -860,25 +3886,171 @@ def fit_student(args):
             optim,
             device,
             alpha_unc=args.alpha_unc,
+            alpha_rejection_known_ce=(
+                args.alpha_rejection_known_ce * rejection_known_ce_scale
+            ),
+            alpha_rejection_supcon=args.alpha_rejection_supcon,
+            alpha_rejection_superclass_supcon=args.alpha_rejection_superclass_supcon,
+            rejection_coarse_by_known_label=rejection_coarse_by_known_label,
+            alpha_rejection_center=args.alpha_rejection_center,
+            alpha_rejection_decorrelation=args.alpha_rejection_decorrelation,
+            alpha_rejection_variance_floor=args.alpha_rejection_variance_floor,
+            rejection_variance_floor=args.rejection_variance_floor,
+            alpha_rejection_kd=args.alpha_rejection_kd,
+            alpha_rejection_feat_kd=args.alpha_rejection_feat_kd,
+            rejection_feature_kd_weighting=args.rejection_feature_kd_weighting,
+            alpha_discovery_rejection_pu_feature_margin=(
+                args.alpha_discovery_rejection_pu_feature_margin
+            ),
+            discovery_rejection_pu_risk=args.discovery_rejection_pu_risk,
+            discovery_rejection_pu_softness=args.discovery_rejection_pu_softness,
+            alpha_discovery_rejection_boundary=(
+                args.alpha_discovery_rejection_boundary
+                * discovery_rejection_boundary_weight
+            ),
             alpha_kd=args.alpha_kd,
             alpha_feat_kd=args.alpha_feat_kd,
             alpha_supcon=args.alpha_supcon,
+            alpha_raw_supcon=args.alpha_raw_supcon,
             alpha_proto=args.alpha_proto,
+            alpha_center=args.alpha_center,
+            alpha_radius=args.alpha_radius,
+            radius=args.known_feature_radius,
+            alpha_center_margin=args.alpha_center_margin,
+            center_margin=args.center_margin,
+            alpha_proto_repulsion=args.alpha_proto_repulsion,
+            proto_repulsion_margin=args.proto_repulsion_margin,
             alpha_proxy=args.alpha_proxy,
             alpha_pseudo=args.alpha_pseudo,
             alpha_energy=args.alpha_energy,
+            alpha_discovery_energy_pu=args.alpha_discovery_energy_pu,
+            discovery_energy_pu_known_prior=args.discovery_energy_pu_known_prior,
+            discovery_energy_pu_risk=args.discovery_energy_pu_risk,
+            discovery_energy_pu_softness=args.discovery_energy_pu_softness,
+            alpha_vos=args.alpha_vos,
+            alpha_vos_rejection=args.alpha_vos_rejection,
+            vos_mode=args.vos_mode,
+            vos_gaussian_stats=vos_gaussian_stats,
+            vos_tail_scale=args.vos_tail_scale,
+            vos_noise_scale=args.vos_noise_scale,
+            vos_interclass_pairing=args.vos_interclass_pairing,
+            vos_detach_source=not args.vos_source_gradient,
+            vos_boundary_fraction=args.vos_boundary_fraction,
+            vos_uniform_weight=args.vos_uniform_weight,
             pseudo_mode=args.pseudo_mode,
             pseudo_feature_noise=args.pseudo_feature_noise,
             uncertainty_target_mode=args.uncertainty_target_mode,
             temperature=args.temperature,
             kd_mode=args.kd_mode,
+            kd_uncertainty_source=args.kd_uncertainty_source,
+            kd_mc_samples=args.kd_mc_samples,
             uncertainty_weight_mode=args.uncertainty_weight_mode,
             uncertainty_weight_min=args.uncertainty_weight_min,
             uncertainty_weight_max=args.uncertainty_weight_max,
+            audit_loss_gradients=args.audit_loss_gradients,
             discovery_loader=discovery_loader,
             alpha_discovery=args.alpha_discovery,
+            alpha_discovery_feature_consistency=args.alpha_discovery_feature_consistency,
+            alpha_discovery_rejection_consistency=args.alpha_discovery_rejection_consistency,
+            alpha_discovery_rejection_score_consistency=(
+                args.alpha_discovery_rejection_score_consistency
+            ),
+            alpha_discovery_projection_consistency=args.alpha_discovery_projection_consistency,
             alpha_discovery_unknown=args.alpha_discovery_unknown,
             alpha_discovery_energy=args.alpha_discovery_energy,
+            alpha_discovery_uniform=args.alpha_discovery_uniform * discovery_uniform_weight,
+            alpha_discovery_feature_margin=args.alpha_discovery_feature_margin,
+            discovery_feature_margin=args.discovery_feature_margin,
+            alpha_discovery_rejection_feature_margin=args.alpha_discovery_rejection_feature_margin,
+            discovery_rejection_feature_margin=args.discovery_rejection_feature_margin,
+            alpha_discovery_rejection_feature_separation=args.alpha_discovery_rejection_feature_separation,
+            discovery_rejection_feature_separation_margin=args.discovery_rejection_feature_separation_margin,
+            discovery_rejection_feature_separation_temperature=args.discovery_rejection_feature_separation_temperature,
+            alpha_discovery_uncertainty_feature_margin=(
+                args.alpha_discovery_uncertainty_feature_margin
+                * uncertainty_feature_margin_weight
+            ),
+            discovery_uncertainty_feature_margin=args.discovery_uncertainty_feature_margin,
+            discovery_feature_margin_weight_source=args.discovery_feature_margin_weight_source,
+            discovery_feature_margin_weight_power=args.discovery_feature_margin_weight_power,
+            discovery_uncertainty_feature_margin_mode=(
+                args.discovery_uncertainty_feature_margin_mode
+            ),
+            alpha_discovery_objectosphere=args.alpha_discovery_objectosphere,
+            objectosphere_known_radius=args.objectosphere_known_radius,
+            objectosphere_unknown_weight=args.objectosphere_unknown_weight,
+            alpha_discovery_feature_separation=args.alpha_discovery_feature_separation,
+            discovery_feature_separation_margin=args.discovery_feature_separation_margin,
+            discovery_feature_separation_temperature=args.discovery_feature_separation_temperature,
+            discovery_feature_candidate_gating=args.discovery_feature_candidate_gating,
+            discovery_cross_view_gating=args.discovery_cross_view_gating,
+            discovery_single_view_candidate_gating=(
+                args.discovery_single_view_candidate_gating
+            ),
+            discovery_cross_view_aggregation=args.discovery_cross_view_aggregation,
+             discovery_feature_candidate_space=args.discovery_feature_candidate_space,
+            discovery_feature_candidate_soft_floor=args.discovery_feature_candidate_soft_floor,
+            discovery_pool_mode=args.discovery_pool_mode,
+            alpha_discovery_boundary=args.alpha_discovery_boundary,
+            discovery_boundary_mode=args.discovery_boundary_mode,
+            discovery_boundary_known_prior=(
+                resolved_discovery_uncertainty_known_prior
+                if resolved_discovery_uncertainty_known_prior is not None
+                else 0.2
+            ),
+            discovery_boundary_pu_risk=args.discovery_boundary_pu_risk,
+            discovery_boundary_pu_softness=args.discovery_boundary_pu_softness,
+            discovery_boundary_margin=args.discovery_boundary_margin,
+            discovery_boundary_prototype_weight=args.discovery_boundary_prototype_weight,
+            discovery_boundary_temperature=args.discovery_boundary_temperature,
+            alpha_discovery_knn_boundary=(
+                args.alpha_discovery_knn_boundary * discovery_knn_boundary_weight
+            ),
+            discovery_knn_support=discovery_knn_support,
+            alpha_discovery_rejection_knn_boundary=(
+                args.alpha_discovery_rejection_knn_boundary
+                * discovery_knn_boundary_weight
+            ),
+            rejection_knn_support=rejection_knn_support,
+            discovery_knn_k=args.discovery_knn_k,
+            discovery_knn_margin=args.discovery_knn_margin,
+            discovery_knn_soft_weighting=args.discovery_knn_soft_weighting,
+            discovery_knn_risk=args.discovery_knn_risk,
+            discovery_knn_known_prior=args.discovery_knn_known_prior,
+            discovery_knn_softness=args.discovery_knn_softness,
+            discovery_knn_selection_conditional=(
+                args.discovery_knn_selection_conditional
+            ),
+            discovery_knn_aggregation=args.discovery_knn_aggregation,
+            discovery_knn_temperature=args.discovery_knn_temperature,
+            discovery_knn_boundary_objective=args.discovery_knn_boundary_objective,
+            alpha_discovery_uncertainty_separation=(
+                args.alpha_discovery_uncertainty_separation
+                * uncertainty_separation_weight
+            ),
+            discovery_uncertainty_loss=args.discovery_uncertainty_loss,
+            discovery_uncertainty_margin=args.discovery_uncertainty_margin,
+            alpha_discovery_uncertainty_pu=(
+                args.alpha_discovery_uncertainty_pu * uncertainty_pu_weight
+            ),
+            discovery_uncertainty_known_prior=(
+                resolved_discovery_uncertainty_known_prior
+                if resolved_discovery_uncertainty_known_prior is not None
+                else 0.2
+            ),
+            discovery_uncertainty_pu_risk=args.discovery_uncertainty_pu_risk,
+            discovery_uncertainty_pu_weight_source=(
+                args.discovery_uncertainty_pu_weight_source
+            ),
+            discovery_uncertainty_pu_weight_temperature=(
+                args.discovery_uncertainty_pu_weight_temperature
+            ),
+            discovery_uncertainty_pu_weight_power=(
+                args.discovery_uncertainty_pu_weight_power
+            ),
+            discovery_uncertainty_pu_detach_features=(
+                args.discovery_uncertainty_pu_detach_features
+            ),
             alpha_discovery_selective_unknown=args.alpha_discovery_selective_unknown * selective_weight,
             alpha_discovery_selective_energy=args.alpha_discovery_selective_energy * selective_weight,
             discovery_select_ratio=args.discovery_select_ratio,
@@ -888,8 +4060,40 @@ def fit_student(args):
             energy_margin=args.energy_margin,
             energy_temperature=args.energy_temperature,
             proxy_temperature=args.proxy_temperature,
+            alpha_angular=args.alpha_angular * angular_weight,
+            angular_margin=args.angular_margin,
+            angular_scale=args.angular_scale,
+            angular_correct_only=args.angular_correct_only,
+            alpha_proxy_anchor=args.alpha_proxy_anchor,
+            proxy_anchor_alpha=args.proxy_anchor_alpha,
+            proxy_anchor_margin=args.proxy_anchor_margin,
+            alpha_hard_proxy_margin=args.alpha_hard_proxy_margin,
+            hard_proxy_margin=args.hard_proxy_margin,
+            reciprocal_points=reciprocal_points,
+            alpha_reciprocal=args.alpha_reciprocal,
+            reciprocal_margin=args.reciprocal_margin,
             discovery_selection_model=discovery_selection_model,
+            discovery_selection_model_updates_ema=(
+                args.discovery_selection_model == "ema"
+            ),
             discovery_ema_decay=args.discovery_ema_decay,
+            alpha_discovery_known_consistency=args.alpha_discovery_known_consistency,
+            discovery_known_consistency_confidence=args.discovery_known_consistency_confidence,
+            discovery_known_consistency_target=args.discovery_known_consistency_target,
+            discovery_known_consistency_gate=args.discovery_known_consistency_gate,
+            discovery_known_consistency_support=discovery_knn_support,
+            discovery_known_consistency_support_multiplier=(
+                args.discovery_known_consistency_support_multiplier
+            ),
+            discovery_known_consistency_uncertainty_max=(
+                args.discovery_known_consistency_uncertainty_max
+            ),
+            discovery_known_consistency_uncertainty_source=(
+                args.discovery_known_consistency_uncertainty_source
+            ),
+            discovery_known_consistency_uncertainty_mc_samples=(
+                args.discovery_known_consistency_uncertainty_mc_samples
+            ),
             discovery_neighbor_filter=args.discovery_neighbor_filter,
             discovery_neighbor_k=args.discovery_neighbor_k,
             discovery_neighbor_min_votes=args.discovery_neighbor_min_votes,
@@ -907,10 +4111,49 @@ def fit_student(args):
             alpha_joint_balance=args.alpha_joint_balance,
             alpha_joint_information=args.alpha_joint_information,
             alpha_joint_neighbor=args.alpha_joint_neighbor,
+            alpha_joint_pseudo=args.alpha_joint_pseudo,
+            alpha_joint_gate=args.alpha_joint_gate,
+            joint_gate_margin=args.joint_gate_margin,
             joint_neighbor_k=args.joint_neighbor_k,
+            alpha_joint_proto_repulsion=args.alpha_joint_proto_repulsion,
+            joint_proto_repulsion_margin=args.joint_proto_repulsion_margin,
             joint_space=args.joint_space,
             alpha_joint_known_ce=args.alpha_joint_known_ce,
             joint_known_temperature=args.joint_known_temperature,
+            joint_mixed_residual=args.joint_mixed_residual,
+            joint_residual_temperature=args.joint_residual_temperature,
+            joint_residual_floor=args.joint_residual_floor,
+            joint_residual_view_agreement=args.joint_residual_view_agreement,
+            joint_novel_mass=args.joint_novel_mass,
+            joint_novel_weight_floor=args.joint_novel_weight_floor,
+            joint_novel_neighbor_support=args.joint_novel_neighbor_support,
+            joint_novel_neighbor_k=args.joint_novel_neighbor_k,
+            joint_novel_ema_weights=args.joint_novel_ema_weights,
+            joint_weighted_sinkhorn=args.joint_weighted_sinkhorn,
+            alpha_joint_memory_neighbor=args.alpha_joint_memory_neighbor,
+            joint_memory_size=args.joint_memory_size,
+            joint_memory_k=args.joint_memory_k,
+            joint_memory_temperature=args.joint_memory_temperature,
+            joint_memory_warmup_size=args.joint_memory_warmup_size,
+            joint_memory_bank=joint_memory_bank,
+            joint_global_assignment=args.joint_global_assignment,
+            joint_global_assignment_memory_weight=args.joint_global_assignment_memory_weight,
+            joint_global_assignment_iterations=args.joint_global_assignment_iterations,
+            joint_pseudo_target_mode=args.joint_pseudo_target_mode,
+            joint_pseudo_target_model=joint_pseudo_target_model,
+            joint_pseudo_target_novel_head=joint_pseudo_target_novel_head,
+            joint_pseudo_target_decay=args.joint_pseudo_ema_decay,
+            joint_known_class_prior=(
+                (
+                    float(resolved_discovery_uncertainty_known_prior)
+                    if resolved_discovery_uncertainty_known_prior is not None
+                    else float(known_proportion(bundle.discovery_pool))
+                )
+                if args.joint_prior_aware_assignments
+                else None
+            ),
+            alpha_joint_novel_margin=args.alpha_joint_novel_margin,
+            joint_novel_margin=args.joint_novel_margin,
             joint_candidate_gating=args.joint_candidate_gating,
             joint_candidate_ratio=args.joint_candidate_ratio,
             joint_candidate_mode=args.joint_candidate_mode,
@@ -919,51 +4162,156 @@ def fit_student(args):
             joint_candidate_min_votes=args.joint_candidate_min_votes,
             joint_candidate_soft_weighting=args.joint_candidate_soft_weighting,
             joint_candidate_weight_floor=args.joint_candidate_weight_floor,
+            joint_mixed_known_consistency=args.joint_mixed_known_consistency,
+            alpha_joint_known_consistency=args.alpha_joint_known_consistency,
+            joint_known_confidence_threshold=args.joint_known_confidence_threshold,
+            joint_known_target=args.joint_known_target,
+            outlier_loader=outlier_loader,
+            alpha_outlier_uniform=args.alpha_outlier_uniform,
+            alpha_outlier_energy=args.alpha_outlier_energy,
+            alpha_outlier_uncertainty=args.alpha_outlier_uncertainty,
+            alpha_outlier_feature_margin=args.alpha_outlier_feature_margin,
+            outlier_feature_margin=args.outlier_feature_margin,
+            alpha_outlier_rejection_feature_margin=args.alpha_outlier_rejection_feature_margin,
+            outlier_rejection_feature_margin=args.outlier_rejection_feature_margin,
+            alpha_outlier_rejection_uniform=args.alpha_outlier_rejection_uniform,
+            freeze_bn_stats=args.freeze_bn_stats,
         )
         stats["discovery_selective_weight"] = selective_weight
-        val_stats = evaluate_classification(student, val_loader, device)
-        print(f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats}")
-        if val_stats["known_acc"] > best_acc:
+        stats["uncertainty_separation_weight"] = uncertainty_separation_weight
+        stats["uncertainty_pu_weight"] = uncertainty_pu_weight
+        stats["discovery_uniform_weight"] = discovery_uniform_weight
+        stats["uncertainty_feature_margin_weight"] = uncertainty_feature_margin_weight
+        stats["angular_weight"] = angular_weight
+        stats["rejection_known_ce_scale"] = rejection_known_ce_scale
+        stats["discovery_knn_boundary_weight"] = discovery_knn_boundary_weight
+        stats["discovery_rejection_boundary_weight"] = (
+            discovery_rejection_boundary_weight
+        )
+        if (
+            args.alpha_vos > 0.0
+            and args.vos_mode == "gaussian"
+            and epoch + 1 < args.epochs
+        ):
+            vos_gaussian_stats = refresh_vos_gaussian_stats()
+        if student_ema is not None:
+            if epoch + 1 <= args.student_ema_warmup_epochs:
+                # Warm-start EMA from a trained online model instead of the
+                # random initialization copied before the first optimizer step.
+                student_ema.load_state_dict(student.state_dict())
+            else:
+                update_ema_model(student_ema, student, decay=args.student_ema_decay)
+        eval_student = student_ema if student_ema is not None else student
+        val_stats = evaluate_classification(eval_student, val_loader, device)
+        geometry_stats = evaluate_representation_geometry(
+            eval_student, val_loader, device, len(bundle.known_classes)
+        )
+        open_checkpoint_stats = None
+        if open_checkpoint_loader is not None:
+            open_checkpoint_stats = evaluate_open_checkpoint_selection(
+                eval_student,
+                open_checkpoint_loader,
+                device,
+                score_mode=args.checkpoint_selection_score,
+            )
+            val_stats["checkpoint_open_auroc"] = open_checkpoint_stats["auroc"]
+            val_stats["checkpoint_open_ks"] = open_checkpoint_stats["ks"]
+        if args.checkpoint_selection == "known_acc":
+            selection_score = float(val_stats["known_acc"])
+        elif args.checkpoint_selection == "open_auroc":
+            selection_score = float(open_checkpoint_stats["auroc"])
+        else:
+            selection_score = float(open_checkpoint_stats["ks"])
+        history.append({
+            "epoch": epoch + 1,
+            "train": stats,
+            "validation": val_stats,
+            "validation_geometry": geometry_stats,
+            "checkpoint_selection": {
+                "criterion": args.checkpoint_selection,
+                "score": selection_score,
+                "open": open_checkpoint_stats,
+            },
+            "prototype_refresh": (
+                prototype_refresh_history[-1]
+                if prototype_refresh_history and prototype_refresh_history[-1]["epoch"] == epoch + 1
+                else None
+            ),
+        })
+        print(
+            f"[student][{epoch+1}/{args.epochs}] {stats} {val_stats} "
+            f"{geometry_stats} checkpoint_selection={selection_score:.6f}"
+        )
+        if args.save_epoch_checkpoints:
+            epoch_dir = ensure_dir(args.work_dir)
+            save_checkpoint(
+                eval_student,
+                epoch_dir / f"student_epoch_{epoch + 1}.pt",
+                extra={
+                    "known_classes": list(bundle.known_classes),
+                    "novel_classes": list(bundle.novel_classes),
+                    "epoch": epoch + 1,
+                    "joint_novel_head": novel_head.state_dict() if novel_head is not None else None,
+                    "reciprocal_points": (
+                        reciprocal_points.detach().cpu() if reciprocal_points is not None else None
+                    ),
+                },
+            )
+        if selection_score > best_selection_score:
+            best_selection_score = selection_score
             best_acc = val_stats["known_acc"]
-            best_state = copy.deepcopy(student.state_dict())
+            best_state = copy.deepcopy(eval_student.state_dict())
             best_novel_head_state = (
                 copy.deepcopy(novel_head.state_dict()) if novel_head is not None else None
             )
+            best_reciprocal_state = (
+                reciprocal_points.detach().clone() if reciprocal_points is not None else None
+            )
             best_epoch = epoch + 1
-            if args.save_epoch_checkpoints:
-                # Persist the currently selected checkpoint as training
-                # proceeds. This keeps the best model available even if a
-                # later diagnostics/checkpoint step is interrupted.
-                save_checkpoint(
-                    student,
-                    ensure_dir(args.work_dir) / "student.pt",
-                    extra={
-                        "known_classes": list(bundle.known_classes),
-                        "novel_classes": list(bundle.novel_classes),
-                        "epoch": best_epoch,
-                        "joint_novel_head": (
-                            novel_head.state_dict() if novel_head is not None else None
-                        ),
-                        "reciprocal_points": (
-                            reciprocal_points.detach().cpu()
-                            if reciprocal_points is not None else None
-                        ),
-                    },
-                )
+            best_open_checkpoint_stats = open_checkpoint_stats
     if best_state is not None:
         student.load_state_dict(best_state)
     if novel_head is not None and best_novel_head_state is not None:
         novel_head.load_state_dict(best_novel_head_state)
+    if reciprocal_points is not None and best_reciprocal_state is not None:
+        reciprocal_points.data.copy_(best_reciprocal_state)
     run_dir = ensure_dir(args.work_dir)
-    save_json(
-        run_dir / "config.json",
+    save_command_config(
+        run_dir,
+        args.command,
         {
             **vars(args),
             "best_epoch": best_epoch,
             "best_val_known_acc": best_acc,
+            "best_checkpoint_selection_score": best_selection_score,
+            "best_open_checkpoint_stats": best_open_checkpoint_stats,
             "prototype_init_stats": prototype_init_stats,
+            "prototype_refresh_history": prototype_refresh_history,
+            "discovery_pool_semantics": (
+                (
+                    "matched_oracle_filtered_novel_only; known samples are held out "
+                    "but excluded from the pool"
+                    if args.matched_discovery_pool
+                    else "oracle_filtered_novel_only (training class labels select the pool)"
+                )
+                if args.discovery_pool_mode == "unknown"
+                else (
+                    "matched_mixed_known_and_novel_equal_size_pool"
+                    if args.matched_discovery_pool
+                    else "unlabeled_mixed_known_and_novel"
+                )
+            ),
+            "matched_discovery_pool_size": (
+                args.matched_pool_size if args.matched_discovery_pool else None
+            ),
+            "matched_discovery_known_prior": (
+                args.matched_known_prior if args.matched_discovery_pool else None
+            ),
+            "discovery_pool_known_proportion": known_proportion(bundle.discovery_pool),
+            "discovery_uncertainty_known_prior_resolved": resolved_discovery_uncertainty_known_prior,
         },
     )
+    save_json(run_dir / "train_history.json", history)
     proto_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
     prototypes = collect_prototypes(student, proto_loader, device, len(bundle.known_classes)).cpu()
     gaussian_stats = collect_diagonal_gaussian_stats(
@@ -976,9 +4324,13 @@ def fit_student(args):
         student_ckpt,
         extra={
             "known_classes": list(bundle.known_classes),
+            "novel_classes": list(bundle.novel_classes),
             "prototypes": prototypes,
             "gaussian_stats": gaussian_stats,
             "joint_novel_head": novel_head.state_dict() if novel_head is not None else None,
+            "reciprocal_points": (
+                reciprocal_points.detach().cpu() if reciprocal_points is not None else None
+            ),
         },
     )
     if novel_head is not None:
@@ -995,35 +4347,81 @@ def fit_student(args):
 
 
 def discover(args):
+    validate_rejector_configuration(args)
     set_seed(args.seed)
-    bundle = build_data_bundle(
-        args.dataset,
-        args.data_root,
-        args.num_known,
-        args.seed,
-        args.image_size,
-        download=args.download,
-        split_path=args.split_path,
-        limit_train=args.limit_train or None,
-        limit_val=args.limit_val or None,
-        limit_test=args.limit_test or None,
-        limit_discovery=args.limit_discovery or None,
-        discovery_pool_mode=args.discovery_pool_mode,
-        open_val_ratio=args.open_val_ratio,
-    )
+    bundle = build_bundle_from_args(args)
     device = resolve_device(args.device)
     print(f"device: {device}")
+    discovery_pool_size = (
+        int(len(bundle.discovery_pool)) if bundle.discovery_pool is not None else 0
+    )
+    discovery_pool_known_fraction = (
+        known_proportion(bundle.discovery_pool)
+        if bundle.discovery_pool is not None and discovery_pool_size > 0
+        else None
+    )
+    if discovery_pool_size > 0:
+        print(
+            "discovery pool protocol: "
+            f"size={discovery_pool_size}, "
+            f"known_fraction={discovery_pool_known_fraction}"
+        )
     test_loader = build_loader(bundle.test, args.batch_size, False, args.num_workers)
-    val_loader = build_loader(bundle.val, args.batch_size, False, args.num_workers)
+    calibration_dataset = bundle.calibration if bundle.calibration is not None else bundle.val
+    val_loader = build_loader(calibration_dataset, args.batch_size, False, args.num_workers)
     model = build_model(
         len(bundle.known_classes),
         backbone=args.student_backbone or args.backbone,
         proj_dim=args.proj_dim,
         dropout=args.dropout,
         pretrained=args.pretrained,
+        cifar_stem=args.cifar_stem,
+        rejection_feature_dim=args.rejection_feature_dim,
+        independent_rejection_encoder=args.independent_rejection_encoder,
+        independent_rejection_encoder_init=args.independent_rejection_encoder_init,
+        independent_rejection_input_norm=args.independent_rejection_input_norm,
     ).to(device)
     ckpt_path = resolve_input_checkpoint(args.student_ckpt, args.work_dir, "student.pt")
-    ckpt = load_checkpoint(model, ckpt_path, device)
+    ckpt = load_checkpoint(
+        model,
+        ckpt_path,
+        device,
+        expected_known_classes=bundle.known_classes,
+        expected_novel_classes=bundle.novel_classes,
+    )
+    react_clip_value = None
+    if args.react_percentile > 0.0:
+        train_stats_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        react_clip_value = collect_activation_clip_value(
+            model, train_stats_loader, device, args.react_percentile
+        )
+        print(f"react activation cap: percentile={args.react_percentile:.2f}, value={react_clip_value:.6f}")
+    knn_bank = None
+    if args.knn_ood:
+        if not 0.5 <= args.knn_support_quantile < 1.0:
+            raise ValueError("--knn-support-quantile must be in [0.5, 1.0)")
+        deterministic_train = clone_dataset_with_eval_transform(
+            bundle.train, args.image_size, args.transform_profile
+        )
+        train_feature_loader = build_loader(
+            deterministic_train, args.batch_size, False, args.num_workers
+        )
+        knn_bank = collect_knn_feature_bank(
+            model,
+            train_feature_loader,
+            device,
+            max_samples=args.knn_bank_size,
+            seed=args.seed,
+            feature_key=args.knn_feature,
+            support_k=args.knn_k,
+            support_quantile=args.knn_support_quantile,
+        )
+        print(f"knn feature bank: {len(knn_bank['features'])} vectors, k={args.knn_k}")
+    vim_stats = None
+    if args.vim_ood:
+        train_feature_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        vim_stats = collect_vim_stats(model, train_feature_loader, device, rank=args.vim_rank)
+        print(f"vim principal subspace: rank={len(vim_stats['components'])}")
     novel_head = None
     novel_head_state = None
     novel_head_temperature = 1.0
@@ -1053,6 +4451,7 @@ def discover(args):
         mc_samples=args.mc_samples,
         odin_epsilon=args.odin_epsilon,
         odin_temperature=args.odin_temperature,
+        react_clip_value=react_clip_value,
     )
     outputs_val = extract_outputs(
         model,
@@ -1061,6 +4460,7 @@ def discover(args):
         mc_samples=args.mc_samples,
         odin_epsilon=args.odin_epsilon,
         odin_temperature=args.odin_temperature,
+        react_clip_value=react_clip_value,
     )
     if novel_head is not None:
         outputs_test = attach_novel_outputs(
@@ -1078,6 +4478,7 @@ def discover(args):
             mc_samples=args.mc_samples,
             odin_epsilon=args.odin_epsilon,
             odin_temperature=args.odin_temperature,
+            react_clip_value=react_clip_value,
         )
         if open_val_loader is not None
         else None
@@ -1086,6 +4487,309 @@ def discover(args):
         outputs_open_val = attach_novel_outputs(
             outputs_open_val, novel_head, device, known_temperature=novel_known_temperature
         )
+    support_diagnostics = {}
+    uncertainty_error_calibrator = None
+    uncertainty_error_calibration = None
+    if args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction", "virtual_rejector"}:
+        if args.rejector_training == "nnpu":
+            if args.score_mode not in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}:
+                raise ValueError(
+                    "nnpu training is only available for feature_rejector modes"
+                )
+            if args.discovery_pool_mode != "mixed":
+                raise ValueError("nnpu rejector training requires --discovery-pool-mode mixed")
+            if not 0.0 < args.rejector_known_prior < 1.0:
+                raise ValueError("--rejector-known-prior must be in (0, 1) for nnpu")
+            if discovery_pool_known_fraction is not None:
+                prior_gap = abs(
+                    float(args.rejector_known_prior) - float(discovery_pool_known_fraction)
+                )
+                if prior_gap > 0.02:
+                    print(
+                        "warning: nnPU rejector prior differs from the actual "
+                        "discovery-pool known fraction by "
+                        f"{prior_gap:.4f}; requested={args.rejector_known_prior:.6f}, "
+                        f"actual={discovery_pool_known_fraction:.6f}"
+                    )
+        if (
+            args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}
+            and args.rejector_strict_mixed
+            and args.discovery_pool_mode == "mixed"
+            and args.open_val_ratio <= 0.0
+        ):
+            raise ValueError(
+                "--rejector-strict-mixed with a mixed pool requires --open-val-ratio > 0"
+            )
+        if args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"} and (
+            bundle.discovery_pool is None or len(bundle.discovery_pool) == 0
+        ):
+            raise ValueError(
+                "feature_rejector requires a non-empty discovery pool; "
+                "use the unknown discovery pool or provide --limit-discovery"
+            )
+        if (
+            args.score_mode in {"feature_rejector", "feature_rejector_fusion", "feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}
+            and args.rejector_strict_mixed
+            and args.discovery_pool_mode == "mixed"
+            and outputs_open_val is not None
+        ):
+            known_open_mask = np.asarray(outputs_open_val["is_known"], dtype=bool)
+            rejector_known_outputs = {
+                key: value[known_open_mask]
+                if isinstance(value, np.ndarray) and value.shape[:1] == known_open_mask.shape
+                else value
+                for key, value in outputs_open_val.items()
+            }
+            if len(rejector_known_outputs["features"]) == 0:
+                raise ValueError("strict mixed rejector found no known open-validation samples")
+            print(
+                "feature rejector strict mixed protocol: using "
+                f"{len(rejector_known_outputs['features'])} held-out known samples"
+            )
+        else:
+            known_support_dataset = bundle.train
+            if args.rejector_known_support_transform == "eval":
+                known_support_dataset = clone_dataset_with_eval_transform(
+                    bundle.train, args.image_size, args.transform_profile
+                )
+            rejector_known_loader = build_loader(
+                known_support_dataset, args.batch_size, False, args.num_workers
+            )
+            rejector_known_outputs = extract_outputs(
+                model,
+                rejector_known_loader,
+                device,
+                mc_samples=(args.rejector_mc_samples if args.rejector_feature_mode in {
+                    "uncertainty_augmented", "support_uncertainty_augmented",
+                    "rejection_uncertainty_augmented",
+                    "rejection_support_uncertainty_augmented",
+                    "rejection_logit_augmented",
+                    "rejection_support_logit_augmented",
+                } else 1),
+            )
+        support_model_for_rejector = None
+        if args.score_mode == "virtual_rejector":
+            feature_rejector = fit_virtual_outlier_rejector(
+                rejector_known_outputs, seed=args.seed
+            )
+            print(
+                "virtual feature rejector: trained on "
+                f"{len(rejector_known_outputs['features'])} known features and "
+                "class-boundary virtual outliers"
+            )
+        else:
+            rejector_unknown_loader = build_loader(
+                bundle.discovery_pool, args.batch_size, False, args.num_workers
+            )
+            rejector_unknown_outputs = extract_outputs(
+                model,
+                rejector_unknown_loader,
+                device,
+                mc_samples=(args.rejector_mc_samples if (
+                    args.rejector_candidate_mode == "mc_epistemic_head_fusion"
+                    or args.rejector_candidate_mode == "mc_epistemic_plus_head_uncertainty"
+                    or args.rejector_feature_mode in {
+                    "uncertainty_augmented", "support_uncertainty_augmented",
+                    "rejection_uncertainty_augmented",
+                    "rejection_support_uncertainty_augmented",
+                    "rejection_logit_augmented",
+                    "rejection_support_logit_augmented",
+                    }
+                ) else 1),
+            )
+            if args.score_mode == "feature_rejector_fusion" or args.rejector_feature_mode in {
+                "support_augmented",
+                "predicted_support_augmented",
+                "support_uncertainty_augmented",
+                "rejection_support_uncertainty_augmented",
+                "rejection_support_augmented",
+                "rejection_balanced_support_augmented",
+                "rejection_support_logit_augmented",
+                "prototype_support_augmented",
+            }:
+                support_model_for_rejector = fit_known_support_rejector(
+                    rejector_known_outputs, quantile=args.support_quantile
+                )
+                support_diagnostics["rejector_support"] = support_model_diagnostics(
+                    support_model_for_rejector
+                )
+                attach_known_support_score(rejector_known_outputs, support_model_for_rejector)
+                attach_known_support_score(rejector_unknown_outputs, support_model_for_rejector)
+            unlabeled_sample_weight = None
+            if args.rejector_pool_selection in {"high_risk", "weighted_boundary"}:
+                if args.rejector_candidate_mode in {"prototype_boundary", "confident_boundary"}:
+                    if support_model_for_rejector is None:
+                        support_model_for_rejector = fit_known_support_rejector(
+                            rejector_known_outputs, quantile=args.support_quantile
+                        )
+                    candidate_features = torch.from_numpy(rejector_unknown_outputs["features"])
+                    candidate_prototypes = torch.from_numpy(support_model_for_rejector["centers"])
+                    candidate_radii = torch.from_numpy(support_model_for_rejector["radii"])
+                    if args.rejector_candidate_mode == "prototype_boundary":
+                        candidate_mask = select_prototype_boundary_candidates(
+                            candidate_features,
+                            candidate_prototypes,
+                            candidate_radii,
+                            ratio=args.rejector_candidate_ratio,
+                        ).numpy()
+                    else:
+                        candidate_mask = select_confident_boundary_candidates(
+                            candidate_features,
+                            torch.from_numpy(rejector_unknown_outputs["logits"]),
+                            candidate_prototypes,
+                            candidate_radii,
+                            ratio=args.rejector_candidate_ratio,
+                        ).numpy()
+                else:
+                    if args.rejector_candidate_mode == "mc_epistemic_head_fusion":
+                        candidate_mask = select_mc_epistemic_head_candidates(
+                            torch.from_numpy(rejector_unknown_outputs["epistemic"]),
+                            torch.from_numpy(rejector_unknown_outputs["head_uncertainty"]),
+                            ratio=args.rejector_candidate_ratio,
+                        ).numpy()
+                    elif args.rejector_candidate_mode == "mc_epistemic_plus_head_uncertainty":
+                        candidate_mask = select_mc_epistemic_plus_head_candidates(
+                            torch.from_numpy(rejector_unknown_outputs["epistemic"]),
+                            torch.from_numpy(rejector_unknown_outputs["head_uncertainty"]),
+                            ratio=args.rejector_candidate_ratio,
+                        )
+                        candidate_mask = candidate_mask.numpy()
+                    else:
+                        pool_logits = torch.from_numpy(rejector_unknown_outputs["logits"])
+                        pool_uncertainty = torch.from_numpy(rejector_unknown_outputs["head_uncertainty"])
+                        candidate_mask = select_discovery_candidates(
+                            pool_logits,
+                            pool_uncertainty,
+                            ratio=args.rejector_candidate_ratio,
+                            mode=args.rejector_candidate_mode,
+                        ).numpy()
+                if int(candidate_mask.sum()) < 2:
+                    raise ValueError("rejector high-risk selection produced fewer than two samples")
+                if args.rejector_pool_selection == "high_risk":
+                    rejector_unknown_outputs = {
+                        key: value[candidate_mask]
+                        if isinstance(value, np.ndarray) and value.shape[:1] == candidate_mask.shape
+                        else value
+                        for key, value in rejector_unknown_outputs.items()
+                    }
+                    print(
+                        "feature rejector pseudo-unknown selection: "
+                        f"{int(candidate_mask.sum())}/{len(candidate_mask)} samples"
+                    )
+                else:
+                    if args.rejector_candidate_mode not in {"prototype_boundary", "confident_boundary"}:
+                        raise ValueError(
+                            "weighted_boundary requires a support-boundary candidate mode"
+                        )
+                    candidate_weight = float(args.rejector_candidate_weight)
+                    if candidate_weight < 1.0:
+                        raise ValueError(
+                            "--rejector-candidate-weight must be at least 1 for weighted_boundary"
+                        )
+                    unlabeled_sample_weight = np.where(
+                        candidate_mask, candidate_weight, 1.0
+                    ).astype(np.float32)
+                    print(
+                        "feature rejector soft boundary weighting: "
+                        f"{int(candidate_mask.sum())}/{len(candidate_mask)} candidates, "
+                        f"weight={candidate_weight:g}, pool retained={len(candidate_mask)}"
+                    )
+            if args.rejector_training == "soft_pu":
+                feature_rejector = fit_pu_feature_rejector(
+                    rejector_known_outputs,
+                    rejector_unknown_outputs,
+                    max_samples=(None if args.rejector_max_samples <= 0 else args.rejector_max_samples),
+                    iterations=args.rejector_pu_iterations,
+                    feature_mode=args.rejector_feature_mode,
+                    seed=args.seed,
+                )
+            elif args.rejector_training == "nnpu":
+                feature_rejector = fit_nnpu_feature_rejector(
+                    rejector_known_outputs,
+                    rejector_unknown_outputs,
+                    known_prior=args.rejector_known_prior,
+                    max_samples=(None if args.rejector_max_samples <= 0 else args.rejector_max_samples),
+                    iterations=max(50, args.rejector_pu_iterations * 75),
+                    feature_mode=args.rejector_feature_mode,
+                    stratified_known=args.rejector_stratified_known,
+                    risk_mode=args.rejector_nnpu_risk,
+                    model_type=args.rejector_nnpu_model,
+                    seed=args.seed,
+                    score_margin_weight=args.rejector_score_margin_weight,
+                    score_margin=args.rejector_score_margin,
+                    unlabeled_sample_weight=unlabeled_sample_weight,
+                )
+            else:
+                feature_rejector = fit_feature_rejector(
+                    rejector_known_outputs,
+                    rejector_unknown_outputs,
+                    max_samples=(None if args.rejector_max_samples <= 0 else args.rejector_max_samples),
+                    feature_mode=args.rejector_feature_mode,
+                    model_type=args.rejector_model,
+                    seed=args.seed,
+                )
+        for extracted in (outputs_test, outputs_val, outputs_open_val):
+            if extracted is not None:
+                if support_model_for_rejector is not None:
+                    attach_known_support_score(extracted, support_model_for_rejector)
+                attach_feature_rejector_score(
+                    extracted, feature_rejector, feature_mode=args.rejector_feature_mode
+                )
+        print(
+            "feature rejector scores attached"
+        )
+        if args.score_mode in {"feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}:
+            uncertainty_error_calibrator, uncertainty_error_calibration = (
+                fit_validation_uncertainty_error_calibrator(outputs_val)
+            )
+            for extracted in (outputs_test, outputs_val, outputs_open_val):
+                if extracted is not None:
+                    attach_validation_uncertainty_error_score(
+                        extracted, uncertainty_error_calibrator
+                    )
+            print("validation-only calibrated uncertainty scores attached")
+    if args.score_mode == "known_support":
+        support_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        support_outputs = extract_outputs(model, support_loader, device, mc_samples=1)
+        support_model = fit_known_support_rejector(
+            support_outputs, quantile=args.support_quantile
+        )
+        support_diagnostics["detector_support"] = support_model_diagnostics(support_model)
+        for extracted in (outputs_test, outputs_val, outputs_open_val):
+            if extracted is not None:
+                attach_known_support_score(extracted, support_model)
+        print(
+            "known support detector: fitted on "
+            f"{len(support_outputs['features'])} known features, "
+            f"{len(support_model['classes'])} classes, q={args.support_quantile:.3f}"
+        )
+    if args.score_mode == "known_conformal":
+        support_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        support_outputs = extract_outputs(model, support_loader, device, mc_samples=1)
+        conformal_model = fit_known_conformal_support_rejector(
+            support_outputs,
+            outputs_val,
+            quantile=args.support_quantile,
+        )
+        support_diagnostics["conformal_support"] = support_model_diagnostics(conformal_model)
+        for extracted in (outputs_test, outputs_val, outputs_open_val):
+            if extracted is not None:
+                attach_known_conformal_support_score(extracted, conformal_model)
+        print(
+            "known conformal support detector: fitted on "
+            f"{len(support_outputs['features'])} train features and "
+            f"{len(outputs_val['features'])} known validation features"
+        )
+    if knn_bank is not None:
+        attach_knn_distances(outputs_test, knn_bank, k=args.knn_k, feature_key=args.knn_feature)
+        attach_knn_distances(outputs_val, knn_bank, k=args.knn_k, feature_key=args.knn_feature)
+        if outputs_open_val is not None:
+            attach_knn_distances(outputs_open_val, knn_bank, k=args.knn_k, feature_key=args.knn_feature)
+    if vim_stats is not None:
+        attach_vim_residual(outputs_test, vim_stats)
+        attach_vim_residual(outputs_val, vim_stats)
+        if outputs_open_val is not None:
+            attach_vim_residual(outputs_open_val, vim_stats)
     temperature = fit_temperature(outputs_val) if args.temperature_calibration else 1.0
     if args.temperature_calibration:
         outputs_test = apply_temperature(outputs_test, temperature)
@@ -1101,14 +4805,47 @@ def discover(args):
             key: value.detach().cpu().numpy() if torch.is_tensor(value) else np.asarray(value)
             for key, value in gaussian_stats.items()
         }
+    reciprocal_points = ckpt.get("reciprocal_points")
+    if reciprocal_points is not None:
+        gaussian_stats = {} if gaussian_stats is None else gaussian_stats
+        gaussian_stats["reciprocal_points"] = (
+            reciprocal_points.detach().cpu().numpy()
+            if torch.is_tensor(reciprocal_points)
+            else np.asarray(reciprocal_points)
+        )
     if args.auto_score_fast and (args.score_mode == "auto" or args.auto_calibrate_score):
         # Fast calibration does not compare Mahalanobis scores, so avoid
         # loading or fitting their high-dimensional statistics.
         gaussian_stats = None
     if (
         not args.auto_score_fast
-        and (gaussian_stats is None or "precision" not in gaussian_stats)
+        and (
+            gaussian_stats is None
+            or "precision" not in gaussian_stats
+            or (
+                args.score_mode in {"relative_mahalanobis", "normalized_entropy_relative_mahalanobis"}
+                and "global_variances" not in gaussian_stats
+            )
+        )
         and _score_needs_shared_mahalanobis(args.score_mode, args.auto_calibrate_score)
+    ):
+        stats_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
+        gaussian_stats = collect_diagonal_gaussian_stats(
+            model,
+            stats_loader,
+            device,
+            len(bundle.known_classes),
+            include_shared_covariance=args.score_mode not in {
+                "relative_mahalanobis",
+                "normalized_entropy_relative_mahalanobis",
+            },
+        )
+    if args.score_mode == "reciprocal" and (
+        gaussian_stats is None or "reciprocal_points" not in gaussian_stats
+    ):
+        raise ValueError("--score-mode reciprocal requires a checkpoint trained with --reciprocal-points")
+    if args.score_mode == "openmax" and (
+        gaussian_stats is None or "weibull_shapes" not in gaussian_stats
     ):
         stats_loader = build_loader(bundle.train, args.batch_size, False, args.num_workers)
         gaussian_stats = collect_diagonal_gaussian_stats(
@@ -1118,6 +4855,9 @@ def discover(args):
     needs_normalization = (
         selected_score_mode.startswith("normalized_")
         or selected_score_mode == "classwise_unified_novel_mass"
+        or selected_score_mode == "classwise_mahalanobis"
+        or selected_score_mode == "feature_rejector_fusion"
+        or selected_score_mode in {"feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}
     )
     score_normalization = (
         fit_score_normalization(
@@ -1130,6 +4870,45 @@ def discover(args):
         else {}
     )
     calibration_report = {
+        "rejector_protocol": rejector_protocol_metadata(args),
+        "discovery_pool_protocol": {
+            "size": discovery_pool_size,
+            "known_fraction": (
+                None
+                if discovery_pool_known_fraction is None
+                else float(discovery_pool_known_fraction)
+            ),
+            "requested_rejector_known_prior": (
+                float(args.rejector_known_prior)
+                if args.rejector_training == "nnpu"
+                else None
+            ),
+            "prior_gap": (
+                None
+                if discovery_pool_known_fraction is None
+                or args.rejector_training != "nnpu"
+                else abs(
+                    float(args.rejector_known_prior)
+                    - float(discovery_pool_known_fraction)
+                )
+            ),
+            "matched_discovery_pool": bool(args.matched_discovery_pool),
+            "matched_pool_size": (
+                int(args.matched_pool_size) if args.matched_discovery_pool else None
+            ),
+            "matched_known_prior": (
+                float(args.matched_known_prior) if args.matched_discovery_pool else None
+            ),
+        },
+        "validation_protocol": {
+            "checkpoint_selection_samples": int(len(bundle.val)),
+            "threshold_calibration_samples": int(len(calibration_dataset)),
+            "requested_calibration_ratio": float(args.calibration_ratio),
+            "uses_disjoint_calibration_subset": bool(
+                bundle.calibration is not None and not args.calibration_overlap_control
+            ),
+            "calibration_overlap_control": bool(args.calibration_overlap_control),
+        },
         "temperature": float(temperature),
         "temperature_enabled": bool(args.temperature_calibration),
         "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
@@ -1138,21 +4917,54 @@ def discover(args):
             "temperature": float(args.odin_temperature),
             "enabled": bool(args.odin_epsilon > 0.0),
         },
+        "react": {
+            "percentile": float(args.react_percentile),
+            "enabled": bool(react_clip_value is not None),
+            "clip_value": None if react_clip_value is None else float(react_clip_value),
+        },
         "reliability": calibration_diagnostics(
             outputs_val["probs"], outputs_val["labels"], args.calibration_bins
         ),
         "uncertainty_error": uncertainty_error_diagnostics(outputs_val),
+        "validation_uncertainty_error_calibration": uncertainty_error_calibration,
+    }
+    if support_diagnostics:
+        calibration_report["support_radius_diagnostics"] = support_diagnostics
+    selection_indices = dataset_source_indices(bundle.val)
+    calibration_indices = dataset_source_indices(calibration_dataset)
+    selection_index_set = set(selection_indices)
+    calibration_index_set = set(calibration_indices)
+    calibration_report["validation_protocol"]["sample_index_audit"] = {
+        "index_space": "base_dataset_positions",
+        "checkpoint_selection_index_count": len(selection_indices),
+        "threshold_calibration_index_count": len(calibration_indices),
+        "checkpoint_selection_indices_sha256": hashlib.sha256(
+            ",".join(map(str, sorted(selection_index_set))).encode("utf-8")
+        ).hexdigest(),
+        "threshold_calibration_indices_sha256": hashlib.sha256(
+            ",".join(map(str, sorted(calibration_index_set))).encode("utf-8")
+        ).hexdigest(),
+        "overlap_count": len(selection_index_set & calibration_index_set),
+        "disjoint": not bool(selection_index_set & calibration_index_set),
     }
     threshold = None
     if (args.score_mode == "auto" or args.auto_calibrate_score) and outputs_open_val is not None:
+        print(
+            "warning: automatic score selection uses open-validation known/unknown "
+            "labels and is diagnostic-only; use an explicit score mode for deployment."
+        )
+        calibration_report["auto_score_selection_uses_open_labels"] = True
         candidate_modes = [
             "full",
             "entropy_proto",
             "entropy_only",
             "proto_only",
             "max_softmax",
+            "max_logit",
+            "logit_margin",
             "odin_msp",
             "energy",
+            "normalized_full",
             "normalized_entropy_proto",
             "entropy_epistemic",
             "expected_entropy",
@@ -1163,6 +4975,8 @@ def discover(args):
             "entropy_mahalanobis_shared",
             "normalized_entropy_mahalanobis",
             "normalized_entropy_mahalanobis_shared",
+            "gaussian_nll",
+            "normalized_entropy_gaussian_nll",
         ]
         if args.auto_score_fast:
             candidate_modes = [
@@ -1171,11 +4985,29 @@ def discover(args):
                 "entropy_only",
                 "proto_only",
                 "max_softmax",
+                "max_logit",
+                "logit_margin",
                 "energy",
+                "normalized_full",
                 "normalized_entropy_proto",
                 "entropy_epistemic",
                 "expected_entropy",
+                "gaussian_nll",
+                "normalized_entropy_gaussian_nll",
             ]
+        if args.react_percentile > 0.0:
+            candidate_modes.append("react_energy")
+        if args.knn_ood:
+            candidate_modes.extend(
+                [
+                    "knn_distance",
+                    "normalized_entropy_knn",
+                    "normalized_entropy_min_class_knn",
+                    "normalized_entropy_min_class_relative_knn",
+                ]
+            )
+        if args.vim_ood:
+            candidate_modes.append("vim_residual")
         if novel_head is not None:
             # Let unified joint checkpoints compete with legacy OOD scores
             # during open-validation calibration.
@@ -1184,6 +5016,7 @@ def discover(args):
                     "novel_msp",
                     "novel_entropy",
                     "unified_novel_mass",
+                    "normalized_unified_novel_mass_entropy",
                 ]
             )
         selected, all_candidates = _select_score_mode(
@@ -1201,34 +5034,44 @@ def discover(args):
             score_mode=selected_score_mode,
             normalization=score_normalization,
             gaussian_stats=gaussian_stats,
+            fusion_base_score=args.fusion_base_score,
+            fusion_rejector_weight=args.fusion_rejector_weight,
+            uncertainty_score_weight=args.uncertainty_score_weight,
         )
-        if args.threshold_policy == "class_conditional":
-            threshold = calibrate_class_thresholds(
-                scores_val,
-                outputs_val["logits"].argmax(axis=1),
-                len(bundle.known_classes),
-                percentile=args.threshold_percentile,
-                min_samples=args.threshold_min_class_samples,
+        scores_open_val = None
+        if outputs_open_val is not None:
+            scores_open_val, _ = compute_open_score(
+                outputs_open_val,
+                prototypes=proto,
+                score_mode=selected_score_mode,
+                normalization=score_normalization,
+                gaussian_stats=gaussian_stats,
+                fusion_base_score=args.fusion_base_score,
+                fusion_rejector_weight=args.fusion_rejector_weight,
+                uncertainty_score_weight=args.uncertainty_score_weight,
             )
-        else:
-            threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
+        threshold, threshold_policy_report = _calibrate_discovery_threshold(
+            args,
+            scores_val,
+            outputs_val,
+            scores_open_val,
+            outputs_open_val,
+            len(bundle.known_classes),
+        )
         calibration_report.update(
             {
                 "selected": selected,
                 "candidates": all_candidates,
                 "open_val_size": int(len(outputs_open_val["labels"])),
                 "open_val_unknown_size": int(np.sum(np.asarray(outputs_open_val["is_known"], dtype=bool) == 0)),
-                "threshold_policy": {
-                    "type": f"known_val_{args.threshold_policy}",
-                    "percentile": args.threshold_percentile,
-                    "min_class_samples": args.threshold_min_class_samples,
-                },
-                "known_val_threshold": (
+                "threshold_policy": threshold_policy_report,
+                "calibrated_threshold": (
                     threshold.tolist() if isinstance(threshold, np.ndarray) else float(threshold)
                 ),
             }
         )
     else:
+        calibration_report["auto_score_selection_uses_open_labels"] = False
         if selected_score_mode == "auto":
             selected_score_mode = "full"
         scores_val, _ = compute_open_score(
@@ -1237,31 +5080,73 @@ def discover(args):
             score_mode=selected_score_mode,
             normalization=score_normalization,
             gaussian_stats=gaussian_stats,
+            fusion_base_score=args.fusion_base_score,
+            fusion_rejector_weight=args.fusion_rejector_weight,
+            uncertainty_score_weight=args.uncertainty_score_weight,
         )
-        if args.threshold_policy == "class_conditional":
-            threshold = calibrate_class_thresholds(
-                scores_val,
-                outputs_val["logits"].argmax(axis=1),
-                len(bundle.known_classes),
-                percentile=args.threshold_percentile,
-                min_samples=args.threshold_min_class_samples,
+        scores_open_val = None
+        if outputs_open_val is not None:
+            scores_open_val, _ = compute_open_score(
+                outputs_open_val,
+                prototypes=proto,
+                score_mode=selected_score_mode,
+                normalization=score_normalization,
+                gaussian_stats=gaussian_stats,
+                fusion_base_score=args.fusion_base_score,
+                fusion_rejector_weight=args.fusion_rejector_weight,
+                uncertainty_score_weight=args.uncertainty_score_weight,
             )
-        else:
-            threshold = calibrate_threshold(scores_val, percentile=args.threshold_percentile)
+        threshold, threshold_policy_report = _calibrate_discovery_threshold(
+            args,
+            scores_val,
+            outputs_val,
+            scores_open_val,
+            outputs_open_val,
+            len(bundle.known_classes),
+        )
         calibration_report.update(
             {
-                "threshold_policy": {
-                    "type": f"known_val_{args.threshold_policy}",
-                    "percentile": args.threshold_percentile,
-                    "min_class_samples": args.threshold_min_class_samples,
-                },
-                "known_val_threshold": (
+                "threshold_policy": threshold_policy_report,
+                "calibrated_threshold": (
                     threshold.tolist() if isinstance(threshold, np.ndarray) else float(threshold)
                 ),
             }
         )
 
-    inference_start = time.perf_counter()
+    # Assess candidate-pool purification on the reserved open-validation split.
+    # This uses its known/unknown identity labels for diagnostics only; it does
+    # not change the purifier mode/ratio or use final test labels for selection.
+    if outputs_open_val is not None:
+        open_val_score, _ = compute_open_score(
+            outputs_open_val,
+            prototypes=proto,
+            score_mode=selected_score_mode,
+            normalization=score_normalization,
+            gaussian_stats=gaussian_stats,
+            fusion_base_score=args.fusion_base_score,
+            fusion_rejector_weight=args.fusion_rejector_weight,
+            uncertainty_score_weight=args.uncertainty_score_weight,
+        )
+        open_val_pred_class = outputs_open_val["logits"].argmax(axis=1)
+        threshold_array = np.asarray(threshold)
+        if threshold_array.ndim == 0:
+            open_val_pred_known = open_val_score <= float(threshold_array)
+        else:
+            open_val_pred_known = open_val_score <= threshold_array[
+                np.clip(open_val_pred_class, 0, len(threshold_array) - 1)
+            ]
+        open_val_candidates = ~open_val_pred_known
+        open_val_purified, _ = purify_candidate_mask(
+            outputs_open_val,
+            open_val_candidates,
+            mode=args.candidate_purify,
+            keep_ratio=args.candidate_keep_ratio,
+            open_score=open_val_score,
+        )
+        calibration_report["candidate_purification_open_val"] = evaluate_candidate_purification(
+            outputs_open_val, open_val_candidates, open_val_purified
+        )
+
     result, scores_test, pred_known, detail = run_discovery(
         outputs_test,
         threshold,
@@ -1270,6 +5155,9 @@ def discover(args):
         score_mode=selected_score_mode,
         normalization=score_normalization,
         gaussian_stats=gaussian_stats,
+        fusion_base_score=args.fusion_base_score,
+        fusion_rejector_weight=args.fusion_rejector_weight,
+        uncertainty_score_weight=args.uncertainty_score_weight,
         cluster_k=args.cluster_k,
         cluster_method=args.cluster_method,
         cluster_feature=args.cluster_feature,
@@ -1279,19 +5167,58 @@ def discover(args):
         cluster_whiten=not args.cluster_no_whiten,
         cluster_n_init=args.cluster_n_init,
         cluster_stability_repeats=args.cluster_stability_repeats,
-        cluster_max_k=args.cluster_max_k,
+        max_auto_clusters=args.max_auto_clusters,
+        cluster_candidate_mode=args.cluster_candidate_mode,
         candidate_purify=args.candidate_purify,
         candidate_keep_ratio=args.candidate_keep_ratio,
         enable_clustering=not args.skip_clustering,
     )
-    inference_seconds = time.perf_counter() - inference_start
-    result["inference_seconds"] = float(inference_seconds)
-    result["inference_samples_per_second"] = float(
-        len(outputs_test["labels"]) / max(inference_seconds, 1e-9)
-    )
-    calibration_report["inference_seconds"] = float(inference_seconds)
+    # ``threshold_type`` describes the shape of the threshold (global versus
+    # class-conditional).  Keep the calibration policy separately so a scalar
+    # threshold calibrated for a fixed known coverage is not mistaken for the
+    # historical global-percentile policy.
+    policy_report = calibration_report.get("threshold_policy", {})
+    result["threshold_policy"] = policy_report.get("type", args.threshold_policy)
+    result["rejector_protocol"] = calibration_report["rejector_protocol"]
+    if "target_known_coverage" in policy_report:
+        result["target_known_coverage"] = float(policy_report["target_known_coverage"])
+        result["calibration_known_accept_rate"] = float(
+            policy_report.get("known_accept_rate", float("nan"))
+        )
     run_dir = ensure_dir(args.work_dir)
-    save_json(run_dir / "config.json", vars(args))
+    save_command_config(
+        run_dir,
+        args.command,
+        {
+            **vars(args),
+            "discovery_pool_semantics": (
+                (
+                    "matched_oracle_filtered_novel_only; known samples are held out "
+                    "but excluded from the pool"
+                    if args.matched_discovery_pool
+                    else "oracle_filtered_novel_only (training class labels select the pool)"
+                )
+                if args.discovery_pool_mode == "unknown"
+                else (
+                    "matched_mixed_known_and_novel_equal_size_pool"
+                    if args.matched_discovery_pool
+                    else "unlabeled_mixed_known_and_novel"
+                )
+            ),
+            "matched_discovery_pool_size": (
+                args.matched_pool_size if args.matched_discovery_pool else None
+            ),
+            "matched_discovery_known_prior": (
+                args.matched_known_prior if args.matched_discovery_pool else None
+            ),
+            "actual_discovery_pool_size": discovery_pool_size,
+            "actual_discovery_pool_known_fraction": (
+                None
+                if discovery_pool_known_fraction is None
+                else float(discovery_pool_known_fraction)
+            ),
+        },
+    )
     torch.save(
         {
             "known_classes": list(bundle.known_classes),
@@ -1300,18 +5227,112 @@ def discover(args):
         run_dir / "split.pt",
     )
     save_json(run_dir / "discovery_report.json", result)
+    if args.save_calibration_scores:
+        calibration_scores = np.asarray(scores_val, dtype=np.float64).reshape(-1)
+        calibration_predicted_class = np.asarray(
+            outputs_val["logits"].argmax(axis=1), dtype=np.int64
+        ).reshape(-1)
+        calibration_source_indices = np.asarray(calibration_indices, dtype=np.int64)
+        if not (
+            len(calibration_scores)
+            == len(calibration_predicted_class)
+            == len(calibration_source_indices)
+            == len(calibration_dataset)
+        ):
+            raise RuntimeError(
+                "calibration score export arrays do not align with the calibration dataset"
+            )
+        calibration_scores_path = run_dir / "calibration_scores.npz"
+        export_payload = {
+            "score": calibration_scores,
+            "predicted_class": calibration_predicted_class,
+            "source_index": calibration_source_indices,
+            "calibrated_threshold": np.asarray(threshold, dtype=np.float64),
+        }
+        component_exported = []
+        if selected_score_mode in {"feature_rejector_uncertainty_fusion", "feature_rejector_uncertainty_conjunction"}:
+            for raw_key, stats_key, output_key in (
+                (
+                    "feature_rejector_score",
+                    "feature_rejector_score",
+                    "feature_rejector_component_z",
+                ),
+                (
+                    "calibrated_uncertainty_error",
+                    "calibrated_uncertainty_error",
+                    "uncertainty_component_z",
+                ),
+            ):
+                if raw_key not in outputs_val or stats_key not in score_normalization:
+                    raise RuntimeError(
+                        f"fusion calibration export missing component {raw_key}"
+                    )
+                raw = np.asarray(outputs_val[raw_key], dtype=np.float64).reshape(-1)
+                stats = score_normalization[stats_key]
+                z = (raw - float(stats["mean"])) / max(float(stats["std"]), 1e-6)
+                if len(z) != len(calibration_scores):
+                    raise RuntimeError(
+                        f"fusion component export does not align: {raw_key}"
+                    )
+                export_payload[output_key] = z
+                component_exported.append(output_key)
+        np.savez_compressed(
+            calibration_scores_path,
+            **export_payload,
+        )
+        calibration_report["score_export"] = {
+            "file": calibration_scores_path.name,
+            "sample_count": int(len(calibration_scores)),
+            "score_mode": selected_score_mode,
+            "threshold_policy": calibration_report.get("threshold_policy", {}).get("type"),
+            "source_index_sha256": hashlib.sha256(
+                ",".join(map(str, calibration_source_indices.tolist())).encode("utf-8")
+            ).hexdigest(),
+            "contains_test_samples": False,
+            "labels_exported": False,
+            "component_arrays": component_exported,
+        }
     save_json(run_dir / "calibration_report.json", calibration_report)
     save_json(run_dir / "discovery_detail.json", {
         "score_mode": detail["score_mode"],
         "score": detail["score"].tolist(),
+        "feature_norm": detail["feature_norm"].tolist(),
         "entropy": detail["entropy"].tolist(),
         "epistemic": detail["epistemic"].tolist(),
         "aleatoric": detail["aleatoric"].tolist(),
         "expected_entropy": detail["expected_entropy"].tolist(),
         "head_uncertainty": detail["head_uncertainty"].tolist(),
+        "feature_rejector_score": detail.get(
+            "feature_rejector_score", np.zeros_like(scores_test)
+        ).tolist(),
+        "known_support_score": detail.get(
+            "known_support_score", np.zeros_like(scores_test)
+        ).tolist(),
+        "known_conformal_score": detail.get(
+            "known_conformal_score", np.zeros_like(scores_test)
+        ).tolist(),
         "proto_dist": detail["proto_dist"].tolist(),
         "mahalanobis": detail["mahalanobis"].tolist(),
         "odin_msp": detail["odin_msp"].tolist(),
+        "react_energy": detail["react_energy"].tolist(),
+        "knn_distance": detail["knn_distance"].tolist(),
+        "knn_predicted_class_distance": detail.get(
+            "knn_predicted_class_distance", np.zeros_like(detail["knn_distance"])
+        ).tolist(),
+        "knn_predicted_class_relative_distance": detail.get(
+            "knn_predicted_class_relative_distance",
+            np.zeros_like(detail["knn_distance"]),
+        ).tolist(),
+        "knn_min_class_distance": detail.get(
+            "knn_min_class_distance", np.zeros_like(detail["knn_distance"])
+        ).tolist(),
+        "knn_min_class_relative_distance": detail.get(
+            "knn_min_class_relative_distance", np.zeros_like(detail["knn_distance"])
+        ).tolist(),
+        "knn_predicted_class_support": detail.get(
+            "knn_predicted_class_support", np.zeros_like(detail["knn_distance"])
+        ).tolist(),
+        "vim_residual": detail["vim_residual"].tolist(),
         "pred_known": detail["pred_known"].astype(int).tolist(),
         "true_known": detail["true_known"].astype(int).tolist(),
         "pred_class": detail["pred_class"].tolist(),
@@ -1325,6 +5346,9 @@ def discover(args):
         "cluster_diagnostics": detail.get("cluster_diagnostics", []),
         "threshold_type": result.get("threshold_type"),
         "candidate_purify": detail.get("candidate_purify"),
+        "cluster_candidate_mode": detail.get(
+            "cluster_candidate_mode", args.cluster_candidate_mode
+        ),
         "candidate_keep_ratio": detail.get("candidate_keep_ratio"),
         "candidate_purification": detail.get("candidate_purification"),
     })
@@ -1337,7 +5361,7 @@ def discover(args):
             {
                 "selected_score_mode": selected["score_mode"],
                 "auroc": selected["auroc"],
-                "known_val_threshold": calibration_report["known_val_threshold"],
+                "calibrated_threshold": calibration_report["calibrated_threshold"],
                 "threshold_policy": calibration_report["threshold_policy"]["type"],
             },
         )
@@ -1352,27 +5376,28 @@ def discover(args):
 
 def inspect_data(args):
     set_seed(args.seed)
-    bundle = build_data_bundle(
-        args.dataset,
-        args.data_root,
-        args.num_known,
-        args.seed,
-        args.image_size,
-        download=args.download,
-        split_path=args.split_path,
-        limit_train=args.limit_train or None,
-        limit_val=args.limit_val or None,
-        limit_test=args.limit_test or None,
-        limit_discovery=args.limit_discovery or None,
-        discovery_pool_mode=args.discovery_pool_mode,
-    )
+    bundle = build_bundle_from_args(args)
     print("dataset:", args.dataset)
+    print("transform profile:", args.transform_profile)
+    print("transform profile requested:", args.transform_profile_requested)
     print("known classes:", len(bundle.known_classes))
     print("novel classes:", len(bundle.novel_classes))
     print("train size:", len(bundle.train))
     print("val size:", len(bundle.val))
+    print("calibration size:", len(bundle.calibration) if bundle.calibration is not None else 0)
     print("test size:", len(bundle.test))
     print("discovery pool size:", len(bundle.discovery_pool) if bundle.discovery_pool is not None else 0)
+    print(
+        "discovery pool known fraction:",
+        known_proportion(bundle.discovery_pool) if bundle.discovery_pool is not None else None,
+    )
+    if args.matched_discovery_pool:
+        print("matched discovery protocol: enabled")
+        print("matched pool target size:", args.matched_pool_size)
+        print(
+            "matched known prior:",
+            args.matched_known_prior if args.discovery_pool_mode == "mixed" else 0.0,
+        )
     print("first known classes:", list(bundle.known_classes)[: min(args.sample_count, len(bundle.known_classes))])
     print("first novel classes:", list(bundle.novel_classes)[: min(args.sample_count, len(bundle.novel_classes))])
 

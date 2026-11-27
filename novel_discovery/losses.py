@@ -1,7 +1,51 @@
 from __future__ import annotations
 
+import math
+
 import torch
 from torch.nn import functional as F
+
+from .uncertainty_kd import (
+    feature_distillation_loss as _feature_distillation_loss,
+    kl_distillation_loss,
+    uncertainty_calibration_loss,
+    uncertainty_weights as _uncertainty_weights,
+)
+
+
+def selection_conditional_known_prior(
+    known_prior: float,
+    known_selection_rate: float,
+    mixed_selection_rate: float,
+    *,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Compute the known prior after applying a candidate-selection event.
+
+    If ``pi`` is the known prior before selection, ``s_k=P(S|known)`` and
+    ``s_m=P(S|mixed)``, then ``P(known|S) = pi*s_k/s_m``.  The selection rates
+    must be measured with the same rule and without using mixed-pool labels.
+    This helper is intentionally detached and does not silently repair an
+    invalid estimate caused by mismatched sampling frames.
+    """
+    prior = float(known_prior)
+    known_rate = float(known_selection_rate)
+    mixed_rate = float(mixed_selection_rate)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if not 0.0 <= known_rate <= 1.0:
+        raise ValueError("known_selection_rate must be in [0, 1]")
+    if not 0.0 <= mixed_rate <= 1.0:
+        raise ValueError("mixed_selection_rate must be in [0, 1]")
+    if mixed_rate <= float(eps):
+        raise ValueError("mixed_selection_rate must be positive")
+    effective_prior = prior * known_rate / mixed_rate
+    if effective_prior < -float(eps) or effective_prior > 1.0 + float(eps):
+        raise ValueError(
+            "selection rates imply an invalid selected known prior; "
+            "check that both rates use the same selection rule"
+        )
+    return torch.tensor(min(max(effective_prior, 0.0), 1.0), dtype=torch.float32)
 
 
 def uncertainty_weights(
@@ -10,28 +54,72 @@ def uncertainty_weights(
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
 ) -> torch.Tensor:
-    """Convert teacher uncertainty to per-sample distillation weights.
-
-    ``raw`` preserves the original behavior. ``mean_normalized`` keeps the
-    batch-average KD strength close to one, so ablations compare where the KD
-    signal is allocated instead of also changing the total KD strength.
-    """
-    weights = torch.exp(-uncertainty.detach())
-    if mode == "mean_normalized":
-        weights = weights / weights.mean().clamp_min(1e-6)
-    elif mode != "raw":
-        raise ValueError(f"Unsupported uncertainty weight mode: {mode}")
-    if uncertainty_weight_min is not None or uncertainty_weight_max is not None:
-        min_value = -float("inf") if uncertainty_weight_min is None else float(uncertainty_weight_min)
-        max_value = float("inf") if uncertainty_weight_max is None else float(uncertainty_weight_max)
-        if min_value > max_value:
-            raise ValueError("uncertainty_weight_min must be <= uncertainty_weight_max")
-        weights = weights.clamp(min=min_value, max=max_value)
-    return weights
+    return _uncertainty_weights(
+        uncertainty,
+        mode=mode,
+        uncertainty_weight_min=uncertainty_weight_min,
+        uncertainty_weight_max=uncertainty_weight_max,
+    )
 
 
 def classification_loss(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     return F.cross_entropy(logits, labels)
+
+
+def feature_cross_covariance_loss(
+    shared_features: torch.Tensor,
+    rejection_features: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Penalize cross-covariance between shared and rejection features.
+
+    This is a representation diagnostic/training option, not a claim that the
+    two branches should contain disjoint information.  Each branch is centered
+    and standardized per coordinate before its cross-covariance is penalized,
+    which avoids letting feature scale alone determine the loss.  The caller
+    must keep a task loss on ``rejection_features`` to prevent a trivial
+    constant solution.
+    """
+    if shared_features.ndim != 2 or rejection_features.ndim != 2:
+        raise ValueError("shared and rejection features must be 2-D")
+    if shared_features.size(0) != rejection_features.size(0):
+        raise ValueError("shared and rejection batches must have matching lengths")
+    if shared_features.size(0) < 2:
+        return shared_features.sum() * 0.0
+    shared = shared_features.float()
+    rejection = rejection_features.float()
+    shared = shared - shared.mean(dim=0, keepdim=True)
+    rejection = rejection - rejection.mean(dim=0, keepdim=True)
+    shared = shared / shared.std(dim=0, unbiased=False, keepdim=True).clamp_min(eps)
+    rejection = rejection / rejection.std(dim=0, unbiased=False, keepdim=True).clamp_min(eps)
+    cross_cov = shared.T @ rejection / float(shared.size(0) - 1)
+    return cross_cov.square().mean()
+
+
+def feature_variance_floor_loss(
+    features: torch.Tensor,
+    floor: float = 0.05,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Discourage collapse of a rejection embedding's active dimensions.
+
+    The per-sample L2 normalization makes the diagnostic target independent of
+    the projector's arbitrary feature scale.  Only coordinates whose batch
+    standard deviation falls below ``floor`` are penalized.  This is a
+    capacity/geometry regularizer, not an unknown-label objective; the caller
+    must apply it to known training examples and keep a class/rejection task
+    loss active to avoid learning unstructured noise.
+    """
+    if features.ndim != 2:
+        raise ValueError("features must be a 2-D tensor")
+    if features.size(0) < 2:
+        return features.sum() * 0.0
+    if float(floor) <= 0.0:
+        return features.sum() * 0.0
+    normalized = F.normalize(features.float(), dim=-1, eps=eps)
+    coordinate_std = normalized.std(dim=0, unbiased=False)
+    deficiency = F.relu((float(floor) - coordinate_std) / float(floor))
+    return deficiency.square().mean()
 
 
 def uncertainty_alignment_loss(
@@ -40,30 +128,25 @@ def uncertainty_alignment_loss(
     labels: torch.Tensor,
     target_mode: str = "confidence",
 ) -> torch.Tensor:
-    probs = logits.softmax(dim=-1)
-    true_conf = probs.gather(1, labels.unsqueeze(1)).squeeze(1)
-    if target_mode == "confidence":
-        target = (1.0 - true_conf).detach()
-        return F.mse_loss(uncertainty, target)
-    if target_mode == "classification_error":
-        # Learn uncertainty as an error probability on known samples. The
-        # target is detached because it is a supervision signal, not a path
-        # through which the classifier should optimize its own predictions.
-        pred = logits.argmax(dim=-1)
-        target = (pred != labels).float().detach()
-        return F.binary_cross_entropy(uncertainty.clamp(1e-6, 1.0 - 1e-6), target)
-    if target_mode == "margin":
-        # Continuous uncertainty target from the decision margin. A sample
-        # becomes uncertain when the strongest competing class approaches or
-        # exceeds the true-class logit. Detach the target so this auxiliary
-        # task does not distort the classifier through its own target.
-        true_logit = logits.gather(1, labels.unsqueeze(1)).squeeze(1)
-        other_logits = logits.clone()
-        other_logits.scatter_(1, labels.unsqueeze(1), float("-inf"))
-        strongest_other = other_logits.max(dim=-1).values
-        target = torch.sigmoid((strongest_other - true_logit).detach())
-        return F.mse_loss(uncertainty, target)
-    raise ValueError(f"Unsupported uncertainty target mode: {target_mode}")
+    return uncertainty_calibration_loss(
+        uncertainty,
+        logits,
+        labels,
+        target_mode=target_mode,
+    )
+
+
+def teacher_uncertainty_distillation_loss(
+    student_uncertainty: torch.Tensor,
+    teacher_uncertainty: torch.Tensor,
+) -> torch.Tensor:
+    """Regress the student rejection uncertainty to a detached teacher score."""
+    if student_uncertainty.shape != teacher_uncertainty.shape:
+        raise ValueError("student and teacher uncertainty must have matching shapes")
+    if student_uncertainty.numel() == 0:
+        return student_uncertainty.sum() * 0.0
+    target = teacher_uncertainty.detach().to(student_uncertainty).clamp(0.0, 1.0)
+    return F.mse_loss(student_uncertainty, target)
 
 
 def distillation_loss(
@@ -76,18 +159,16 @@ def distillation_loss(
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
 ) -> torch.Tensor:
-    student_log_prob = F.log_softmax(student_logits / temperature, dim=-1)
-    teacher_prob = F.softmax(teacher_logits / temperature, dim=-1).detach()
-    per_sample = F.kl_div(student_log_prob, teacher_prob, reduction="none").sum(dim=1) * (temperature**2)
-    if teacher_uncertainty is not None and uncertainty_weighted:
-        weight = uncertainty_weights(
-            teacher_uncertainty,
-            mode=uncertainty_weight_mode,
-            uncertainty_weight_min=uncertainty_weight_min,
-            uncertainty_weight_max=uncertainty_weight_max,
-        )
-        per_sample = per_sample * weight
-    return per_sample.mean()
+    return kl_distillation_loss(
+        student_logits,
+        teacher_logits,
+        teacher_uncertainty=teacher_uncertainty,
+        temperature=temperature,
+        uncertainty_weighted=uncertainty_weighted,
+        uncertainty_weight_mode=uncertainty_weight_mode,
+        uncertainty_weight_min=uncertainty_weight_min,
+        uncertainty_weight_max=uncertainty_weight_max,
+    )
 
 
 def energy_score(logits: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
@@ -161,6 +242,83 @@ def weighted_energy_margin_loss(
     return (per_sample * weight).sum() / denominator
 
 
+def weighted_unknown_bce(
+    values: torch.Tensor,
+    weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Binary unknown-target loss with optional per-sample selection weights.
+
+    Boundary-focused virtual-outlier supervision must use the same selection
+    mask for the classifier-side VOS term and the optional rejection head.
+    """
+    targets = torch.ones_like(values)
+    per_sample = F.binary_cross_entropy(
+        values.clamp(1e-5, 1.0 - 1e-5), targets, reduction="none"
+    ).reshape(-1)
+    if weight is None:
+        return per_sample.mean() if per_sample.numel() else values.new_tensor(0.0)
+    sample_weight = weight.reshape(-1).to(per_sample).clamp_min(0.0)
+    if sample_weight.numel() != per_sample.numel():
+        raise ValueError("weight must match the virtual-outlier batch size")
+    denominator = sample_weight.sum()
+    if denominator <= 0:
+        return per_sample.sum() * 0.0
+    return (per_sample * sample_weight).sum() / denominator
+
+
+def pu_unknown_energy_margin_loss(
+    known_logits: torch.Tensor,
+    unlabeled_logits: torch.Tensor,
+    known_prior: float,
+    margin: float = 1.0,
+    temperature: float = 1.0,
+    risk_mode: str = "hard_nnpu",
+    softness: float = 0.05,
+) -> torch.Tensor:
+    """Estimate an unknown-energy boundary risk from a mixed unlabeled pool.
+
+    Energy is lower for familiar/known samples.  The batch of labelled known
+    samples supplies a detached reference boundary, while the discovery batch
+    is treated as a mixture rather than as all-unknown data.  The mixed risk
+    is corrected by the estimated known prior, analogous to nnPU risk
+    estimation.  Unlike ``energy_margin_loss``, this function is appropriate
+    for ``discovery_pool_mode=mixed`` and never assigns a hard unknown label to
+    every discovery example.
+
+    ``hard_nnpu`` uses the usual non-negative clamp.  ``soft_nnpu`` is a
+    smooth diagnostic surrogate that keeps a small gradient when the
+    corrected empirical risk is negative.
+    """
+    if known_logits.numel() == 0 or unlabeled_logits.numel() == 0:
+        reference = unlabeled_logits if unlabeled_logits.numel() else known_logits
+        return reference.new_tensor(0.0)
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if risk_mode not in {"hard_nnpu", "soft_nnpu"}:
+        raise ValueError("risk_mode must be 'hard_nnpu' or 'soft_nnpu'")
+    if float(softness) <= 0.0:
+        raise ValueError("softness must be positive")
+
+    known_energy = energy_score(known_logits, temperature=temperature)
+    # The reference is intentionally detached: this auxiliary mixed-pool term
+    # should move discovery energies outward, not lower the known boundary by
+    # making the known side worse.
+    reference = known_energy.detach().mean()
+
+    def unknown_violation(logits: torch.Tensor) -> torch.Tensor:
+        energy = energy_score(logits, temperature=temperature)
+        return F.relu(reference + float(margin) - energy)
+
+    mixed_risk = unknown_violation(unlabeled_logits).mean()
+    known_correction = unknown_violation(known_logits).mean().detach()
+    corrected = (mixed_risk - prior * known_correction) / (1.0 - prior)
+    if risk_mode == "hard_nnpu":
+        return corrected.clamp_min(0.0)
+    tau = float(softness)
+    return tau * F.softplus(corrected / tau)
+
+
 def feature_distillation_loss(
     student_projection: torch.Tensor,
     teacher_projection: torch.Tensor,
@@ -169,23 +327,14 @@ def feature_distillation_loss(
     uncertainty_weight_min: float | None = None,
     uncertainty_weight_max: float | None = None,
 ) -> torch.Tensor:
-    """Distill relationally useful normalized representations.
-
-    The projection head has a fixed dimension, so this remains valid when the
-    teacher and student use different encoder backbones.
-    """
-    per_sample = 1.0 - F.cosine_similarity(
-        student_projection, teacher_projection.detach(), dim=-1
+    return _feature_distillation_loss(
+        student_projection,
+        teacher_projection,
+        teacher_uncertainty=teacher_uncertainty,
+        uncertainty_weight_mode=uncertainty_weight_mode,
+        uncertainty_weight_min=uncertainty_weight_min,
+        uncertainty_weight_max=uncertainty_weight_max,
     )
-    if teacher_uncertainty is not None:
-        weight = uncertainty_weights(
-            teacher_uncertainty,
-            mode=uncertainty_weight_mode,
-            uncertainty_weight_min=uncertainty_weight_min,
-            uncertainty_weight_max=uncertainty_weight_max,
-        )
-        per_sample = per_sample * weight
-    return per_sample.mean()
 
 
 def supervised_contrastive_loss(features: torch.Tensor, labels: torch.Tensor, temperature: float = 0.2) -> torch.Tensor:
@@ -213,6 +362,181 @@ def supervised_contrastive_loss(features: torch.Tensor, labels: torch.Tensor, te
     return loss
 
 
+def superclass_aware_supervised_contrastive_loss(
+    features: torch.Tensor,
+    fine_labels: torch.Tensor,
+    coarse_labels: torch.Tensor,
+    temperature: float = 0.2,
+    same_superclass_negative_weight: float = 2.0,
+) -> torch.Tensor:
+    """SupCon with a fixed discount on negatives sharing a coarse superclass.
+
+    Fine-class positives are unchanged. In the denominator, a different fine
+    class with the same coarse label receives ``log(weight)`` logit offset.
+    Weight 1 therefore exactly recovers ordinary supervised contrastive loss.
+    Negative fine/coarse labels are excluded rather than treated as classes.
+    """
+    if features.ndim != 2 or fine_labels.ndim != 1 or coarse_labels.ndim != 1:
+        raise ValueError("features must be [N,D] and fine/coarse labels must be [N]")
+    if features.size(0) != fine_labels.numel() or fine_labels.numel() != coarse_labels.numel():
+        raise ValueError("features and fine/coarse labels must have the same batch size")
+    if temperature <= 0.0:
+        raise ValueError("temperature must be positive")
+    if same_superclass_negative_weight <= 0.0:
+        raise ValueError("same_superclass_negative_weight must be positive")
+    if features.size(0) <= 1:
+        return features.new_tensor(0.0)
+
+    fine_labels = fine_labels.to(device=features.device, dtype=torch.long)
+    coarse_labels = coarse_labels.to(device=features.device, dtype=torch.long)
+    eye = torch.eye(features.size(0), device=features.device, dtype=torch.bool)
+    valid = (fine_labels >= 0) & (coarse_labels >= 0)
+    positives = fine_labels[:, None].eq(fine_labels[None, :]) & valid[:, None] & valid[None, :] & ~eye
+    valid_anchor = valid & positives.any(dim=1)
+    if not valid_anchor.any():
+        return features.new_tensor(0.0)
+
+    normalized = F.normalize(features, dim=-1)
+    logits = normalized @ normalized.T / temperature
+    same_coarse_different_fine = (
+        coarse_labels[:, None].eq(coarse_labels[None, :])
+        & fine_labels[:, None].ne(fine_labels[None, :])
+        & valid[:, None]
+        & valid[None, :]
+        & ~eye
+    )
+    logits = logits + same_coarse_different_fine.to(logits.dtype) * math.log(
+        same_superclass_negative_weight
+    )
+    logits = logits - logits.masked_fill(eye, float("-inf")).max(dim=1, keepdim=True).values.detach()
+    exp_logits = torch.exp(logits).masked_fill(eye | ~valid[None, :], 0.0)
+    log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True).clamp_min(1e-8))
+    pos_count = positives.sum(dim=1).clamp_min(1)
+    per_anchor = -(log_prob.masked_fill(~positives, 0.0).sum(dim=1) / pos_count)
+    return per_anchor[valid_anchor].mean()
+
+
+def supervised_center_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Compact labelled samples around their batch class centers.
+
+    This is a lightweight center-loss variant without a second optimizer or
+    persistent centers.  Centers are computed from the current labelled batch;
+    gradients flow through samples but not through the center estimate.  It is
+    intended as an auxiliary known-class compactness objective, not an
+    unknown-label surrogate.
+    """
+    if features.ndim != 2 or labels.ndim != 1 or features.size(0) != labels.size(0):
+        raise ValueError("features must be [N,D] and labels must be [N]")
+    valid = labels >= 0
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    values = features[valid]
+    targets = labels[valid]
+    if normalize:
+        values = F.normalize(values, dim=-1)
+    losses = []
+    for cls in torch.unique(targets.detach()):
+        class_values = values[targets == cls]
+        if class_values.numel() == 0:
+            continue
+        center = class_values.detach().mean(dim=0, keepdim=True)
+        if normalize:
+            center = F.normalize(center, dim=-1)
+            losses.append((1.0 - (class_values * center).sum(dim=-1)).mean())
+        else:
+            losses.append((class_values - center).pow(2).sum(dim=-1).mean())
+    if not losses:
+        return features.new_tensor(0.0)
+    return torch.stack(losses).mean()
+
+
+def supervised_radius_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    radius: float = 0.2,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Penalize only labelled samples outside their class hypersphere.
+
+    Unlike a center loss, this hinge objective leaves already compact samples
+    unchanged.  Class centers are detached batch statistics, so the auxiliary
+    term cannot pull classes together through a moving center estimate.
+    """
+    if features.ndim != 2 or labels.ndim != 1 or features.size(0) != labels.size(0):
+        raise ValueError("features must be [N,D] and labels must be [N]")
+    if float(radius) < 0.0:
+        raise ValueError("radius must be non-negative")
+    valid = labels >= 0
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    values = features[valid]
+    targets = labels[valid]
+    if normalize:
+        values = F.normalize(values, dim=-1)
+    distances = []
+    for cls in torch.unique(targets.detach()):
+        class_values = values[targets == cls]
+        if class_values.numel() == 0:
+            continue
+        center = class_values.detach().mean(dim=0, keepdim=True)
+        if normalize:
+            center = F.normalize(center, dim=-1)
+            class_distance = 1.0 - (class_values * center).sum(dim=-1)
+        else:
+            class_distance = (class_values - center).pow(2).sum(dim=-1).sqrt()
+        distances.append(F.relu(class_distance - float(radius)).pow(2))
+    if not distances:
+        return features.new_tensor(0.0)
+    return torch.cat(distances).mean()
+
+
+def supervised_center_margin_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    margin: float = 0.1,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Separate each labelled sample from the nearest wrong batch center.
+
+    The class centers are detached statistics.  This makes the objective a
+    sample-level relative-margin constraint rather than a classifier-weight
+    repulsion term, while avoiding pseudo-labels for the open pool.
+    """
+    if features.ndim != 2 or labels.ndim != 1 or features.size(0) != labels.size(0):
+        raise ValueError("features must be [N,D] and labels must be [N]")
+    if float(margin) < 0.0:
+        raise ValueError("margin must be non-negative")
+    valid = labels >= 0
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    values = features[valid]
+    targets = labels[valid]
+    if normalize:
+        values = F.normalize(values, dim=-1)
+    classes = torch.unique(targets.detach())
+    if classes.numel() < 2:
+        return features.new_tensor(0.0)
+    centers = []
+    for cls in classes:
+        class_values = values[targets == cls]
+        center = class_values.detach().mean(dim=0, keepdim=True)
+        centers.append(F.normalize(center, dim=-1).squeeze(0) if normalize else center.squeeze(0))
+    centers = torch.stack(centers, dim=0)
+    similarities = values @ centers.T if normalize else -(
+        values[:, None, :] - centers[None, :, :]
+    ).pow(2).sum(dim=-1)
+    class_indices = torch.stack([(classes == label).nonzero(as_tuple=False)[0, 0] for label in targets])
+    own = similarities[torch.arange(values.size(0), device=values.device), class_indices]
+    wrong = similarities.clone()
+    wrong[torch.arange(values.size(0), device=values.device), class_indices] = -torch.inf
+    nearest_wrong = wrong.max(dim=-1).values
+    return F.relu(nearest_wrong - own + float(margin)).mean()
+
+
 def prototype_alignment_loss(features: torch.Tensor, labels: torch.Tensor, prototypes: torch.Tensor) -> torch.Tensor:
     valid = labels >= 0
     if valid.sum() == 0:
@@ -220,6 +544,595 @@ def prototype_alignment_loss(features: torch.Tensor, labels: torch.Tensor, proto
     feats = F.normalize(features[valid], dim=-1)
     proto = F.normalize(prototypes[labels[valid]], dim=-1)
     return 1.0 - (feats * proto).sum(dim=-1).mean()
+
+
+def prototype_repulsion_loss(
+    prototypes: torch.Tensor,
+    similarity_margin: float = 0.0,
+) -> torch.Tensor:
+    """Penalize classifier prototypes that are too close to one another.
+
+    This is an optional class-space regularizer. It does not push every pair
+    to be maximally opposite; it only penalizes off-diagonal cosine
+    similarities above ``similarity_margin`` and therefore stays compatible
+    with many-class classifiers.
+    """
+    if prototypes.ndim != 2 or prototypes.size(0) <= 1:
+        return prototypes.new_tensor(0.0)
+    if not -1.0 <= float(similarity_margin) <= 1.0:
+        raise ValueError("similarity_margin must be in [-1, 1]")
+    normalized = F.normalize(prototypes, dim=-1)
+    similarity = normalized @ normalized.T
+    mask = ~torch.eye(similarity.size(0), dtype=torch.bool, device=similarity.device)
+    violations = F.relu(similarity[mask] - float(similarity_margin))
+    return violations.mean() if violations.numel() else prototypes.new_tensor(0.0)
+
+
+def unknown_feature_margin_loss(
+    features: torch.Tensor,
+    known_prototypes: torch.Tensor,
+    similarity_margin: float = 0.2,
+    sample_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Push unlabeled unknown features away from the nearest known prototype.
+
+    This is intended for a protocol-defined pure-unknown pool or a filtered
+    candidate subset, not arbitrary mixed unlabeled batches.
+    """
+    if features.numel() == 0 or known_prototypes.numel() == 0:
+        return features.new_tensor(0.0)
+    feature = F.normalize(features, dim=-1)
+    prototypes = F.normalize(known_prototypes, dim=-1)
+    nearest_similarity = (feature @ prototypes.T).max(dim=-1).values
+    per_sample = F.relu(nearest_similarity - float(similarity_margin))
+    if sample_weight is None:
+        return per_sample.mean()
+    # A sample weight controls which examples influence the objective; it is
+    # not itself a prediction target. Detaching here prevents the model from
+    # reducing the margin loss by learning to suppress the weights of hard
+    # samples.
+    weight = sample_weight.reshape(-1).to(per_sample).clamp_min(0.0).detach()
+    if weight.numel() != per_sample.numel():
+        raise ValueError("sample_weight must match the feature batch size.")
+    denominator = weight.sum()
+    if denominator <= 0:
+        return per_sample.sum() * 0.0
+    return (per_sample * weight).sum() / denominator
+
+
+def pu_unknown_feature_margin_loss(
+    known_features: torch.Tensor,
+    unlabeled_features: torch.Tensor,
+    known_prototypes: torch.Tensor,
+    known_prior: float,
+    similarity_margin: float = 0.2,
+    risk_mode: str = "hard_nnpu",
+    softness: float = 0.05,
+) -> torch.Tensor:
+    """Estimate unknown-only feature-margin risk from a mixed pool.
+
+    The discovery pool is a mixture of known and unknown samples. This
+    subtracts the expected known contribution from the mixed-pool margin risk,
+    following the positive-unlabeled risk decomposition. The known correction
+    is detached so it changes the estimate without creating a gradient that
+    repels known features. ``hard_nnpu`` preserves the original hard clamp;
+    ``soft_nnpu`` uses a smooth non-negative surrogate to diagnose whether
+    the clamp is prematurely removing the unknown-separation gradient.
+    """
+    if (
+        known_features.numel() == 0
+        or unlabeled_features.numel() == 0
+        or known_prototypes.numel() == 0
+    ):
+        reference = unlabeled_features if unlabeled_features.numel() else known_features
+        return reference.new_tensor(0.0)
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if risk_mode not in {"hard_nnpu", "soft_nnpu"}:
+        raise ValueError("risk_mode must be 'hard_nnpu' or 'soft_nnpu'")
+    if float(softness) <= 0.0:
+        raise ValueError("softness must be positive")
+    prototypes = F.normalize(known_prototypes, dim=-1)
+
+    def per_sample_margin(features: torch.Tensor) -> torch.Tensor:
+        normalized = F.normalize(features, dim=-1)
+        nearest_similarity = (normalized @ prototypes.T).max(dim=-1).values
+        return F.relu(nearest_similarity - float(similarity_margin))
+
+    mixed_risk = per_sample_margin(unlabeled_features).mean()
+    known_correction = per_sample_margin(known_features).mean().detach()
+    unknown_risk = (mixed_risk - prior * known_correction) / (1.0 - prior)
+    if risk_mode == "hard_nnpu":
+        return unknown_risk.clamp_min(0.0)
+    tau = float(softness)
+    return tau * F.softplus(unknown_risk / tau)
+
+
+def unknown_feature_separation_loss(
+    known_features: torch.Tensor,
+    unknown_features: torch.Tensor,
+    similarity_margin: float = 0.0,
+    temperature: float = 0.1,
+    sample_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Push unknown features away from the *observed known feature batch*.
+
+    The existing prototype-margin loss uses classifier weights as proxies.  That
+    proxy can be misaligned with the feature statistics used by Mahalanobis
+    scoring.  This loss instead compares discovery features with current known
+    embeddings, using a smooth maximum over all known samples.  Known features
+    are detached so this auxiliary term cannot move the known representation
+    merely to make the separation task easier.
+    """
+    if known_features.numel() == 0 or unknown_features.numel() == 0:
+        return unknown_features.new_tensor(0.0)
+    known = F.normalize(known_features.detach(), dim=-1)
+    unknown = F.normalize(unknown_features, dim=-1)
+    similarities = unknown @ known.T
+    tau = max(float(temperature), 1e-6)
+    # Remove the batch-size-dependent log(N) offset from logsumexp so this is
+    # a true smooth approximation of max cosine similarity.
+    smooth_max = tau * (
+        torch.logsumexp(similarities / tau, dim=-1)
+        - torch.log(similarities.new_tensor(float(similarities.size(1))))
+    )
+    violations = F.softplus(
+        (smooth_max - float(similarity_margin)) / tau
+    ) * tau
+    if sample_weight is None:
+        return violations.mean()
+    weight = sample_weight.reshape(-1).to(violations).clamp_min(0.0)
+    if weight.numel() != violations.numel():
+        raise ValueError("sample_weight must match the unknown feature batch size.")
+    denominator = weight.sum()
+    if denominator <= 0:
+        return violations.sum() * 0.0
+    return (violations * weight).sum() / denominator
+
+
+def unknown_feature_boundary_loss(
+    known_features: torch.Tensor,
+    known_labels: torch.Tensor,
+    unknown_features: torch.Tensor,
+    known_prototypes: torch.Tensor,
+    similarity_margin: float = 0.2,
+    prototype_weight: float = 0.5,
+    temperature: float = 0.1,
+) -> torch.Tensor:
+    """Repel pure-unknown features from a hybrid known support boundary.
+
+    The classifier weights provide a global class prototype, while the
+    labelled features in the current batch provide a local class centroid.
+    Their detached combination is used as a stable, class-conditional support
+    approximation.  This is an auxiliary open-set representation objective;
+    it is intentionally restricted to a protocol-defined pure-unknown pool.
+    It does not claim to reproduce a complete ARPL, VOS, or Mahalanobis model.
+    """
+    if (
+        known_features.numel() == 0
+        or unknown_features.numel() == 0
+        or known_prototypes.numel() == 0
+    ):
+        return unknown_features.new_tensor(0.0)
+    if known_features.ndim != 2 or unknown_features.ndim != 2:
+        raise ValueError("known_features and unknown_features must be 2-D")
+    if known_labels.ndim != 1 or known_labels.size(0) != known_features.size(0):
+        raise ValueError("known_labels must contain one label per known feature")
+    if known_prototypes.ndim != 2 or known_prototypes.size(1) != known_features.size(1):
+        raise ValueError("known_prototypes must match the feature dimension")
+
+    weight = min(max(float(prototype_weight), 0.0), 1.0)
+    tau = max(float(temperature), 1e-6)
+    known = F.normalize(known_features.detach(), dim=-1)
+    unknown = F.normalize(unknown_features, dim=-1)
+    prototypes = F.normalize(known_prototypes.detach(), dim=-1)
+
+    # Estimate only the class centroids observed in this batch.  The missing
+    # classes are still covered by the classifier prototypes.
+    centroids = []
+    for cls in torch.unique(known_labels.detach()):
+        if int(cls) < 0:
+            continue
+        class_features = known[known_labels == cls]
+        if class_features.numel() == 0:
+            continue
+        centroids.append(F.normalize(class_features.mean(dim=0, keepdim=True), dim=-1).squeeze(0))
+    if centroids:
+        local_centroids = torch.stack(centroids, dim=0)
+        local_similarity = unknown @ local_centroids.T
+        # Smooth max avoids a single unstable pair dominating the loss.
+        local_max = tau * (
+            torch.logsumexp(local_similarity / tau, dim=-1)
+            - torch.log(local_similarity.new_tensor(float(local_similarity.size(1))))
+        )
+    else:
+        local_max = torch.zeros(unknown.size(0), device=unknown.device, dtype=unknown.dtype)
+    prototype_max = (unknown @ prototypes.T).max(dim=-1).values
+    hybrid_max = weight * prototype_max + (1.0 - weight) * local_max
+    return F.relu(hybrid_max - float(similarity_margin)).mean()
+
+
+def pu_unknown_feature_boundary_loss(
+    known_features: torch.Tensor,
+    known_labels: torch.Tensor,
+    unlabeled_features: torch.Tensor,
+    known_prototypes: torch.Tensor,
+    known_prior: float,
+    similarity_margin: float = 0.2,
+    prototype_weight: float = 0.5,
+    temperature: float = 0.1,
+    risk_mode: str = "hard_nnpu",
+    softness: float = 0.05,
+) -> torch.Tensor:
+    """Estimate unknown boundary risk from a mixed unlabeled pool.
+
+    The mixed-pool boundary penalty is corrected by the estimated known
+    contribution, so known samples in the pool are not directly repelled.
+    Class centroids are detached support statistics; gradients flow only into
+    the unlabeled features.
+    """
+    if (
+        known_features.numel() == 0
+        or unlabeled_features.numel() == 0
+        or known_prototypes.numel() == 0
+    ):
+        reference = unlabeled_features if unlabeled_features.numel() else known_features
+        return reference.new_tensor(0.0)
+    if known_features.ndim != 2 or unlabeled_features.ndim != 2:
+        raise ValueError("known_features and unlabeled_features must be 2-D")
+    if known_labels.ndim != 1 or known_labels.size(0) != known_features.size(0):
+        raise ValueError("known_labels must contain one label per known feature")
+    if known_prototypes.ndim != 2 or known_prototypes.size(1) != known_features.size(1):
+        raise ValueError("known_prototypes must match the feature dimension")
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if risk_mode not in {"hard_nnpu", "soft_nnpu"}:
+        raise ValueError("risk_mode must be 'hard_nnpu' or 'soft_nnpu'")
+    if float(softness) <= 0.0:
+        raise ValueError("softness must be positive")
+
+    tau = max(float(temperature), 1e-6)
+    weight = min(max(float(prototype_weight), 0.0), 1.0)
+    prototypes = F.normalize(known_prototypes.detach(), dim=-1)
+    known = F.normalize(known_features.detach(), dim=-1)
+    unlabeled = F.normalize(unlabeled_features, dim=-1)
+
+    centroids = []
+    for cls in torch.unique(known_labels.detach()):
+        class_values = known[known_labels == cls]
+        if class_values.numel():
+            centroids.append(F.normalize(class_values.mean(dim=0, keepdim=True), dim=-1).squeeze(0))
+    local_centroids = torch.stack(centroids, dim=0) if centroids else None
+
+    def boundary_penalty(values: torch.Tensor) -> torch.Tensor:
+        prototype_max = (values @ prototypes.T).max(dim=-1).values
+        if local_centroids is None:
+            local_max = prototype_max
+        else:
+            local_similarity = values @ local_centroids.T
+            local_max = tau * (
+                torch.logsumexp(local_similarity / tau, dim=-1)
+                - torch.log(local_similarity.new_tensor(float(local_similarity.size(1))))
+            )
+        hybrid_max = weight * prototype_max + (1.0 - weight) * local_max
+        return F.relu(hybrid_max - float(similarity_margin))
+
+    mixed_risk = boundary_penalty(unlabeled).mean()
+    known_correction = boundary_penalty(known).mean().detach()
+    unknown_risk = (mixed_risk - prior * known_correction) / (1.0 - prior)
+    if risk_mode == "hard_nnpu":
+        return unknown_risk.clamp_min(0.0)
+    tau_risk = float(softness)
+    return tau_risk * F.softplus(unknown_risk / tau_risk)
+
+
+def objectosphere_loss(
+    known_features: torch.Tensor,
+    unknown_features: torch.Tensor,
+    known_radius: float = 10.0,
+    unknown_weight: float = 1.0,
+) -> torch.Tensor:
+    """Separate known and pure-unknown samples by feature norm.
+
+    Known features retain a minimum radius while auxiliary unknown features
+    are pulled toward the origin, following the Objectosphere objective. The
+    terms are normalized by the target radius to reduce backbone-scale
+    sensitivity.
+    """
+    if known_features.numel() == 0 or unknown_features.numel() == 0:
+        reference = known_features if known_features.numel() else unknown_features
+        return reference.new_tensor(0.0)
+    radius = float(known_radius)
+    if radius <= 0.0:
+        raise ValueError("known_radius must be positive")
+    if float(unknown_weight) < 0.0:
+        raise ValueError("unknown_weight must be non-negative")
+    known_norm = known_features.norm(dim=-1)
+    unknown_norm = unknown_features.norm(dim=-1)
+    scale = radius * radius
+    known_penalty = F.relu(radius - known_norm).pow(2).mean() / scale
+    unknown_penalty = unknown_norm.pow(2).mean() / scale
+    return known_penalty + float(unknown_weight) * unknown_penalty
+
+
+def _knn_support_boundary_violations(
+    features: torch.Tensor,
+    support_features_by_class: list[torch.Tensor],
+    support_radii: torch.Tensor,
+    k: int = 5,
+    margin: float = 0.02,
+    aggregation: str = "max",
+    temperature: float = 0.1,
+) -> torch.Tensor:
+    """Return one support-boundary violation per feature.
+
+    The support bank is detached, while ``features`` remains differentiable.
+    Keeping the per-sample values separate makes it possible to apply a PU
+    correction when a candidate pool is known/unknown mixed.
+    """
+    if features.numel() == 0 or not support_features_by_class:
+        return features.new_empty(0)
+    if support_radii.ndim != 1 or support_radii.numel() != len(support_features_by_class):
+        raise ValueError("support_radii must contain one radius per class bank")
+    if int(k) <= 0 or float(margin) < 0.0:
+        raise ValueError("k must be positive and margin non-negative")
+    if aggregation not in {"max", "smoothmax"}:
+        raise ValueError("aggregation must be 'max' or 'smoothmax'")
+    if float(temperature) <= 0.0:
+        raise ValueError("temperature must be positive")
+
+    values = F.normalize(features, dim=-1)
+    radii = support_radii.detach().to(device=values.device, dtype=values.dtype)
+    class_violations = []
+    for class_index, bank in enumerate(support_features_by_class):
+        if bank.numel() == 0:
+            continue
+        normalized_bank = F.normalize(bank.detach().to(values), dim=-1)
+        similarities = values @ normalized_bank.T
+        neighbor_count = min(int(k), normalized_bank.size(0))
+        nearest_similarity = similarities.topk(neighbor_count, dim=-1).values.mean(dim=-1)
+        distance = 1.0 - nearest_similarity
+        class_violations.append(
+            F.relu(radii[class_index] + float(margin) - distance)
+        )
+    if not class_violations:
+        return features.new_zeros(features.size(0))
+    class_scores = torch.stack(class_violations, dim=1)
+    if aggregation == "max":
+        return class_scores.max(dim=1).values
+    tau = float(temperature)
+    violations = tau * (
+        torch.logsumexp(class_scores / tau, dim=1)
+        - torch.log(class_scores.new_tensor(float(class_scores.size(1))))
+    )
+    return violations.clamp_min(0.0)
+
+
+def knn_support_boundary_loss(
+    unknown_features: torch.Tensor,
+    support_features_by_class: list[torch.Tensor],
+    support_radii: torch.Tensor,
+    k: int = 5,
+    margin: float = 0.02,
+    sample_weights: torch.Tensor | None = None,
+    aggregation: str = "max",
+    temperature: float = 0.1,
+) -> torch.Tensor:
+    """Push pure-unknown features outside known class-conditional kNN support.
+
+    Each class support radius is estimated from known training features only.
+    The bank/radii are fixed targets; gradients flow only through unknown
+    features. This is a project-specific training adaptation, not a full OOD
+    nearest-neighbor detector reproduction.
+    """
+    violations = _knn_support_boundary_violations(
+        unknown_features,
+        support_features_by_class,
+        support_radii,
+        k=k,
+        margin=margin,
+        aggregation=aggregation,
+        temperature=temperature,
+    )
+    if violations.numel() == 0:
+        return unknown_features.new_tensor(0.0)
+    # A sample is penalized when it remains inside at least one known class
+    # support region. Optional weights let reliable candidates contribute more
+    # without changing the default hard-gated behavior.
+    if sample_weights is None:
+        return violations.mean()
+    weights = sample_weights.to(device=violations.device, dtype=violations.dtype).flatten()
+    if weights.numel() != violations.numel():
+        raise ValueError("sample_weights must contain one value per unknown feature")
+    weights = weights.clamp_min(0.0)
+    normalizer = weights.sum()
+    if normalizer <= 0:
+        return violations.new_tensor(0.0)
+    return (violations * weights).sum() / normalizer
+
+
+def pu_knn_support_boundary_loss(
+    unlabeled_features: torch.Tensor,
+    support_features_by_class: list[torch.Tensor],
+    support_radii: torch.Tensor,
+    k: int = 5,
+    margin: float = 0.02,
+    sample_weights: torch.Tensor | None = None,
+    aggregation: str = "max",
+    temperature: float = 0.1,
+    known_features: torch.Tensor | None = None,
+    known_prior: float = 0.2,
+    risk_mode: str = "hard_nnpu",
+    softness: float = 0.05,
+) -> torch.Tensor:
+    """Apply nnPU correction to a mixed-pool kNN boundary risk.
+
+    ``unlabeled_features`` are candidates from a mixed discovery pool.  The
+    ordinary kNN boundary loss treats every candidate as unknown and therefore
+    repels known contamination as well.  This variant estimates the unknown
+    risk as ``(R_mix - pi*R_known)/(1-pi)`` using the labelled known batch as a
+    detached reference.  The default training path remains the historical
+    pure-unknown loss; this function is an explicit ablation for mixed pools.
+    """
+    if known_features is None:
+        raise ValueError("known_features is required for PU kNN boundary loss")
+    if unlabeled_features.numel() == 0 or known_features.numel() == 0:
+        reference = unlabeled_features if unlabeled_features.numel() else known_features
+        return reference.new_tensor(0.0)
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if risk_mode not in {"hard_nnpu", "soft_nnpu"}:
+        raise ValueError("risk_mode must be 'hard_nnpu' or 'soft_nnpu'")
+    if float(softness) <= 0.0:
+        raise ValueError("softness must be positive")
+
+    mixed = _knn_support_boundary_violations(
+        unlabeled_features, support_features_by_class, support_radii,
+        k=k, margin=margin, aggregation=aggregation, temperature=temperature,
+    )
+    known = _knn_support_boundary_violations(
+        known_features, support_features_by_class, support_radii,
+        k=k, margin=margin, aggregation=aggregation, temperature=temperature,
+    ).detach()
+    if mixed.numel() == 0 or known.numel() == 0:
+        return unlabeled_features.new_tensor(0.0)
+    if sample_weights is None:
+        mixed_risk = mixed.mean()
+    else:
+        weights = sample_weights.to(device=mixed.device, dtype=mixed.dtype).flatten().clamp_min(0.0)
+        if weights.numel() != mixed.numel():
+            raise ValueError("sample_weights must contain one value per unlabeled feature")
+        denominator = weights.sum()
+        mixed_risk = mixed.mean() if denominator <= 0 else (mixed * weights).sum() / denominator
+    corrected = (mixed_risk - prior * known.mean()) / (1.0 - prior)
+    if risk_mode == "hard_nnpu":
+        return corrected.clamp_min(0.0)
+    tau = float(softness)
+    return tau * F.softplus(corrected / tau)
+
+
+def signed_pu_knn_support_boundary_loss(
+    unlabeled_features: torch.Tensor,
+    support_features_by_class: list[torch.Tensor],
+    support_radii: torch.Tensor,
+    known_features: torch.Tensor,
+    known_labels: torch.Tensor,
+    k: int = 5,
+    margin: float = 0.02,
+    sample_weights: torch.Tensor | None = None,
+    aggregation: str = "max",
+    temperature: float = 0.1,
+    known_prior: float = 0.2,
+    risk_mode: str = "hard_nnpu",
+    softness: float = 0.05,
+    known_weight: float = 1.0,
+) -> torch.Tensor:
+    """Use signed class-conditional support supervision for a mixed pool.
+
+    The ordinary PU kNN boundary loss only models the outward risk of an
+    unlabeled sample being inside *some* known support.  This signed variant
+    adds the complementary supervised term for labelled known samples that
+    lie outside their own class support.  Known samples are pulled inward;
+    the mixed-pool term is still an nnPU estimate and pushes only its inferred
+    unknown component outward.  Support banks and radii are detached targets.
+
+    This is deliberately an opt-in objective.  It must not be interpreted as
+    assigning unknown labels to the mixed pool: no per-example mixed labels
+    enter either the signed known term or the PU correction.
+    """
+    if known_features is None or known_labels is None:
+        raise ValueError("known_features and known_labels are required")
+    if known_features.numel() == 0 or unlabeled_features.numel() == 0:
+        reference = unlabeled_features if unlabeled_features.numel() else known_features
+        return reference.new_tensor(0.0)
+    if known_features.ndim != 2 or unlabeled_features.ndim != 2:
+        raise ValueError("known_features and unlabeled_features must be 2-D")
+    if known_labels.ndim != 1 or known_labels.size(0) != known_features.size(0):
+        raise ValueError("known_labels must contain one label per known feature")
+    if not 0.0 < float(known_prior) < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if float(known_weight) < 0.0:
+        raise ValueError("known_weight must be non-negative")
+    valid_known = (known_labels >= 0) & (known_labels < len(support_features_by_class))
+    if not bool(valid_known.any()):
+        raise ValueError("known_labels contain no class represented by the support bank")
+
+    # The known-side term is class-conditional: a known example is compared
+    # only with support from its labelled class, unlike the unknown-side
+    # min-over-classes risk in _knn_support_boundary_violations.
+    known_values = F.normalize(known_features[valid_known], dim=-1)
+    known_targets = known_labels[valid_known].long()
+    radii = support_radii.detach().to(
+        device=known_values.device, dtype=known_values.dtype
+    )
+    known_violations = []
+    for cls in torch.unique(known_targets.detach()).tolist():
+        cls = int(cls)
+        bank = support_features_by_class[cls]
+        if bank.numel() == 0:
+            continue
+        rows = known_targets == cls
+        normalized_bank = F.normalize(bank.detach().to(known_values), dim=-1)
+        similarities = known_values[rows] @ normalized_bank.T
+        neighbor_count = min(int(k), normalized_bank.size(0))
+        distance = 1.0 - similarities.topk(neighbor_count, dim=-1).values.mean(dim=-1)
+        # A positive value means the labelled known example is outside its
+        # own support (with a small interior safety margin).
+        known_violations.append(
+            F.relu(distance - radii[cls] + float(margin))
+        )
+    if not known_violations:
+        known_inside_loss = known_features.sum() * 0.0
+    else:
+        known_inside_loss = torch.cat(known_violations).mean()
+
+    mixed = _knn_support_boundary_violations(
+        unlabeled_features,
+        support_features_by_class,
+        support_radii,
+        k=k,
+        margin=margin,
+        aggregation=aggregation,
+        temperature=temperature,
+    )
+    known_reference = _knn_support_boundary_violations(
+        known_features[valid_known],
+        support_features_by_class,
+        support_radii,
+        k=k,
+        margin=margin,
+        aggregation=aggregation,
+        temperature=temperature,
+    ).detach()
+    if mixed.numel() == 0 or known_reference.numel() == 0:
+        corrected_unknown = unlabeled_features.sum() * 0.0
+    else:
+        if sample_weights is None:
+            mixed_risk = mixed.mean()
+        else:
+            weights = sample_weights.to(mixed).flatten().clamp_min(0.0)
+            if weights.numel() != mixed.numel():
+                raise ValueError(
+                    "sample_weights must contain one value per unlabeled feature"
+                )
+            denominator = weights.sum()
+            mixed_risk = mixed.mean() if denominator <= 0 else (mixed * weights).sum() / denominator
+        corrected = (mixed_risk - float(known_prior) * known_reference.mean()) / (
+            1.0 - float(known_prior)
+        )
+        if risk_mode == "hard_nnpu":
+            corrected_unknown = corrected.clamp_min(0.0)
+        elif risk_mode == "soft_nnpu":
+            if float(softness) <= 0.0:
+                raise ValueError("softness must be positive")
+            tau = float(softness)
+            corrected_unknown = tau * F.softplus(corrected / tau)
+        else:
+            raise ValueError("risk_mode must be 'hard_nnpu' or 'soft_nnpu'")
+    return float(known_weight) * known_inside_loss + corrected_unknown
 
 
 def proxy_contrastive_loss(
@@ -241,6 +1154,200 @@ def proxy_contrastive_loss(
     proxy = F.normalize(proxies, dim=-1)
     logits = feats @ proxy.T / max(float(temperature), 1e-6)
     return F.cross_entropy(logits, labels[valid])
+
+
+def proxy_anchor_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    proxies: torch.Tensor,
+    alpha: float = 32.0,
+    margin: float = 0.1,
+) -> torch.Tensor:
+    """Proxy Anchor loss for proxy-based metric learning.
+
+    The formulation follows Kim et al., *Proxy Anchor Loss for Deep Metric
+    Learning* (CVPR 2020). It aggregates positive and negative examples per
+    proxy, which is useful when a batch contains few examples from many
+    classes. This is an optional representation-learning loss, not a direct
+    unknown detector.
+    """
+    valid = labels >= 0
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    alpha = float(alpha)
+    margin = float(margin)
+    if alpha <= 0.0 or margin < 0.0:
+        raise ValueError("proxy-anchor alpha must be positive and margin non-negative")
+    feats = F.normalize(features[valid], dim=-1)
+    proxy = F.normalize(proxies, dim=-1)
+    similarity = feats @ proxy.T
+    labels = labels[valid].long()
+    positive = F.one_hot(labels, num_classes=proxy.size(0)).to(dtype=torch.bool)
+    present = positive.any(dim=0)
+    if not present.any():
+        return features.new_tensor(0.0)
+    similarity = similarity[:, present]
+    positive = positive[:, present]
+    negative = ~positive
+
+    positive_logits = -alpha * (similarity - margin)
+    positive_logits = positive_logits.masked_fill(~positive, float("-inf"))
+    positive_term = F.softplus(torch.logsumexp(positive_logits, dim=0)).mean()
+
+    negative_logits = alpha * (similarity + margin)
+    negative_logits = negative_logits.masked_fill(~negative, float("-inf"))
+    valid_negative = negative.any(dim=0)
+    if valid_negative.any():
+        negative_term = F.softplus(
+            torch.logsumexp(negative_logits[:, valid_negative], dim=0)
+        ).mean()
+    else:
+        negative_term = similarity.new_tensor(0.0)
+    return positive_term + negative_term
+
+
+def hard_proxy_margin_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    proxies: torch.Tensor,
+    margin: float = 0.2,
+) -> torch.Tensor:
+    """Apply a class-conditional hard-negative margin to known features.
+
+    Unlike a global proxy repulsion term, this compares every sample with its
+    own class proxy and the most similar *incorrect* proxy. It only uses known
+    labels and is therefore safe for mixed discovery-pool experiments.
+    """
+    valid = labels >= 0
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    if proxies.ndim != 2 or proxies.size(0) < 2:
+        return features.new_tensor(0.0)
+    margin = float(margin)
+    if margin < 0.0:
+        raise ValueError("hard proxy margin must be non-negative")
+    feats = F.normalize(features[valid], dim=-1)
+    proxy = F.normalize(proxies, dim=-1)
+    labels = labels[valid].long()
+    similarity = feats @ proxy.T
+    positive = similarity.gather(1, labels[:, None]).squeeze(1)
+    negative_mask = F.one_hot(labels, num_classes=proxy.size(0)).bool()
+    hardest_negative = similarity.masked_fill(negative_mask, float("-inf")).max(dim=1).values
+    return F.relu(float(margin) - positive + hardest_negative).mean()
+
+
+def reciprocal_point_loss(
+    known_features: torch.Tensor,
+    unknown_features: torch.Tensor,
+    known_prototypes: torch.Tensor,
+    reciprocal_points: torch.Tensor,
+    margin: float = 0.2,
+) -> torch.Tensor:
+    """ARPL-inspired reciprocal-point objective.
+
+    Known features are repelled from learned reciprocal points. Discovery
+    features are attracted to their nearest reciprocal point and repelled from
+    known class prototypes. The objective is deliberately exposed as an
+    auxiliary loss: it is an ARPL-inspired adaptation for this project's
+    pure-unknown discovery pool, not a claim of reproducing full ARPL.
+    """
+    if known_features.numel() == 0 or unknown_features.numel() == 0:
+        return known_features.new_tensor(0.0)
+    if reciprocal_points.numel() == 0 or known_prototypes.numel() == 0:
+        return known_features.new_tensor(0.0)
+    margin = float(margin)
+    if margin < 0.0 or margin >= 1.0:
+        raise ValueError("reciprocal margin must be in [0, 1)")
+    known = F.normalize(known_features, dim=-1)
+    unknown = F.normalize(unknown_features, dim=-1)
+    prototypes = F.normalize(known_prototypes, dim=-1)
+    points = F.normalize(reciprocal_points, dim=-1)
+
+    known_point_similarity = (known @ points.T).max(dim=-1).values
+    repel_known = F.relu(known_point_similarity - margin).mean()
+    unknown_point_similarity = (unknown @ points.T).max(dim=-1).values
+    attract_unknown = (1.0 - unknown_point_similarity).mean()
+    unknown_known_similarity = (unknown @ prototypes.T).max(dim=-1).values
+    repel_unknown_known = F.relu(unknown_known_similarity - margin).mean()
+
+    if points.size(0) > 1:
+        pairwise = points @ points.T
+        mask = ~torch.eye(points.size(0), dtype=torch.bool, device=points.device)
+        diversify = F.relu(pairwise[mask] - margin).mean()
+    else:
+        diversify = points.new_tensor(0.0)
+    return repel_known + attract_unknown + repel_unknown_known + 0.1 * diversify
+
+
+def known_pseudo_label_consistency_loss(
+    first_logits: torch.Tensor,
+    second_logits: torch.Tensor,
+    pseudo_labels: torch.Tensor,
+    mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Match two augmented views to detached known-class pseudo labels.
+
+    This is intended for a mixed unlabeled pool: only samples selected by an
+    external confidence/agreement gate should reach this loss.  The labels are
+    supplied by a detached teacher/EMA model, so this term cannot reinforce a
+    student's own changing logits through the target path.
+    """
+    if first_logits.shape != second_logits.shape:
+        raise ValueError("first_logits and second_logits must have the same shape")
+    if pseudo_labels.ndim != 1 or pseudo_labels.size(0) != first_logits.size(0):
+        raise ValueError("pseudo_labels must contain one label per sample")
+    if first_logits.size(0) == 0:
+        return first_logits.new_tensor(0.0)
+    if mask is None:
+        mask = torch.ones(first_logits.size(0), dtype=torch.bool, device=first_logits.device)
+    else:
+        mask = mask.to(device=first_logits.device, dtype=torch.bool)
+    if not mask.any():
+        return first_logits.new_tensor(0.0)
+    labels = pseudo_labels.detach().to(device=first_logits.device, dtype=torch.long)
+    first = F.cross_entropy(first_logits[mask], labels[mask], reduction="mean")
+    second = F.cross_entropy(second_logits[mask], labels[mask], reduction="mean")
+    return 0.5 * (first + second)
+
+
+def angular_margin_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    classifier_weight: torch.Tensor,
+    margin: float = 0.2,
+    scale: float = 16.0,
+    sample_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """ArcFace-style auxiliary loss for tighter known-class features.
+
+    This follows the additive angular-margin idea of Deng et al. (CVPR
+    2019), but is kept as an auxiliary loss so the ordinary inference logits
+    and historical default training remain unchanged.
+    """
+    valid = labels >= 0
+    if sample_mask is not None:
+        if sample_mask.ndim != 1 or sample_mask.numel() != labels.numel():
+            raise ValueError("sample_mask must contain one boolean value per label")
+        valid = valid & sample_mask.to(device=labels.device, dtype=torch.bool)
+    if valid.sum() == 0:
+        return features.new_tensor(0.0)
+    margin = float(margin)
+    scale = float(scale)
+    if margin < 0.0 or margin >= 1.0:
+        raise ValueError("angular margin must be in [0, 1)")
+    if scale <= 0.0:
+        raise ValueError("angular scale must be positive")
+    feats = F.normalize(features[valid], dim=-1)
+    weights = F.normalize(classifier_weight, dim=-1)
+    cosine = (feats @ weights.T).clamp(-1.0 + 1e-7, 1.0 - 1e-7)
+    target = labels[valid].long()
+    sine = torch.sqrt((1.0 - cosine.square()).clamp_min(1e-7))
+    margin_tensor = cosine.new_tensor(margin)
+    phi = cosine * torch.cos(margin_tensor) - sine * torch.sin(margin_tensor)
+    logits = cosine.clone()
+    rows = torch.arange(target.numel(), device=target.device)
+    logits[rows, target] = phi[rows, target]
+    return F.cross_entropy(logits * scale, target)
 
 
 def pseudo_unknown_loss(logits: torch.Tensor, uncertainty: torch.Tensor) -> torch.Tensor:
@@ -285,6 +1392,130 @@ def discovery_unknown_loss(
     return (per_sample * weight).sum() / denominator
 
 
+def outlier_exposure_uniform_loss(
+    logits: torch.Tensor,
+    sample_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Match a pure outlier batch to a uniform known-class distribution.
+
+    This is the classification-logit part of Outlier Exposure: novel samples
+    should not receive a concentrated probability on any known class.  It is
+    intentionally separate from ``discovery_unknown_loss`` so experiments can
+    distinguish uniform-logit exposure from uncertainty-head supervision.
+    """
+    if logits.numel() == 0:
+        return logits.new_tensor(0.0)
+    log_probs = F.log_softmax(logits, dim=-1)
+    per_sample = -log_probs.mean(dim=-1)
+    if sample_weight is None:
+        return per_sample.mean()
+    weight = sample_weight.reshape(-1).to(per_sample).clamp_min(0.0)
+    if weight.numel() != per_sample.numel():
+        raise ValueError("sample_weight must match the logits batch size.")
+    denominator = weight.sum()
+    if denominator <= 0:
+        return per_sample.sum() * 0.0
+    return (per_sample * weight).sum() / denominator
+
+
+def uncertainty_separation_loss(
+    known_uncertainty: torch.Tensor,
+    unknown_uncertainty: torch.Tensor,
+) -> torch.Tensor:
+    """Train the uncertainty head as a known-vs-unknown binary score."""
+    if known_uncertainty.numel() == 0 or unknown_uncertainty.numel() == 0:
+        return known_uncertainty.new_tensor(0.0)
+    values = torch.cat([known_uncertainty, unknown_uncertainty], dim=0).clamp(1e-6, 1.0 - 1e-6)
+    targets = torch.cat(
+        [torch.zeros_like(known_uncertainty), torch.ones_like(unknown_uncertainty)], dim=0
+    )
+    return F.binary_cross_entropy(values, targets)
+
+
+def nnpu_known_uncertainty_loss(
+    known_uncertainty: torch.Tensor,
+    unlabeled_uncertainty: torch.Tensor,
+    known_prior: float,
+    risk_mode: str = "legacy",
+    unlabeled_weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Non-negative PU risk for known-vs-unknown scoring from a mixed pool.
+
+    The uncertainty head estimates novelty, so ``1 - uncertainty`` is treated
+    as the positive (known) probability. Labeled known samples are P; the
+    mixed discovery pool is U and is never assigned per-example unknown labels.
+    ``known_prior`` is the assumed known proportion in U. ``unlabeled_weight``
+    is an optional heuristic for emphasizing likely-unknown mixed-pool samples;
+    it is normalized to mean 1 so the loss scale stays comparable.
+    """
+    prior = float(known_prior)
+    if not 0.0 < prior < 1.0:
+        raise ValueError("known_prior must be in (0, 1)")
+    if risk_mode not in {"legacy", "nu_corrected"}:
+        raise ValueError("risk_mode must be 'legacy' or 'nu_corrected'")
+    if known_uncertainty.numel() == 0 or unlabeled_uncertainty.numel() == 0:
+        reference = known_uncertainty if known_uncertainty.numel() else unlabeled_uncertainty
+        return reference.new_tensor(0.0)
+
+    known_u = known_uncertainty.reshape(-1).clamp(1e-6, 1.0 - 1e-6)
+    unlabeled_u = unlabeled_uncertainty.reshape(-1).clamp(1e-6, 1.0 - 1e-6)
+    if unlabeled_weight is not None:
+        weight = unlabeled_weight.reshape(-1).to(unlabeled_u).clamp_min(0.0)
+        if weight.numel() != unlabeled_u.numel():
+            raise ValueError("unlabeled_weight must match unlabeled_uncertainty")
+        weight_sum = weight.sum()
+        if weight_sum.detach().item() <= 0.0:
+            weight = torch.ones_like(unlabeled_u)
+        else:
+            weight = weight * (weight.numel() / weight_sum.clamp_min(1e-8))
+    else:
+        weight = None
+    # g is the knownness logit: positive values indicate known samples.
+    known_logit = torch.log1p(-known_u) - torch.log(known_u)
+    unlabeled_logit = torch.log1p(-unlabeled_u) - torch.log(unlabeled_u)
+
+    positive_risk = prior * F.softplus(-known_logit).mean()
+    # U = prior * P_known + (1 - prior) * P_unknown.  Since the classifier
+    # score is the *knownness* logit, P_known is the positive class and the
+    # negative-class logistic loss is softplus(known_logit).  Consequently
+    # the unbiased mixed-pool negative risk is
+    #
+    #   E_U[softplus(z)] - prior * E_P[softplus(z)].
+    #
+    # The historical branch already implements this expression.  The old
+    # opt-in ``nu_corrected`` branch accidentally used softplus(-z) for U,
+    # which is the positive-class loss and has the wrong sign for this label
+    # convention.  Keep ``legacy`` unchanged for reproducibility, but make
+    # ``nu_corrected`` mathematically consistent with the documented PU
+    # problem so future experiments do not silently train the opposite risk.
+    unlabeled_known_loss = F.softplus(unlabeled_logit)
+    if weight is None:
+        unlabeled_known_risk = unlabeled_known_loss.mean()
+    else:
+        unlabeled_known_risk = (unlabeled_known_loss * weight).mean()
+    negative_risk = unlabeled_known_risk - prior * F.softplus(known_logit).mean()
+    if negative_risk.detach().item() < 0.0:
+        # Kiryo et al.'s nnPU correction uses gradient ascent in the region
+        # where the empirical negative-risk estimate becomes negative. A
+        # plain clamp would zero this gradient and is not the same update.
+        return positive_risk - negative_risk
+    return positive_risk + negative_risk
+
+
+def uncertainty_ranking_loss(
+    known_uncertainty: torch.Tensor,
+    unknown_uncertainty: torch.Tensor,
+    margin: float = 0.1,
+) -> torch.Tensor:
+    """Rank unknown uncertainty above known uncertainty with a pairwise margin."""
+    if known_uncertainty.numel() == 0 or unknown_uncertainty.numel() == 0:
+        return known_uncertainty.new_tensor(0.0)
+    known = known_uncertainty.reshape(-1)
+    unknown = unknown_uncertainty.reshape(-1)
+    pairwise = F.relu(float(margin) + known[:, None] - unknown[None, :])
+    return pairwise.mean()
+
+
 def discovery_consistency_loss(
     first_projection: torch.Tensor,
     second_projection: torch.Tensor,
@@ -295,6 +1526,18 @@ def discovery_consistency_loss(
     return 1.0 - F.cosine_similarity(
         first_projection, second_projection, dim=-1
     ).mean()
+
+
+def discovery_scalar_consistency_loss(
+    first_score: torch.Tensor,
+    second_score: torch.Tensor,
+) -> torch.Tensor:
+    """Align a scalar risk proxy across two augmentations of one sample."""
+    if first_score.numel() == 0:
+        return first_score.new_tensor(0.0)
+    first_score = first_score.reshape(-1)
+    second_score = second_score.reshape(-1)
+    return F.smooth_l1_loss(first_score, second_score)
 
 
 def discovery_contrastive_loss(

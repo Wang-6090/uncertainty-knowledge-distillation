@@ -3,7 +3,7 @@
 ## Fixed protocol
 
 - CIFAR-100, 60 known classes and 40 novel classes.
-- One saved class split: `splits_cifar100_60_40.json`.
+- One saved class split: `splits/cifar100_60_40.json`.
 - Same seed, image size, epochs, optimizer, and validation threshold policy.
 - Pretrained ResNet-34 teacher and pretrained ResNet-18 student.
 - No pseudo-unknown loss in the main table.
